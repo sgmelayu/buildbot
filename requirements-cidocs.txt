@@ -6,3 +6,5 @@ sphinxcontrib-spelling==7.1.0
 sphinxcontrib-websupport==1.2.4
 Pygments==2.7.2
 towncrier==19.2.0
+
+pillow>=7.1.0 # not directly required, pinned by Snyk to avoid a vulnerability
