@@ -101,3 +101,4 @@ codecov==2.1.10
 -e pkg
 # we install buildbot www from pypi to avoid the slow nodejs build at each test
 buildbot-www==2.8.4
+rsa>=4.7 # not directly required, pinned by Snyk to avoid a vulnerability
