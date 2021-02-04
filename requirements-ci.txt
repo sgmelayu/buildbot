@@ -39,7 +39,7 @@ jmespath==0.10.0
 jsonref==0.2
 lazy-object-proxy==1.5.1
 lz4==3.1.0
-markdown2==2.3.10
+markdown2==2.4.0
 MarkupSafe==1.1.1
 mccabe==0.6.1
 # pin mock, because 4.x no longer supports Python 3.5
@@ -101,3 +101,4 @@ codecov==2.1.10
 -e pkg
 # we install buildbot www from pypi to avoid the slow nodejs build at each test
 buildbot-www==2.8.4
+rsa>=4.7 # not directly required, pinned by Snyk to avoid a vulnerability
