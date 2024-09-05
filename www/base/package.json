@@ -33,7 +33,7 @@
         "font-awesome": "^4.7.0",
         "guanlecoja-ui": "link:../guanlecoja-ui",
         "moment": "^2.24.0",
-        "outdated-browser-rework": "^2.8.0",
+        "outdated-browser-rework": "^3.0.0",
         "popper.js": "^1.15.0"
     }
 }
