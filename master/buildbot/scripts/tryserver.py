@@ -14,26 +14,29 @@
 # Copyright Buildbot Team Members
 
 
+from __future__ import annotations
+
 import os
 import sys
 import time
 from hashlib import md5
+from typing import Any
 
 from buildbot.util import unicode2bytes
 
 
-def tryserver(config):
+def tryserver(config: dict[str, Any]) -> int:
     jobdir = os.path.expanduser(config["jobdir"])
     job = sys.stdin.read()
     # now do a 'safecat'-style write to jobdir/tmp, then move atomically to
     # jobdir/new . Rather than come up with a unique name randomly, I'm just
     # going to MD5 the contents and prepend a timestamp.
-    timestring = "%d" % time.time()
+    timestring = f"{time.time()}"
     m = md5()
     job = unicode2bytes(job)
     m.update(job)
     jobhash = m.hexdigest()
-    fn = "{}-{}".format(timestring, jobhash)
+    fn = f"{timestring}-{jobhash}"
     tmpfile = os.path.join(jobdir, "tmp", fn)
     newfile = os.path.join(jobdir, "new", fn)
     with open(tmpfile, "wb") as f:

@@ -13,11 +13,17 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
 from collections import defaultdict
+from typing import TYPE_CHECKING
+from typing import Any
+from typing import ClassVar
 
 from twisted.internet import defer
-from twisted.internet import reactor
 from twisted.python import log
+from twisted.python.deprecate import deprecatedModuleAttribute
+from twisted.python.versions import Version
 
 from buildbot import config
 from buildbot import util
@@ -27,10 +33,17 @@ from buildbot.schedulers import base
 from buildbot.schedulers import dependent
 from buildbot.util import NotABranch
 from buildbot.util.codebase import AbsoluteSourceStampsMixin
+from buildbot.warnings import warn_deprecated
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from collections.abc import Sequence
+
+    from buildbot.changes.changes import Change
+    from buildbot.util.twisted import InlineCallbacksType
 
 
-class BaseBasicScheduler(base.BaseScheduler):
-
+class BaseBasicScheduler(base.ReconfigurableBaseScheduler):
     """
     @param onlyImportant: If True, only important changes will be added to the
                           buildset.
@@ -38,10 +51,13 @@ class BaseBasicScheduler(base.BaseScheduler):
 
     """
 
-    compare_attrs = ('treeStableTimer', 'change_filter', 'fileIsImportant',
-                     'onlyImportant', 'reason')
-
-    _reactor = reactor  # for tests
+    compare_attrs: ClassVar[Sequence[str]] = (
+        'treeStableTimer',
+        'change_filter',
+        'fileIsImportant',
+        'onlyImportant',
+        'reason',
+    )
 
     fileIsImportant = None
     reason = ''
@@ -49,51 +65,91 @@ class BaseBasicScheduler(base.BaseScheduler):
     class NotSet:
         pass
 
-    def __init__(self, name, shouldntBeSet=NotSet, treeStableTimer=None,
-                 builderNames=None, branch=NotABranch, branches=NotABranch,
-                 fileIsImportant=None, categories=None,
-                 reason="The %(classname)s scheduler named '%(name)s' triggered this build",
-                 change_filter=None, onlyImportant=False, **kwargs):
-        if shouldntBeSet is not self.NotSet:
-            config.error(
-                "pass arguments to schedulers using keyword arguments")
-        if fileIsImportant and not callable(fileIsImportant):
-            config.error(
-                "fileIsImportant must be a callable")
-
-        # initialize parent classes
-        super().__init__(name, builderNames, **kwargs)
-
-        self.treeStableTimer = treeStableTimer
-        if fileIsImportant is not None:
-            self.fileIsImportant = fileIsImportant
-        self.onlyImportant = onlyImportant
-        self.change_filter = self.getChangeFilter(branch=branch,
-                                                  branches=branches, change_filter=change_filter,
-                                                  categories=categories)
-
+    def __init__(self, name: str, **kwargs: Any) -> None:
+        super().__init__(name=name, **kwargs)
         # the IDelayedCall used to wake up when this scheduler's
         # treeStableTimer expires.
-        self._stable_timers = defaultdict(lambda: None)
+        self._stable_timers: dict[Any, Any] = defaultdict(lambda: None)
         self._stable_timers_lock = defer.DeferredLock()
 
-        self.reason = util.bytes2unicode(reason % {
-            'name': name, 'classname': self.__class__.__name__
-        })
+    def checkConfig(  # type: ignore[override]
+        self,
+        shouldntBeSet: Any = NotSet,
+        treeStableTimer: int | None = None,
+        builderNames: Any = None,
+        branch: Any = NotABranch,
+        branches: Any = NotABranch,
+        fileIsImportant: Callable[[Change], bool] | None = None,
+        categories: list[str] | None = None,
+        reason: str = "The %(classname)s scheduler named '%(name)s' triggered this build",
+        change_filter: ChangeFilter | None = None,
+        onlyImportant: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        if shouldntBeSet is not self.NotSet:
+            config.error("pass arguments to schedulers using keyword arguments")
+        if fileIsImportant and not callable(fileIsImportant):
+            config.error("fileIsImportant must be a callable")
 
-    def getChangeFilter(self, branch, branches, change_filter, categories):
+        super().checkConfig(builderNames=builderNames, **kwargs)
+
+    @defer.inlineCallbacks
+    def reconfigService(  # type: ignore[override]
+        self,
+        shouldntBeSet: Any = NotSet,
+        treeStableTimer: int | None = None,
+        builderNames: Any = None,
+        branch: Any = NotABranch,
+        branches: Any = NotABranch,
+        fileIsImportant: Callable[[Change], bool] | None = None,
+        categories: list[str] | None = None,
+        reason: str = "The %(classname)s scheduler named '%(name)s' triggered this build",
+        change_filter: ChangeFilter | None = None,
+        onlyImportant: bool = False,
+        **kwargs: Any,
+    ) -> InlineCallbacksType[None]:
+        yield super().reconfigService(builderNames=builderNames, **kwargs)
+
+        self.treeStableTimer = treeStableTimer
+        self.fileIsImportant = fileIsImportant
+        self.onlyImportant = onlyImportant
+        self.change_filter = self.getChangeFilter(
+            branch=branch, branches=branches, change_filter=change_filter, categories=categories
+        )
+
+        self.reason = util.bytes2unicode(
+            reason % {'name': self.name, 'classname': self.__class__.__name__}
+        )
+
+        if self.active:
+            yield self._stopConsumingChanges()
+            yield self.startConsumingChanges(
+                fileIsImportant=self.fileIsImportant,  # type: ignore[misc]
+                change_filter=self.change_filter,
+                onlyImportant=self.onlyImportant,
+            )
+
+    def getChangeFilter(
+        self,
+        branch: Any,
+        branches: Any,
+        change_filter: ChangeFilter | None,
+        categories: list[str] | None,
+    ) -> ChangeFilter | None:
         raise NotImplementedError
 
     @defer.inlineCallbacks
-    def activate(self):
+    def activate(self) -> InlineCallbacksType[None]:
         yield super().activate()
 
         if not self.enabled:
             return
 
-        yield self.startConsumingChanges(fileIsImportant=self.fileIsImportant,
-                                         change_filter=self.change_filter,
-                                         onlyImportant=self.onlyImportant)
+        yield self.startConsumingChanges(
+            fileIsImportant=self.fileIsImportant,  # type: ignore[misc,arg-type]
+            change_filter=self.change_filter,
+            onlyImportant=self.onlyImportant,
+        )
 
         # if we have a treeStableTimer, if there are classified changes
         # out there, start their timers again
@@ -107,31 +163,35 @@ class BaseBasicScheduler(base.BaseScheduler):
             yield self.master.db.schedulers.flushChangeClassifications(self.serviceid)
 
     @defer.inlineCallbacks
-    def deactivate(self):
+    def deactivate(self) -> InlineCallbacksType[None]:
         # the base deactivate will unsubscribe from new changes
         yield super().deactivate()
 
         if not self.enabled:
             return
 
-        @util.deferredLocked(self._stable_timers_lock)
-        def cancel_timers():
+        @util.deferredLocked(self._stable_timers_lock)  # type: ignore[arg-type]
+        def cancel_timers() -> None:
             for timer in self._stable_timers.values():
                 if timer:
                     timer.cancel()
             self._stable_timers.clear()
+
         yield cancel_timers()
 
     @util.deferredLocked('_stable_timers_lock')
-    def gotChange(self, change, important):
+    def gotChange(self, change: Change, important: bool) -> defer.Deferred[Any]:  # type: ignore[override]
         if not self.treeStableTimer:
             # if there's no treeStableTimer, we can completely ignore
             # unimportant changes
             if not important:
                 return defer.succeed(None)
             # otherwise, we'll build it right away
-            return self.addBuildsetForChanges(reason=self.reason,
-                                              changeids=[change.number])
+            return self.addBuildsetForChanges(
+                reason=self.reason,
+                changeids=[change.number],  # type: ignore[list-item]
+                priority=self.priority,
+            )
 
         timer_name = self.getTimerNameForChange(change)
 
@@ -143,26 +203,26 @@ class BaseBasicScheduler(base.BaseScheduler):
             if self._stable_timers[timer_name]:
                 self._stable_timers[timer_name].cancel()
 
-            def fire_timer():
+            def fire_timer() -> None:
                 d = self.stableTimerFired(timer_name)
                 d.addErrback(log.err, "while firing stable timer")
-            self._stable_timers[timer_name] = self._reactor.callLater(
-                self.treeStableTimer, fire_timer)
+
+            self._stable_timers[timer_name] = self.master.reactor.callLater(
+                self.treeStableTimer, fire_timer
+            )
 
         # record the change's importance
-        return self.master.db.schedulers.classifyChanges(
-            self.serviceid, {change.number: important})
+        return self.master.db.schedulers.classifyChanges(self.serviceid, {change.number: important})
 
     @defer.inlineCallbacks
-    def scanExistingClassifiedChanges(self):
+    def scanExistingClassifiedChanges(self) -> InlineCallbacksType[None]:
         # call gotChange for each classified change.  This is called at startup
         # and is intended to re-start the treeStableTimer for any changes that
         # had not yet been built when the scheduler was stopped.
 
         # NOTE: this may double-call gotChange for changes that arrive just as
         # the scheduler starts up.  In practice, this doesn't hurt anything.
-        classifications = \
-            yield self.master.db.schedulers.getChangeClassifications(self.serviceid)
+        classifications = yield self.master.db.schedulers.getChangeClassifications(self.serviceid)
 
         # call gotChange for each change, after first fetching it from the db
         for changeid, important in classifications.items():
@@ -174,108 +234,143 @@ class BaseBasicScheduler(base.BaseScheduler):
             change = yield changes.Change.fromChdict(self.master, chdict)
             yield self.gotChange(change, important)
 
-    def getTimerNameForChange(self, change):
+    def getTimerNameForChange(self, change: Change) -> Any:
         raise NotImplementedError  # see subclasses
 
-    def getChangeClassificationsForTimer(self, sched_id, timer_name):
+    def getChangeClassificationsForTimer(
+        self, sched_id: int, timer_name: Any
+    ) -> defer.Deferred[dict[int, bool]]:
         """similar to db.schedulers.getChangeClassifications, but given timer
         name"""
         raise NotImplementedError  # see subclasses
 
     @util.deferredLocked('_stable_timers_lock')
     @defer.inlineCallbacks
-    def stableTimerFired(self, timer_name):
+    def stableTimerFired(self, timer_name: Any) -> InlineCallbacksType[None]:
         # delete this now-fired timer, if the service has already been stopped
         # then just bail out
         if not self._stable_timers.pop(timer_name, None):
             return
 
-        classifications = \
-            yield self.getChangeClassificationsForTimer(self.serviceid, timer_name)
+        classifications = yield self.getChangeClassificationsForTimer(self.serviceid, timer_name)  # type: ignore[arg-type]
 
         # just in case: databases do weird things sometimes!
         if not classifications:  # pragma: no cover
             return
 
         changeids = sorted(classifications.keys())
-        yield self.addBuildsetForChanges(reason=self.reason,
-                                         changeids=changeids)
+        yield self.addBuildsetForChanges(
+            reason=self.reason, changeids=changeids, priority=self.priority
+        )
 
         max_changeid = changeids[-1]  # (changeids are sorted)
         yield self.master.db.schedulers.flushChangeClassifications(
-            self.serviceid, less_than=max_changeid + 1)
+            self.serviceid, less_than=max_changeid + 1
+        )
 
 
-class SingleBranchScheduler(AbsoluteSourceStampsMixin, BaseBasicScheduler):
+class SingleBranchScheduler(AbsoluteSourceStampsMixin, BaseBasicScheduler):  # type: ignore[misc]
+    createAbsoluteSourceStamps = None
 
-    def __init__(self, name, createAbsoluteSourceStamps=False, **kwargs):
-        self.createAbsoluteSourceStamps = createAbsoluteSourceStamps
-        super().__init__(name, **kwargs)
+    def checkConfig(self, createAbsoluteSourceStamps: bool = False, **kwargs: Any) -> None:  # type: ignore[override]
+        super().checkConfig(**kwargs)
 
     @defer.inlineCallbacks
-    def gotChange(self, change, important):
+    def reconfigService(  # type: ignore[override]
+        self,
+        createAbsoluteSourceStamps: bool = False,
+        **kwargs: Any,
+    ) -> InlineCallbacksType[None]:
+        self.createAbsoluteSourceStamps = createAbsoluteSourceStamps
+        yield super().reconfigService(**kwargs)
+
+    @defer.inlineCallbacks
+    def gotChange(self, change: Change, important: bool) -> InlineCallbacksType[None]:  # type: ignore[override]
         if self.createAbsoluteSourceStamps:
             yield self.recordChange(change)
 
         yield super().gotChange(change, important)
 
-    def getCodebaseDict(self, codebase):
+    def getCodebaseDict(self, codebase: str) -> Any:
         if self.createAbsoluteSourceStamps:
             return super().getCodebaseDict(codebase)
         return self.codebases[codebase]
 
-    def getChangeFilter(self, branch, branches, change_filter, categories):
+    def getChangeFilter(
+        self,
+        branch: Any,
+        branches: Any,
+        change_filter: ChangeFilter | None,
+        categories: list[str] | None,
+    ) -> ChangeFilter | None:
         if branch is NotABranch and not change_filter:
             config.error(
-                "the 'branch' argument to SingleBranchScheduler is " +
-                "mandatory unless change_filter is provided")
+                "the 'branch' argument to SingleBranchScheduler is "
+                + "mandatory unless change_filter is provided"
+            )
         elif branches is not NotABranch:
-            config.error(
-                "the 'branches' argument is not allowed for " +
-                "SingleBranchScheduler")
+            config.error("the 'branches' argument is not allowed for " + "SingleBranchScheduler")
 
         return ChangeFilter.fromSchedulerConstructorArgs(
-            change_filter=change_filter, branch=branch,
-            categories=categories)
+            change_filter=change_filter, branch=branch, categories=categories
+        )
 
-    def getTimerNameForChange(self, change):
+    def getTimerNameForChange(self, change: Change) -> str:
         return "only"  # this class only uses one timer
 
-    def getChangeClassificationsForTimer(self, sched_id, timer_name):
+    def getChangeClassificationsForTimer(
+        self, sched_id: int, timer_name: Any
+    ) -> defer.Deferred[dict[int, bool]]:
         return self.master.db.schedulers.getChangeClassifications(sched_id)
 
 
 class Scheduler(SingleBranchScheduler):
-
     "alias for SingleBranchScheduler"
 
-    def __init__(self, *args, **kwargs):
-        log.msg("WARNING: the name 'Scheduler' is deprecated; use " +
-                "buildbot.schedulers.basic.SingleBranchScheduler instead " +
-                "(note that this may require you to change your import " +
-                "statement)")
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        warn_deprecated(
+            '4.3.0',
+            (
+                'the name \'Scheduler\' is deprecated; use '
+                'buildbot.schedulers.basic.SingleBranchScheduler instead'
+            ),
+        )
         super().__init__(*args, **kwargs)
 
 
 class AnyBranchScheduler(BaseBasicScheduler):
-
-    def getChangeFilter(self, branch, branches, change_filter, categories):
+    def getChangeFilter(
+        self,
+        branch: Any,
+        branches: Any,
+        change_filter: ChangeFilter | None,
+        categories: list[str] | None,
+    ) -> ChangeFilter | None:
         assert branch is NotABranch
         return ChangeFilter.fromSchedulerConstructorArgs(
-            change_filter=change_filter, branch=branches,
-            categories=categories)
+            change_filter=change_filter, branch=branches, categories=categories
+        )
 
-    def getTimerNameForChange(self, change):
+    def getTimerNameForChange(self, change: Change) -> tuple[str, str, str, str | None]:
         # Py2.6+: could be a namedtuple
         return (change.codebase, change.project, change.repository, change.branch)
 
-    def getChangeClassificationsForTimer(self, sched_id, timer_name):
+    def getChangeClassificationsForTimer(
+        self, sched_id: int, timer_name: Any
+    ) -> defer.Deferred[dict[int, bool]]:
         # set in getTimerNameForChange
         codebase, project, repository, branch = timer_name
         return self.master.db.schedulers.getChangeClassifications(
-            sched_id, branch=branch, repository=repository,
-            codebase=codebase, project=project)
+            sched_id, branch=branch, repository=repository, codebase=codebase, project=project
+        )
 
 
 # now at buildbot.schedulers.dependent, but keep the old name alive
 Dependent = dependent.Dependent
+
+deprecatedModuleAttribute(
+    Version('buildbot', 4, 3, 0),
+    message='Use buildbot.schedulers.dependent.Dependent',
+    moduleName='buildbot.schedulers.basic',
+    name='Dependent',
+)

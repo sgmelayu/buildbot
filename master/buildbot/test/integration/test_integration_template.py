@@ -14,53 +14,55 @@
 # Copyright Buildbot Team Members
 
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from twisted.internet import defer
 
 from buildbot.test.util.integration import RunMasterBase
+
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
 
 
 # This integration test creates a master and worker environment,
 # with one builder and a shellcommand step
 # meant to be a template for integration steps
 class ShellMaster(RunMasterBase):
+    @defer.inlineCallbacks
+    def setup_config(self) -> InlineCallbacksType[None]:
+        c = {}
+        from buildbot.config import BuilderConfig  # noqa: PLC0415
+        from buildbot.plugins import schedulers  # noqa: PLC0415
+        from buildbot.plugins import steps  # noqa: PLC0415
+        from buildbot.process.factory import BuildFactory  # noqa: PLC0415
+
+        c['schedulers'] = [
+            schedulers.AnyBranchScheduler(name="sched", builderNames=["testy"]),
+            schedulers.ForceScheduler(name="force", builderNames=["testy"]),
+        ]
+
+        f = BuildFactory()
+        f.addStep(steps.ShellCommand(command='echo hello'))
+        c['builders'] = [BuilderConfig(name="testy", workernames=["local1"], factory=f)]
+        yield self.setup_master(c)
 
     @defer.inlineCallbacks
-    def test_shell(self):
-        yield self.setupConfig(masterConfig())
+    def test_shell(self) -> InlineCallbacksType[None]:
+        yield self.setup_config()
         # if you don't need change, you can just remove this change, and useChange parameter
-        change = dict(branch="master",
-                      files=["foo.c"],
-                      author="me@foo.com",
-                      committer="me@foo.com",
-                      comments="good stuff",
-                      revision="HEAD",
-                      project="none"
-                      )
-        build = yield self.doForceBuild(wantSteps=True, useChange=change, wantLogs=True,
-                                        wantProperties=True)
+        change = {
+            "branch": "master",
+            "files": ["foo.c"],
+            "author": "me@foo.com",
+            "committer": "me@foo.com",
+            "comments": "good stuff",
+            "revision": "HEAD",
+            "project": "none",
+        }
+        build = yield self.doForceBuild(
+            wantSteps=True, useChange=change, wantLogs=True, wantProperties=True
+        )
         self.assertEqual(build['buildid'], 1)
         self.assertEqual(build['properties']['owners'], (['me@foo.com'], 'Build'))
-
-
-# master configuration
-def masterConfig():
-    c = {}
-    from buildbot.config import BuilderConfig
-    from buildbot.process.factory import BuildFactory
-    from buildbot.plugins import steps, schedulers
-
-    c['schedulers'] = [
-        schedulers.AnyBranchScheduler(
-            name="sched",
-            builderNames=["testy"]),
-        schedulers.ForceScheduler(
-            name="force",
-            builderNames=["testy"])]
-
-    f = BuildFactory()
-    f.addStep(steps.ShellCommand(command='echo hello'))
-    c['builders'] = [
-        BuilderConfig(name="testy",
-                      workernames=["local1"],
-                      factory=f)]
-    return c

@@ -13,35 +13,38 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from twisted.trial import unittest
+
+if TYPE_CHECKING:
+    from twisted.internet import defer
 
 from buildbot.process.buildstep import BuildStep
 from buildbot.process.properties import Interpolate
+from buildbot.test.reactor import TestReactorMixin
+from buildbot.test.steps import TestBuildStepMixin
 from buildbot.test.util import config as configmixin
-from buildbot.test.util import steps
-from buildbot.test.util.misc import TestReactorMixin
 
 
 class TestBuildStep(BuildStep):
-    def run(self):
+    def run(self) -> defer.Deferred[int]:
         self.setProperty('name', self.name)
-        return 0
+        return 0  # type: ignore[return-value]
 
 
-class TestBuildStepNameIsRenderable(steps.BuildStepMixin, unittest.TestCase,
-                                    TestReactorMixin,
-                                    configmixin.ConfigErrorsMixin):
+class TestBuildStepNameIsRenderable(
+    TestBuildStepMixin, TestReactorMixin, configmixin.ConfigErrorsMixin, unittest.TestCase
+):
+    def setUp(self) -> defer.Deferred[None]:  # type: ignore[override]
+        self.setup_test_reactor()
+        return self.setup_test_build_step()
 
-    def setUp(self):
-        self.setUpTestReactor()
-        return self.setUpBuildStep()
-
-    def tearDown(self):
-        return self.tearDownBuildStep()
-
-    def test_name_is_renderable(self):
+    def test_name_is_renderable(self) -> defer.Deferred[None]:
         step = TestBuildStep(name=Interpolate('%(kw:foo)s', foo='bar'))
-        self.setupStep(step)
-        self.expectProperty('name', 'bar')
-        self.expectOutcome(0)
-        return self.runStep()
+        self.setup_step(step)
+        self.expect_property('name', 'bar')
+        self.expect_outcome(0)
+        return self.run_step()

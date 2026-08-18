@@ -13,8 +13,10 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
 
-import pkg_resources
+import importlib.metadata
+import importlib.resources
 
 from twisted.web import static
 
@@ -22,24 +24,28 @@ from buildbot.util import bytes2unicode
 
 
 class Application:
-
-    def __init__(self, modulename, description, ui=True):
+    def __init__(self, package_name: str, description: str, ui: bool = True) -> None:
         self.description = description
-        self.version = pkg_resources.resource_string(
-            modulename, "VERSION").strip()
-        self.version = bytes2unicode(self.version)
-        self.static_dir = pkg_resources.resource_filename(
-            modulename, "static")
+
+        version_file = importlib.resources.files(package_name).joinpath("VERSION")
+        if version_file.is_file():
+            self.version = bytes2unicode(version_file.read_bytes())
+        else:
+            self.version = importlib.metadata.version(package_name)
+
+        self.static_dir = str(importlib.resources.files(package_name) / "static")
         self.resource = static.File(self.static_dir)
         self.ui = ui
 
-    def setMaster(self, master):
+    def setMaster(self, master: object) -> None:
         self.master = master
 
-    def setConfiguration(self, config):
+    def setConfiguration(self, config: object) -> None:
         self.config = config
 
-    def __repr__(self):
-        return ("www.plugin.Application(version=%(version)s, "
-                "description=%(description)s, "
-                "static_dir=%(static_dir)s)") % self.__dict__
+    def __repr__(self) -> str:
+        return (
+            "www.plugin.Application(version={version}, "
+            "description={description}, "
+            "static_dir={static_dir})"
+        ).format(**self.__dict__)

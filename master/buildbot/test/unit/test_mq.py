@@ -13,77 +13,89 @@
 #
 # Copyright Buildbot Team Members
 
-import mock
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from typing import Any
+from unittest import mock
 
 from twisted.internet import defer
 from twisted.trial import unittest
 
+from buildbot.mq import base
 from buildbot.mq import simple
 from buildbot.test.fake import fakemaster
+from buildbot.test.reactor import TestReactorMixin
 from buildbot.test.util import interfaces
 from buildbot.test.util import tuplematching
-from buildbot.test.util.misc import TestReactorMixin
+
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
 
 
 class Tests(interfaces.InterfaceTests):
+    mq: base.MQBase
 
-    def setUp(self):
+    def setUp(self) -> None:
         raise NotImplementedError
 
-    def test_empty_produce(self):
-        self.mq.produce(('a', 'b', 'c'), dict(x=1))
+    def test_empty_produce(self) -> None:
+        self.mq.produce(('a', 'b', 'c'), {"x": 1})
         # ..nothing happens
 
-    def test_signature_produce(self):
+    def test_signature_produce(self) -> None:
         @self.assertArgSpecMatches(self.mq.produce)
-        def produce(self, routingKey, data):
+        def produce(self: Any, routingKey: object, data: object) -> None:
             pass
 
-    def test_signature_startConsuming(self):
+    def test_signature_startConsuming(self) -> None:
         @self.assertArgSpecMatches(self.mq.startConsuming)
-        def startConsuming(self, callback, filter, persistent_name=None):
+        def startConsuming(
+            self: Any, callback: object, filter: object, persistent_name: object = None
+        ) -> None:
             pass
 
     @defer.inlineCallbacks
-    def test_signature_stopConsuming(self):
+    def test_signature_stopConsuming(self) -> InlineCallbacksType[None]:
         cons = yield self.mq.startConsuming(lambda: None, ('a',))
 
         @self.assertArgSpecMatches(cons.stopConsuming)
-        def stopConsuming(self):
+        def stopConsuming(self: Any) -> None:
             pass
 
-    def test_signature_waitUntilEvent(self):
+    def test_signature_waitUntilEvent(self) -> None:
         @self.assertArgSpecMatches(self.mq.waitUntilEvent)
-        def waitUntilEvent(self, filter, check_callback):
+        def waitUntilEvent(self: Any, filter: object, check_callback: object) -> None:
             pass
 
 
 class RealTests(tuplematching.TupleMatchingMixin, Tests):
-
     # tests that only "real" implementations will pass
 
     # called by the TupleMatchingMixin methods
 
     @defer.inlineCallbacks
-    def do_test_match(self, routingKey, shouldMatch, filter):
+    def do_test_match(  # type: ignore[override]
+        self, routingKey: tuple[str | None, ...], shouldMatch: bool, filter: tuple[str | None, ...]
+    ) -> InlineCallbacksType[None]:
         cb = mock.Mock()
         yield self.mq.startConsuming(cb, filter)
-        self.mq.produce(routingKey, 'x')
+        self.mq.produce(routingKey, 'x')  # type: ignore[arg-type]
         self.assertEqual(shouldMatch, cb.call_count == 1)
         if shouldMatch:
             cb.assert_called_once_with(routingKey, 'x')
 
     @defer.inlineCallbacks
-    def test_stopConsuming(self):
+    def test_stopConsuming(self) -> InlineCallbacksType[None]:
         cb = mock.Mock()
         qref = yield self.mq.startConsuming(cb, ('abc',))
-        self.mq.produce(('abc',), dict(x=1))
+        self.mq.produce(('abc',), {"x": 1})
         qref.stopConsuming()
-        self.mq.produce(('abc',), dict(x=1))
-        cb.assert_called_once_with(('abc',), dict(x=1))
+        self.mq.produce(('abc',), {"x": 1})
+        cb.assert_called_once_with(('abc',), {"x": 1})
 
     @defer.inlineCallbacks
-    def test_stopConsuming_twice(self):
+    def test_stopConsuming_twice(self) -> InlineCallbacksType[None]:
         cb = mock.Mock()
         qref = yield self.mq.startConsuming(cb, ('abc',))
         qref.stopConsuming()
@@ -91,7 +103,7 @@ class RealTests(tuplematching.TupleMatchingMixin, Tests):
         # ..nothing bad happens
 
     @defer.inlineCallbacks
-    def test_non_persistent(self):
+    def test_non_persistent(self) -> InlineCallbacksType[None]:
         cb = mock.Mock()
         qref = yield self.mq.startConsuming(cb, ('abc',))
 
@@ -99,7 +111,7 @@ class RealTests(tuplematching.TupleMatchingMixin, Tests):
         qref2 = yield self.mq.startConsuming(cb2, ('abc',))
 
         qref.stopConsuming()
-        self.mq.produce(('abc',), '{}')
+        self.mq.produce(('abc',), '{}')  # type: ignore[arg-type]
 
         qref = yield self.mq.startConsuming(cb, ('abc',))
         qref.stopConsuming()
@@ -109,13 +121,13 @@ class RealTests(tuplematching.TupleMatchingMixin, Tests):
         self.assertFalse(cb.called)
 
     @defer.inlineCallbacks
-    def test_persistent(self):
+    def test_persistent(self) -> InlineCallbacksType[None]:
         cb = mock.Mock()
 
         qref = yield self.mq.startConsuming(cb, ('abc',), persistent_name='ABC')
         qref.stopConsuming()
 
-        self.mq.produce(('abc',), '{}')
+        self.mq.produce(('abc',), '{}')  # type: ignore[arg-type]
 
         qref = yield self.mq.startConsuming(cb, ('abc',), persistent_name='ABC')
         qref.stopConsuming()
@@ -123,30 +135,28 @@ class RealTests(tuplematching.TupleMatchingMixin, Tests):
         self.assertTrue(cb.called)
 
     @defer.inlineCallbacks
-    def test_waitUntilEvent_check_false(self):
-        d = self.mq.waitUntilEvent(('abc',), lambda: False)
+    def test_waitUntilEvent_check_false(self) -> InlineCallbacksType[None]:
+        d = self.mq.waitUntilEvent(('abc',), lambda: False)  # type: ignore[arg-type, return-value]
         self.assertEqual(d.called, False)
-        self.mq.produce(('abc',), dict(x=1))
+        self.mq.produce(('abc',), {"x": 1})
         self.assertEqual(d.called, True)
         res = yield d
-        self.assertEqual(res, (('abc',), dict(x=1)))
-    timeout = 3  # those tests should not run long
+        self.assertEqual(res, (('abc',), {"x": 1}))
 
 
-class TestFakeMQ(TestReactorMixin, unittest.TestCase, Tests):
-
-    def setUp(self):
-        self.setUpTestReactor()
-        self.master = fakemaster.make_master(self, wantMq=True)
-        self.mq = self.master.mq
-        self.mq.verifyMessages = False
-
-
-class TestSimpleMQ(TestReactorMixin, unittest.TestCase, RealTests):
-
+class TestFakeMQ(TestReactorMixin, Tests, unittest.TestCase):
     @defer.inlineCallbacks
-    def setUp(self):
-        self.setUpTestReactor()
-        self.master = fakemaster.make_master(self)
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        self.setup_test_reactor()
+        self.master = yield fakemaster.make_master(self, wantMq=True)
+        self.mq = self.master.mq
+        self.mq.verifyMessages = False  # type: ignore[attr-defined]
+
+
+class TestSimpleMQ(TestReactorMixin, RealTests, unittest.TestCase):
+    @defer.inlineCallbacks
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        self.setup_test_reactor()
+        self.master = yield fakemaster.make_master(self)
         self.mq = simple.SimpleMQ()
         yield self.mq.setServiceParent(self.master)

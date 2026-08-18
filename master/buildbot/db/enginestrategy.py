@@ -23,35 +23,33 @@ special cases that Buildbot needs.  Those include:
 
 """
 
+from __future__ import annotations
 
 import os
-import re
+from typing import TYPE_CHECKING
+from typing import Any
 
-import migrate
 import sqlalchemy as sa
-from sqlalchemy.engine import strategies
 from sqlalchemy.engine import url
 from sqlalchemy.pool import NullPool
-
 from twisted.python import log
 
-from buildbot.util import sautils
+if TYPE_CHECKING:
+    from sqlalchemy.engine.url import URL
 
 # from http://www.mail-archive.com/sqlalchemy@googlegroups.com/msg15079.html
 
 
 class ReconnectingListener:
-
-    def __init__(self):
+    def __init__(self) -> None:
         self.retried = False
 
 
 class Strategy:
-
-    def set_up(self, u, engine):
+    def set_up(self, u: URL, engine: sa.engine.base.Engine) -> None:
         pass
 
-    def should_retry(self, operational_error):
+    def should_retry(self, operational_error: Exception) -> bool:
         try:
             text = operational_error.args[0]
             return 'Lost connection' in text or 'database is locked' in text
@@ -60,10 +58,10 @@ class Strategy:
 
 
 class SqlLiteStrategy(Strategy):
-
-    def set_up(self, u, engine):
+    def set_up(self, u: URL, engine: sa.engine.base.Engine) -> None:
         """Special setup for sqlite engines"""
-        def connect_listener_enable_fk(connection, record):
+
+        def connect_listener_enable_fk(connection: Any, record: Any) -> None:
             # fk must be enabled for all connections
             if not getattr(engine, "fk_disabled", False):
                 return  # http://trac.buildbot.net/ticket/3490#ticket
@@ -72,14 +70,16 @@ class SqlLiteStrategy(Strategy):
         sa.event.listen(engine.pool, 'connect', connect_listener_enable_fk)
         # try to enable WAL logging
         if u.database:
-            def connect_listener(connection, record):
+
+            def connect_listener(connection: Any, record: Any) -> None:
                 connection.execute("pragma checkpoint_fullfsync = off")
 
             sa.event.listen(engine.pool, 'connect', connect_listener)
 
             log.msg("setting database journal mode to 'wal'")
             try:
-                engine.execute("pragma journal_mode = wal")
+                with engine.connect() as conn:
+                    conn.exec_driver_sql("pragma journal_mode = wal")
             except Exception:
                 log.msg("failed to set journal mode - database may fail")
 
@@ -88,25 +88,26 @@ class MySQLStrategy(Strategy):
     disconnect_error_codes = (2006, 2013, 2014, 2045, 2055)
     deadlock_error_codes = (1213,)
 
-    def in_error_codes(self, args, error_codes):
+    def in_error_codes(self, args: tuple[Any, ...], error_codes: tuple[int, ...]) -> bool:
         if args:
             return args[0] in error_codes
         return False
 
-    def is_disconnect(self, args):
+    def is_disconnect(self, args: tuple[Any, ...]) -> bool:
         return self.in_error_codes(args, self.disconnect_error_codes)
 
-    def is_deadlock(self, args):
+    def is_deadlock(self, args: tuple[Any, ...]) -> bool:
         return self.in_error_codes(args, self.deadlock_error_codes)
 
-    def set_up(self, u, engine):
+    def set_up(self, u: URL, engine: sa.engine.base.Engine) -> None:
         """Special setup for mysql engines"""
+
         # add the reconnecting PoolListener that will detect a
         # disconnected connection and automatically start a new
         # one.  This provides a measure of additional safety over
         # the pool_recycle parameter, and is useful when e.g., the
         # mysql server goes away
-        def checkout_listener(dbapi_con, con_record, con_proxy):
+        def checkout_listener(dbapi_con: Any, con_record: Any, con_proxy: Any) -> None:
             try:
                 cursor = dbapi_con.cursor()
                 cursor.execute("SELECT 1")
@@ -114,185 +115,133 @@ class MySQLStrategy(Strategy):
                 if self.is_disconnect(ex.args):
                     # sqlalchemy will re-create the connection
                     log.msg('connection will be removed')
-                    raise sa.exc.DisconnectionError()
-                log.msg('exception happened {}'.format(ex))
+                    raise sa.exc.DisconnectionError() from ex
+                log.msg(f'exception happened {ex}')
                 raise
 
-        # older versions of sqlalchemy require the listener to be specified
-        # in the kwargs, in a class instance
-        if sautils.sa_version() < (0, 7, 0):
-            class ReconnectingListener:
-                pass
-            rcl = ReconnectingListener()
-            rcl.checkout = checkout_listener
-            engine.pool.add_listener(rcl)
-        else:
-            sa.event.listen(engine.pool, 'checkout', checkout_listener)
+        sa.event.listen(engine.pool, 'checkout', checkout_listener)
 
-    def should_retry(self, ex):
-        return any([self.is_disconnect(ex.orig.args),
-                    self.is_deadlock(ex.orig.args),
-                    super().should_retry(ex)])
+    def should_retry(self, ex: Any) -> bool:
+        return any([
+            self.is_disconnect(ex.orig.args),
+            self.is_deadlock(ex.orig.args),
+            super().should_retry(ex),
+        ])
 
 
-def get_sqlalchemy_migrate_version():
-    # sqlalchemy-migrate started including a version number in 0.7
-    # Borrowed from model.py
-    version = getattr(migrate, '__version__', 'old')
-    if version == 'old':
-        try:
-            from migrate.versioning import schemadiff
-            if hasattr(schemadiff, 'ColDiff'):
-                version = "0.6.1"
-            else:
-                version = "0.6"
-        except Exception:
-            version = "0.0"
-    return tuple(map(int, version.split('.')))
+def sa_url_set_attr(u: URL, attr: str, value: Any) -> URL:
+    if hasattr(u, 'set'):
+        return u.set(**{attr: value})
+    setattr(u, attr, value)
+    return u
 
 
-class BuildbotEngineStrategy(strategies.PlainEngineStrategy):
-    # A subclass of the PlainEngineStrategy that can effectively interact
-    # with Buildbot.
-    #
-    # This adjusts the passed-in parameters to ensure that we get the behaviors
-    # Buildbot wants from particular drivers, and wraps the outgoing Engine
-    # object so that its methods run in threads and return deferreds.
+def special_case_sqlite(u: URL, kwargs: dict[str, Any]) -> tuple[URL, dict[str, Any], int]:
+    """For sqlite, percent-substitute %(basedir)s and use a full
+    path to the basedir.  If using a memory database, force the
+    pool size to be 1."""
+    max_conns = 1
 
-    name = 'buildbot'
+    # when given a database path, stick the basedir in there
+    if u.database:
+        # Use NullPool instead of the sqlalchemy-0.6.8-default
+        # SingletonThreadPool for sqlite to suppress the error in
+        # http://groups.google.com/group/sqlalchemy/msg/f8482e4721a89589,
+        # which also explains that NullPool is the new default in
+        # sqlalchemy 0.7 for non-memory SQLite databases.
+        kwargs.setdefault('poolclass', NullPool)
 
-    def special_case_sqlite(self, u, kwargs):
-        """For sqlite, percent-substitute %(basedir)s and use a full
-        path to the basedir.  If using a memory database, force the
-        pool size to be 1."""
-        max_conns = 1
+        database = u.database
+        database = database % {"basedir": kwargs['basedir']}
+        if not os.path.isabs(database[0]):
+            database = os.path.join(kwargs['basedir'], database)
 
-        # when given a database path, stick the basedir in there
-        if u.database:
+        u = sa_url_set_attr(u, 'database', database)
 
-            # Use NullPool instead of the sqlalchemy-0.6.8-default
-            # SingletonThreadPool for sqlite to suppress the error in
-            # http://groups.google.com/group/sqlalchemy/msg/f8482e4721a89589,
-            # which also explains that NullPool is the new default in
-            # sqlalchemy 0.7 for non-memory SQLite databases.
-            kwargs.setdefault('poolclass', NullPool)
+    else:
+        # For in-memory database SQLAlchemy will use SingletonThreadPool
+        # and we will run connection creation and all queries in the single
+        # thread.
+        # However connection destruction will be run from the main
+        # thread, which is safe in our case, but not safe in general,
+        # so SQLite will emit warning about it.
+        # Silence that warning.
+        kwargs.setdefault('connect_args', {})['check_same_thread'] = False
 
-            u.database = u.database % dict(basedir=kwargs['basedir'])
-            if not os.path.isabs(u.database[0]):
-                u.database = os.path.join(kwargs['basedir'], u.database)
+    # ignore serializing access to the db
+    if 'serialize_access' in u.query:
+        query = dict(u.query)
+        query.pop('serialize_access')
+        u = sa_url_set_attr(u, 'query', query)
 
-        else:
-            # For in-memory database SQLAlchemy will use SingletonThreadPool
-            # and we will run connection creation and all queries in the single
-            # thread.
-            # However connection destruction will be run from the main
-            # thread, which is safe in our case, but not safe in general,
-            # so SQLite will emit warning about it.
-            # Silence that warning.
-            kwargs.setdefault('connect_args', {})['check_same_thread'] = False
-
-        # ignore serializing access to the db
-        if 'serialize_access' in u.query:
-            u.query.pop('serialize_access')
-
-        return u, kwargs, max_conns
-
-    def special_case_mysql(self, u, kwargs):
-        """For mysql, take max_idle out of the query arguments, and
-        use its value for pool_recycle.  Also, force use_unicode and
-        charset to be True and 'utf8', failing if they were set to
-        anything else."""
-        kwargs['pool_recycle'] = int(u.query.pop('max_idle', 3600))
-
-        # default to the MyISAM storage engine
-        storage_engine = u.query.pop('storage_engine', 'MyISAM')
-        kwargs['connect_args'] = {
-            'init_command': 'SET default_storage_engine={}'.format(storage_engine)
-        }
-
-        if 'use_unicode' in u.query:
-            if u.query['use_unicode'] != "True":
-                raise TypeError("Buildbot requires use_unicode=True " +
-                                "(and adds it automatically)")
-        else:
-            u.query['use_unicode'] = "True"
-
-        if 'charset' in u.query:
-            if u.query['charset'] != "utf8":
-                raise TypeError("Buildbot requires charset=utf8 " +
-                                "(and adds it automatically)")
-        else:
-            u.query['charset'] = 'utf8'
-
-        return u, kwargs, None
-
-    def check_sqlalchemy_version(self):
-        version = getattr(sa, '__version__', '0')
-        try:
-            version_digits = re.sub('[^0-9.]', '', version)
-            version_tup = tuple(map(int, version_digits.split('.')))
-        except TypeError:
-            return  # unparseable -- oh well
-
-        if version_tup < (0, 6):
-            raise RuntimeError("SQLAlchemy version {} is too old".format(version))
-        if version_tup > (0, 7, 10):
-            mvt = get_sqlalchemy_migrate_version()
-            if mvt < (0, 8, 0):
-                raise RuntimeError(("SQLAlchemy version {} is not supported by "
-                                    "SQLAlchemy-Migrate version {}.{}.{}").format(version, mvt[0],
-                                                                                  mvt[1], mvt[2]))
-
-    def get_drivers_strategy(self, drivername):
-        if drivername.startswith('sqlite'):
-            return SqlLiteStrategy()
-        elif drivername.startswith('mysql'):
-            return MySQLStrategy()
-        return Strategy()
-
-    def create(self, name_or_url, **kwargs):
-        if 'basedir' not in kwargs:
-            raise TypeError('no basedir supplied to create_engine')
-        self.check_sqlalchemy_version()
-
-        max_conns = None
-
-        # apply special cases
-        u = url.make_url(name_or_url)
-        if u.drivername.startswith('sqlite'):
-            u, kwargs, max_conns = self.special_case_sqlite(u, kwargs)
-        elif u.drivername.startswith('mysql'):
-            u, kwargs, max_conns = self.special_case_mysql(u, kwargs)
-
-        # remove the basedir as it may confuse sqlalchemy
-        basedir = kwargs.pop('basedir')
-
-        # calculate the maximum number of connections from the pool parameters,
-        # if it hasn't already been specified
-        if max_conns is None:
-            max_conns = kwargs.get(
-                'pool_size', 5) + kwargs.get('max_overflow', 10)
-        strategy = self.get_drivers_strategy(u.drivername)
-        engine = super().create(u, **kwargs)
-        strategy.set_up(u, engine)
-        engine.should_retry = strategy.should_retry
-        # annotate the engine with the optimal thread pool size; this is used
-        # by DBConnector to configure the surrounding thread pool
-        engine.optimal_thread_pool_size = max_conns
-
-        # keep the basedir
-        engine.buildbot_basedir = basedir
-        return engine
+    return u, kwargs, max_conns
 
 
-BuildbotEngineStrategy()
+def special_case_mysql(u: URL, kwargs: dict[str, Any]) -> tuple[URL, dict[str, Any], None]:
+    """For mysql, take max_idle out of the query arguments, and
+    use its value for pool_recycle.  Also, force use_unicode and
+    charset to be True and 'utf8', failing if they were set to
+    anything else."""
+    query = dict(u.query)
 
-# this module is really imported for the side-effects, but pyflakes will like
-# us to use something from the module -- so offer a copy of create_engine,
-# which explicitly adds the strategy argument
+    kwargs['pool_recycle'] = int(query.pop('max_idle', 3600))  # type: ignore[arg-type]
+
+    # default to the MyISAM storage engine
+    storage_engine = query.pop('storage_engine', 'MyISAM')
+
+    kwargs['connect_args'] = {'init_command': f'SET default_storage_engine={storage_engine}'}
+
+    if 'use_unicode' in query:
+        if query['use_unicode'] != "True":
+            raise TypeError("Buildbot requires use_unicode=True " + "(and adds it automatically)")
+    else:
+        query['use_unicode'] = "True"
+
+    if 'charset' in query:
+        if query['charset'] != "utf8":
+            raise TypeError("Buildbot requires charset=utf8 " + "(and adds it automatically)")
+    else:
+        query['charset'] = 'utf8'
+
+    u = sa_url_set_attr(u, 'query', query)
+
+    return u, kwargs, None
 
 
-def create_engine(*args, **kwargs):
-    kwargs['strategy'] = 'buildbot'
+def get_drivers_strategy(drivername: str) -> Strategy:
+    if drivername.startswith('sqlite'):
+        return SqlLiteStrategy()
+    elif drivername.startswith('mysql'):
+        return MySQLStrategy()
+    return Strategy()
 
-    return sa.create_engine(*args, **kwargs)
+
+def create_engine(name_or_url: str, **kwargs: Any) -> sa.Engine:
+    if 'basedir' not in kwargs:
+        raise TypeError('no basedir supplied to create_engine')
+
+    max_conns = None
+
+    # apply special cases
+    u = url.make_url(name_or_url)
+    if u.drivername.startswith('sqlite'):
+        u, kwargs, max_conns = special_case_sqlite(u, kwargs)
+    elif u.drivername.startswith('mysql'):
+        u, kwargs, max_conns = special_case_mysql(u, kwargs)
+
+    # remove the basedir as it may confuse sqlalchemy
+    kwargs.pop('basedir')
+
+    # calculate the maximum number of connections from the pool parameters,
+    # if it hasn't already been specified
+    if max_conns is None:
+        max_conns = kwargs.get('pool_size', 5) + kwargs.get('max_overflow', 10)
+    driver_strategy = get_drivers_strategy(u.drivername)
+    engine = sa.create_engine(u, **kwargs, future=True)
+    driver_strategy.set_up(u, engine)
+    engine.should_retry = driver_strategy.should_retry  # type: ignore[attr-defined]
+    # annotate the engine with the optimal thread pool size; this is used
+    # by DBConnector to configure the surrounding thread pool
+    engine.optimal_thread_pool_size = max_conns  # type: ignore[attr-defined]
+
+    return engine

@@ -13,90 +13,126 @@
 #
 # Copyright Buildbot Team Members
 
-import cgi
+from __future__ import annotations
+
 import datetime
 import fnmatch
 import json
 import re
 from contextlib import contextmanager
+from typing import TYPE_CHECKING
+from typing import Any
+from typing import Callable
+from typing import cast
 from urllib.parse import urlparse
 
 from twisted.internet import defer
+from twisted.internet import threads
+from twisted.internet.error import ConnectionDone
 from twisted.python import log
 from twisted.web.error import Error
+from twisted.web.resource import EncodingResourceWrapper
+from twisted.web.server import GzipEncoderFactory
 
 from buildbot.data import exceptions
+from buildbot.data.base import EndpointKind
+from buildbot.data.resultspec import ResultSpec
 from buildbot.util import bytes2unicode
 from buildbot.util import toJson
 from buildbot.util import unicode2bytes
 from buildbot.www import resource
 from buildbot.www.authz import Forbidden
+from buildbot.www.encoding import BrotliEncoderFactory
+from buildbot.www.encoding import ZstandardEncoderFactory
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+    from typing import Any
+
+    from twisted.internet.interfaces import IReactorThreads
+    from twisted.web import server
+
+    from buildbot.data.base import Endpoint
+    from buildbot.data.resultspec import ResultSpec
+    from buildbot.master import BuildMaster
+    from buildbot.util.twisted import InlineCallbacksType
 
 
 class BadJsonRpc2(Exception):
-
-    def __init__(self, message, jsonrpccode):
+    def __init__(self, message: str, jsonrpccode: int) -> None:
         self.message = message
         self.jsonrpccode = jsonrpccode
 
 
 class ContentTypeParser:
-
-    def __init__(self, contenttype):
+    def __init__(self, contenttype: str | bytes | None) -> None:
         self.typeheader = contenttype
 
-    def gettype(self):
-        mimetype, options = cgi.parse_header(
-            bytes2unicode(self.typeheader))
-        return mimetype
+    def gettype(self) -> str | None:
+        if self.typeheader is None:
+            return None
+        return bytes2unicode(self.typeheader).split(';', 1)[0]
+
+
+def _is_request_finished(request: server.Request) -> bool:
+    # In case of lost connection, request is not marked as finished
+    # detect this case with `channel` being None
+    return bool(request.finished) or request.channel is None
 
 
 URL_ENCODED = b"application/x-www-form-urlencoded"
 JSON_ENCODED = b"application/json"
+_JSON_WRITE_BATCH_SIZE = 64 * 1024  # 64Kb
 
 
 class RestRootResource(resource.Resource):
-    version_classes = {}
+    version_classes: dict[int, type[V2RootResource]] = {}
 
     @classmethod
-    def addApiVersion(cls, version, version_cls):
+    def addApiVersion(cls, version: int, version_cls: type[V2RootResource]) -> None:
         cls.version_classes[version] = version_cls
-        version_cls.apiVersion = version
+        version_cls.apiVersion = version  # type: ignore[attr-defined]
 
-    def __init__(self, master):
+    def __init__(self, master: BuildMaster) -> None:
         super().__init__(master)
 
         min_vers = master.config.www.get('rest_minimum_version', 0)
+        encoders = [
+            BrotliEncoderFactory(),
+            ZstandardEncoderFactory(),
+            GzipEncoderFactory(),
+        ]
+
         latest = max(list(self.version_classes))
         for version, klass in self.version_classes.items():
             if version < min_vers:
                 continue
-            child = klass(master)
-            child_path = 'v{}'.format(version)
-            child_path = unicode2bytes(child_path)
-            self.putChild(child_path, child)
+            child = EncodingResourceWrapper(klass(master), encoders)
+            child_path = f'v{version}'
+            self.putChild(unicode2bytes(child_path), child)
             if version == latest:
                 self.putChild(b'latest', child)
 
-    def render(self, request):
+    def render(self, request: server.Request) -> bytes:
         request.setHeader(b"content-type", JSON_ENCODED)
         min_vers = self.master.config.www.get('rest_minimum_version', 0)
-        api_versions = dict(('v{}'.format(v), '{}api/v{}'.format(self.base_url, v))
-                            for v in self.version_classes
-                            if v > min_vers)
-        data = json.dumps(dict(api_versions=api_versions))
+        api_versions = dict(
+            (f'v{v}', f'{self.base_url}api/v{v}') for v in self.version_classes if v > min_vers
+        )
+        data = json.dumps({"api_versions": api_versions})
         return unicode2bytes(data)
 
 
-JSONRPC_CODES = dict(parse_error=-32700,
-                     invalid_request=-32600,
-                     method_not_found=-32601,
-                     invalid_params=-32602,
-                     internal_error=-32603)
+JSONRPC_CODES = {
+    "parse_error": -32700,
+    "invalid_request": -32600,
+    "method_not_found": -32601,
+    "invalid_params": -32602,
+    "internal_error": -32603,
+}
 
 
 class V2RootResource(resource.Resource):
-
     # For GETs, this API follows http://jsonapi.org.  The getter API does not
     # permit create, update, or delete, so this is limited to reading.
     #
@@ -116,114 +152,118 @@ class V2RootResource(resource.Resource):
     needsReconfig = True
 
     @defer.inlineCallbacks
-    def getEndpoint(self, request, method, params):
+    def getEndpoint(
+        self, request: server.Request, method: str, params: dict[str, Any]
+    ) -> InlineCallbacksType[tuple[Endpoint, dict[str, Any]]]:
         # note that trailing slashes are not allowed
+        assert request.postpath is not None
         request_postpath = tuple(bytes2unicode(p) for p in request.postpath)
-        yield self.master.www.assertUserAllowed(request, request_postpath,
-                                                method, params)
+        yield self.master.www.assertUserAllowed(request, request_postpath, method, params)
         ret = yield self.master.data.getEndpoint(request_postpath)
         return ret
 
     @contextmanager
-    def handleErrors(self, writeError):
+    def handleErrors(self, writeError: Callable[[str | bytes, int, int], None]) -> Iterator[None]:
         try:
             yield
+        except ConnectionDone:
+            # Connection was cleanly closed
+            pass
         except exceptions.InvalidPathError as e:
             msg = unicode2bytes(e.args[0])
-            writeError(msg or b"invalid path", errcode=404,
-                       jsonrpccode=JSONRPC_CODES['invalid_request'])
+            writeError(msg or b"invalid path", 404, JSONRPC_CODES['invalid_request'])
             return
         except exceptions.InvalidControlException as e:
             msg = unicode2bytes(str(e))
-            writeError(msg or b"invalid control action", errcode=501,
-                       jsonrpccode=JSONRPC_CODES["method_not_found"])
+            writeError(msg or b"invalid control action", 501, JSONRPC_CODES["method_not_found"])
             return
         except exceptions.InvalidQueryParameter as e:
             msg = unicode2bytes(e.args[0])
-            writeError(msg or b"invalid request", errcode=400,
-                       jsonrpccode=JSONRPC_CODES["method_not_found"])
+            writeError(msg or b"invalid request", 400, JSONRPC_CODES["method_not_found"])
             return
         except BadJsonRpc2 as e:
             msg = unicode2bytes(e.message)
-            writeError(msg, errcode=400, jsonrpccode=e.jsonrpccode)
+            writeError(msg, 400, e.jsonrpccode)
             return
         except Forbidden as e:
             # There is nothing in jsonrc spec about forbidden error, so pick
             # invalid request
-            msg = unicode2bytes(e.message)
-            writeError(
-                msg, errcode=403, jsonrpccode=JSONRPC_CODES["invalid_request"])
+            msg = unicode2bytes(e.message or '')
+            writeError(msg, 403, JSONRPC_CODES["invalid_request"])
             return
         except Exception as e:
             log.err(_why='while handling API request')
             msg = unicode2bytes(repr(e))
-            writeError(repr(e), errcode=500,
-                       jsonrpccode=JSONRPC_CODES["internal_error"])
+            writeError(repr(e), 500, JSONRPC_CODES["internal_error"])
             return
 
     # JSONRPC2 support
 
-    def decodeJsonRPC2(self, request):
+    def decodeJsonRPC2(
+        self, request: server.Request
+    ) -> tuple[str, str | int | None, dict[str, Any]]:
         # Verify the content-type.  Browsers are easily convinced to send
         # POST data to arbitrary URLs via 'form' elements, but they won't
         # use the application/json content-type.
         if ContentTypeParser(request.getHeader(b'content-type')).gettype() != "application/json":
-            raise BadJsonRpc2('Invalid content-type (use application/json)',
-                              JSONRPC_CODES["invalid_request"])
+            raise BadJsonRpc2(
+                'Invalid content-type (use application/json)', JSONRPC_CODES["invalid_request"]
+            )
 
         try:
+            assert request.content is not None
             data = json.loads(bytes2unicode(request.content.read()))
         except Exception as e:
-            raise BadJsonRpc2("JSON parse error: {}".format(
-                str(e)), JSONRPC_CODES["parse_error"]) from e
+            raise BadJsonRpc2(f"JSON parse error: {e!s}", JSONRPC_CODES["parse_error"]) from e
 
         if isinstance(data, list):
-            raise BadJsonRpc2("JSONRPC batch requests are not supported",
-                              JSONRPC_CODES["invalid_request"])
+            raise BadJsonRpc2(
+                "JSONRPC batch requests are not supported", JSONRPC_CODES["invalid_request"]
+            )
         if not isinstance(data, dict):
-            raise BadJsonRpc2("JSONRPC root object must be an object",
-                              JSONRPC_CODES["invalid_request"])
+            raise BadJsonRpc2(
+                "JSONRPC root object must be an object", JSONRPC_CODES["invalid_request"]
+            )
 
         def check(name, types, typename):
             if name not in data:
-                raise BadJsonRpc2("missing key '{}'".format(name), JSONRPC_CODES["invalid_request"])
+                raise BadJsonRpc2(f"missing key '{name}'", JSONRPC_CODES["invalid_request"])
             if not isinstance(data[name], types):
-                raise BadJsonRpc2("'{}' must be {}".format(name, typename),
-                                  JSONRPC_CODES["invalid_request"])
+                raise BadJsonRpc2(f"'{name}' must be {typename}", JSONRPC_CODES["invalid_request"])
+
         check("jsonrpc", (str,), "a string")
         check("method", (str,), "a string")
-        check("id", (str, int, type(None)),
-              "a string, number, or null")
+        check("id", (str, int, type(None)), "a string, number, or null")
         check("params", (dict,), "an object")
         if data['jsonrpc'] != '2.0':
-            raise BadJsonRpc2("only JSONRPC 2.0 is supported",
-                              JSONRPC_CODES['invalid_request'])
+            raise BadJsonRpc2("only JSONRPC 2.0 is supported", JSONRPC_CODES['invalid_request'])
         return data["method"], data["id"], data['params']
 
     @defer.inlineCallbacks
-    def renderJsonRpc(self, request):
-        jsonRpcReply = {'jsonrpc': "2.0"}
+    def renderJsonRpc(self, request: server.Request) -> InlineCallbacksType[None]:
+        jsonRpcReply: dict[str, Any] = {'jsonrpc': "2.0"}
 
-        def writeError(msg, errcode=399,
-                       jsonrpccode=JSONRPC_CODES["internal_error"]):
+        def writeError(
+            msg: str | bytes, errcode: int = 399, jsonrpccode: int = JSONRPC_CODES["internal_error"]
+        ) -> None:
             if isinstance(msg, bytes):
                 msg = bytes2unicode(msg)
             if self.debug:
-                log.msg("JSONRPC error: {}".format(msg))
+                log.msg(f"JSONRPC error: {msg}")
             request.setResponseCode(errcode)
             request.setHeader(b'content-type', JSON_ENCODED)
             if "error" not in jsonRpcReply:  # already filled in by caller
-                jsonRpcReply['error'] = dict(code=jsonrpccode, message=msg)
+                jsonRpcReply['error'] = {"code": jsonrpccode, "message": msg}
             data = json.dumps(jsonRpcReply)
-            data = unicode2bytes(data)
-            request.write(data)
+            request.write(unicode2bytes(data))
 
         with self.handleErrors(writeError):
             method, id, params = self.decodeJsonRPC2(request)
             jsonRpcReply['id'] = id
             ep, kwargs = yield self.getEndpoint(request, method, params)
             userinfos = self.master.www.getUserInfos(request)
-            if 'anonymous' in userinfos and userinfos['anonymous']:
+            owner: str | None = None
+            if userinfos.get('anonymous'):
                 owner = "anonymous"
             else:
                 for field in ('email', 'username', 'full_name'):
@@ -235,57 +275,103 @@ class V2RootResource(resource.Resource):
             result = yield ep.control(method, params, kwargs)
             jsonRpcReply['result'] = result
 
-            data = json.dumps(jsonRpcReply, default=toJson,
-                              sort_keys=True, separators=(',', ':'))
+            data = json.dumps(jsonRpcReply, default=toJson, sort_keys=True, separators=(',', ':'))
 
             request.setHeader(b'content-type', JSON_ENCODED)
             if request.method == b"HEAD":
                 request.setHeader(b"content-length", unicode2bytes(str(len(data))))
                 request.write(b'')
             else:
-                data = unicode2bytes(data)
-                request.write(data)
+                request.write(unicode2bytes(data))
 
-    def decodeResultSpec(self, request, endpoint):
+    def decodeResultSpec(self, request: server.Request, endpoint: Endpoint) -> ResultSpec:
         args = request.args
         entityType = endpoint.rtype.entityType
-        return self.master.data.resultspec_from_jsonapi(args, entityType, endpoint.isCollection)
+        return self.master.data.resultspec_from_jsonapi(
+            args,  # type: ignore[arg-type]
+            entityType,
+            endpoint.kind == EndpointKind.COLLECTION,
+        )
 
-    def encodeRaw(self, data, request):
-        request.setHeader(b"content-type",
-                          unicode2bytes(data['mime-type']) + b'; charset=utf-8')
-        request.setHeader(b"content-disposition",
-                          b'attachment; filename=' + unicode2bytes(data['filename']))
-        request.write(unicode2bytes(data['raw']))
-        return
+    def _write_rest_error(
+        self, request: server.Request, msg: str | bytes, errcode: int = 404
+    ) -> None:
+        if self.debug:
+            log.msg(f"REST error: {msg!r}")
+        request.setResponseCode(errcode)
+        request.setHeader(b'content-type', b'text/plain; charset=utf-8')
+        msg = bytes2unicode(msg)
+        json_data = json.dumps({"error": msg})
+        request.write(unicode2bytes(json_data))
+
+    def _write_not_found_rest_error(
+        self,
+        request: server.Request,
+        ep: Endpoint,
+        rspec: ResultSpec,
+        kwargs: dict[str, Any],
+    ) -> None:
+        self._write_rest_error(
+            request=request,
+            msg=(f"not found while getting from {ep!r} with arguments {rspec!r} and {kwargs!s}"),
+        )
+
+    async def _render_raw(
+        self,
+        request: server.Request,
+        ep: Endpoint,
+        rspec: ResultSpec,
+        kwargs: dict[str, Any],
+    ) -> None:
+        assert ep.kind in (EndpointKind.RAW, EndpointKind.RAW_INLINE)
+
+        is_stream_data = False
+        try:
+            data = await ep.stream(rspec, kwargs)
+            is_stream_data = True
+        except NotImplementedError:
+            data = await ep.get(rspec, kwargs)
+
+        if data is None:
+            self._write_not_found_rest_error(request, ep, rspec=rspec, kwargs=kwargs)
+            return
+
+        request.setHeader(b"content-type", unicode2bytes(data['mime-type']) + b'; charset=utf-8')
+        if ep.kind != EndpointKind.RAW_INLINE:
+            request.setHeader(
+                b"content-disposition", b'attachment; filename=' + unicode2bytes(data['filename'])
+            )
+
+        if not is_stream_data:
+            request.write(unicode2bytes(data['raw']))
+            return
+
+        async for chunk in data['raw']:
+            if _is_request_finished(request):
+                return
+            request.write(unicode2bytes(chunk))
 
     @defer.inlineCallbacks
-    def renderRest(self, request):
-        def writeError(msg, errcode=404, jsonrpccode=None):
-            if self.debug:
-                log.msg("REST error: {}".format(msg))
-            request.setResponseCode(errcode)
-            request.setHeader(b'content-type', b'text/plain; charset=utf-8')
-            msg = bytes2unicode(msg)
-            data = json.dumps(dict(error=msg))
-            data = unicode2bytes(data)
-            request.write(data)
+    def renderRest(self, request: server.Request) -> InlineCallbacksType[None]:
+        def writeError(
+            msg: str | bytes, errcode: int = 404, jsonrpccode: int | None = None
+        ) -> None:
+            self._write_rest_error(request, msg=msg, errcode=errcode)
 
         with self.handleErrors(writeError):
             ep, kwargs = yield self.getEndpoint(request, bytes2unicode(request.method), {})
 
             rspec = self.decodeResultSpec(request, ep)
-            data = yield ep.get(rspec, kwargs)
-            if data is None:
-                msg = ("not found while getting from {} with "
-                       "arguments {} and {}").format(repr(ep), repr(rspec),
-                                                     str(kwargs))
-                msg = unicode2bytes(msg)
-                writeError(msg, errcode=404)
+            if ep.kind in (EndpointKind.RAW, EndpointKind.RAW_INLINE):
+                yield defer.Deferred.fromCoroutine(self._render_raw(request, ep, rspec, kwargs))
                 return
 
-            if ep.isRaw:
-                self.encodeRaw(data, request)
+            data = yield ep.get(rspec, kwargs)
+            if data is None:
+                self._write_not_found_rest_error(request, ep, rspec=rspec, kwargs=kwargs)
+                return
+
+            if _is_request_finished(request):
                 return
 
             # post-process any remaining parts of the resultspec
@@ -293,7 +379,7 @@ class V2RootResource(resource.Resource):
 
             # annotate the result with some metadata
             meta = {}
-            if ep.isCollection:
+            if ep.kind == EndpointKind.COLLECTION:
                 offset, total = data.offset, data.total
                 if offset is None:
                     offset = 0
@@ -308,10 +394,7 @@ class V2RootResource(resource.Resource):
                 data = [data]
 
             typeName = ep.rtype.plural
-            data = {
-                typeName: data,
-                'meta': meta
-            }
+            data = {typeName: data, 'meta': meta}
 
             # set up the content type and formatting options; if the request
             # accepts text/html or text/plain, the JSON will be rendered in a
@@ -319,37 +402,37 @@ class V2RootResource(resource.Resource):
 
             if b'application/json' in (request.getHeader(b'accept') or b''):
                 compact = True
-                request.setHeader(b"content-type",
-                                  b'application/json; charset=utf-8')
+                request.setHeader(b"content-type", b'application/json; charset=utf-8')
             else:
                 compact = False
-                request.setHeader(b"content-type",
-                                  b'text/plain; charset=utf-8')
+                request.setHeader(b"content-type", b'text/plain; charset=utf-8')
 
             # set up caching
             if self.cache_seconds:
-                now = datetime.datetime.utcnow()
+                now = datetime.datetime.now(datetime.timezone.utc)
                 expires = now + datetime.timedelta(seconds=self.cache_seconds)
-                expiresBytes = unicode2bytes(
-                    expires.strftime("%a, %d %b %Y %H:%M:%S GMT"))
+                expiresBytes = unicode2bytes(expires.strftime("%a, %d %b %Y %H:%M:%S GMT"))
                 request.setHeader(b"Expires", expiresBytes)
                 request.setHeader(b"Pragma", b"no-cache")
 
             # filter out blanks if necessary and render the data
+            encoder = json.encoder.JSONEncoder(default=toJson, sort_keys=True)
             if compact:
-                data = json.dumps(data, default=toJson,
-                                  sort_keys=True, separators=(',', ':'))
+                encoder.item_separator, encoder.key_separator = (',', ':')
             else:
-                data = json.dumps(data, default=toJson,
-                                  sort_keys=True, indent=2)
+                encoder.indent = 2
 
-            if request.method == b"HEAD":
-                request.setHeader(b"content-length", unicode2bytes(str(len(data))))
-            else:
-                data = unicode2bytes(data)
-                request.write(data)
+            _reactor = cast("IReactorThreads", self.master.reactor)
+            yield threads.deferToThreadPool(
+                _reactor,
+                _reactor.getThreadPool(),
+                self._write_json_data,
+                request,
+                encoder,
+                data,
+            )
 
-    def reconfigResource(self, new_config):
+    def reconfigResource(self, new_config: Any) -> None:
         # buildbotURL may contain reverse proxy path, Origin header is just
         # scheme + host + port
         buildbotURL = urlparse(unicode2bytes(new_config.buildbotURL))
@@ -364,28 +447,26 @@ class V2RootResource(resource.Resource):
         self.debug = new_config.www.get('debug')
         self.cache_seconds = new_config.www.get('json_cache_seconds', 0)
 
-    def render(self, request):
-        def writeError(msg, errcode=400):
+    def render(self, request: server.Request) -> int:
+        def writeError(msg: str | bytes, errcode: int = 400) -> None:
             msg = bytes2unicode(msg)
             if self.debug:
-                log.msg("HTTP error: {}".format(msg))
+                log.msg(f"HTTP error: {msg}")
             request.setResponseCode(errcode)
             request.setHeader(b'content-type', b'text/plain; charset=utf-8')
             if request.method == b'POST':
                 # jsonRPC callers want the error message in error.message
-                data = json.dumps(dict(error=dict(message=msg)))
-                data = unicode2bytes(data)
-                request.write(data)
+                data = json.dumps({"error": {"message": msg}})
+                request.write(unicode2bytes(data))
             else:
-                data = json.dumps(dict(error=msg))
-                data = unicode2bytes(data)
-                request.write(data)
+                data = json.dumps({"error": msg})
+                request.write(unicode2bytes(data))
             request.finish()
+
         return self.asyncRenderHelper(request, self.asyncRender, writeError)
 
     @defer.inlineCallbacks
-    def asyncRender(self, request):
-
+    def asyncRender(self, request: server.Request) -> InlineCallbacksType[bytes | None]:
         # Handle CORS, if necessary.
         origins = self.origins
         if origins is not None:
@@ -397,8 +478,7 @@ class V2RootResource(resource.Resource):
                 if not any(o.match(bytes2unicode(reqOrigin)) for o in self.origins):
                     err = b"invalid origin"
                 elif request.method == b'OPTIONS':
-                    preflightMethod = request.getHeader(
-                        b'access-control-request-method')
+                    preflightMethod = request.getHeader(b'access-control-request-method')
                     if preflightMethod not in (b'GET', b'POST', b'HEAD'):
                         err = b'invalid method'
                     isPreflight = True
@@ -410,8 +490,7 @@ class V2RootResource(resource.Resource):
                 # content types other than form data and text/plain to not be
                 # simple.
                 request.setHeader(b"access-control-allow-origin", reqOrigin)
-                request.setHeader(b"access-control-allow-headers",
-                                  b"Content-Type")
+                request.setHeader(b"access-control-allow-headers", b"Content-Type")
                 request.setHeader(b"access-control-max-age", b'3600')
 
                 # if this was a preflight request, we're done
@@ -427,6 +506,34 @@ class V2RootResource(resource.Resource):
             raise Error(400, b"invalid HTTP method")
 
         return res
+
+    def _write_json_data(
+        self,
+        request: server.Request,
+        encoder: json.encoder.JSONEncoder,
+        data: Any,
+    ) -> None:
+        _reactor = cast("IReactorThreads", self.master.reactor)
+
+        content_length = 0
+        for chunk in encoder.iterencode(data):
+            if _is_request_finished(request):
+                return
+            content_length += len(unicode2bytes(chunk))
+        request.setHeader(b"content-length", unicode2bytes(str(content_length)))
+
+        if request.method != b"HEAD":
+            buffer = bytearray()
+            for chunk in encoder.iterencode(data):
+                if _is_request_finished(request):
+                    return
+                buffer += unicode2bytes(chunk)
+                if len(buffer) >= _JSON_WRITE_BATCH_SIZE:
+                    threads.blockingCallFromThread(_reactor, request.write, bytes(buffer))
+                    buffer.clear()
+
+            if buffer and not _is_request_finished(request):
+                threads.blockingCallFromThread(_reactor, request.write, bytes(buffer))
 
 
 RestRootResource.addApiVersion(2, V2RootResource)

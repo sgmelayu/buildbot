@@ -13,24 +13,23 @@
 #
 # Copyright Buildbot Team Members
 
-from __future__ import absolute_import
-from __future__ import print_function
-
-import mock
-
 from twisted.trial import unittest
 
 from buildbot_worker.scripts import start
 from buildbot_worker.test.util import misc
 
+try:
+    from unittest import mock
+except ImportError:
+    from unittest import mock
+
 
 class TestStartCommand(unittest.TestCase, misc.IsWorkerDirMixin):
-
     """
     Test buildbot_worker.scripts.startup.startCommand()
     """
 
-    def test_start_command_bad_basedir(self):
+    def test_start_command_bad_basedir(self) -> None:
         """
         test calling startCommand() with invalid basedir path
         """
@@ -45,7 +44,7 @@ class TestStartCommand(unittest.TestCase, misc.IsWorkerDirMixin):
         # check that isWorkerDir was called with correct argument
         self.isWorkerDir.assert_called_once_with("dummy")
 
-    def test_start_command_good(self):
+    def test_start_command_good(self) -> None:
         """
         test successful startCommand() call
         """
@@ -63,6 +62,6 @@ class TestStartCommand(unittest.TestCase, misc.IsWorkerDirMixin):
         # check that isWorkerDir() and startWorker() were called
         # with correct argument
         self.isWorkerDir.assert_called_once_with("dummy")
-        mocked_startWorker.assert_called_once_with(config["basedir"],
-                                                   config["quiet"],
-                                                   config["nodaemon"])
+        mocked_startWorker.assert_called_once_with(
+            config["basedir"], config["quiet"], config["nodaemon"]
+        )

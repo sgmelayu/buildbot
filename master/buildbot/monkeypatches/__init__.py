@@ -13,22 +13,28 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
 import os
 import unittest
-from builtins import int
+from typing import Any
+from typing import Callable
 
 from twisted.python import util
 
 
-def onlyOnce(fn):
-    'Set up FN to only run once within an interpreter instance'
-    def wrap(*args, **kwargs):
+def onlyOnce(fn: Callable[..., Any]) -> Callable[..., Any]:
+    "Set up FN to only run once within an interpreter instance"
+
+    def wrap(*args: Any, **kwargs: Any) -> Any:
         if hasattr(fn, 'called'):
             return None
-        fn.called = 1
+        fn.called = 1  # type: ignore[attr-defined]
         return fn(*args, **kwargs)
+
     util.mergeFunctionMetadata(fn, wrap)
     return wrap
+
 
 # NOTE: all of these patches test for applicability *before* importing the
 # patch module.  This will help cut down on unnecessary imports where the
@@ -37,76 +43,68 @@ def onlyOnce(fn):
 
 
 @onlyOnce
-def patch_testcase_timeout():
+def patch_testcase_timeout() -> None:
     # any test that should take more than 5 second should be annotated so.
-    unittest.TestCase.timeout = 5
+    unittest.TestCase.timeout = 5  # type: ignore[attr-defined]
 
     # but we know that the DB tests are very slow, so we increase a bit that value for
     # real database tests
     if os.environ.get("BUILDBOT_TEST_DB_URL", None) is not None:
-        unittest.TestCase.timeout = 120
+        unittest.TestCase.timeout = 120  # type: ignore[attr-defined]
 
 
 @onlyOnce
-def patch_servicechecks():
-    from buildbot.monkeypatches import servicechecks
+def patch_servicechecks() -> None:
+    from buildbot.monkeypatches import servicechecks  # noqa: PLC0415
+
     servicechecks.patch()
 
 
 @onlyOnce
-def patch_mysqlclient_warnings():
-    try:
-        from _mysql_exceptions import Warning
-        # MySQLdb.compat is only present in mysqlclient
-        import MySQLdb.compat  # noqa pylint: disable=unused-import,import-outside-toplevel
-    except ImportError:
-        return
-    # workaround for https://twistedmatrix.com/trac/ticket/9005
-    # mysqlclient is easier to patch than twisted
-    # we swap _mysql_exceptions.Warning arguments so that the code is in second place
+def patch_decorators() -> None:
+    from buildbot.monkeypatches import decorators  # noqa: PLC0415
 
-    def patched_init(self, *args):
-        if isinstance(args[0], int):
-            super().__init__("{} {}".format(args[0], args[1]))
-        else:
-            super().__init__(*args)
-    Warning.__init__ = patched_init
-
-
-@onlyOnce
-def patch_decorators():
-    from buildbot.monkeypatches import decorators
     decorators.patch()
 
 
 @onlyOnce
-def patch_config_for_unit_tests():
-    from buildbot import config
+def patch_config_for_unit_tests() -> None:
+    from buildbot.config.master import set_is_in_unit_tests  # noqa: PLC0415
+
     # by default, buildbot.config warns about not configured buildbotNetUsageData.
     # its important for users to not leak information, but unneeded and painful for tests
-    config._in_unit_tests = True
+    set_is_in_unit_tests(True)
 
 
 @onlyOnce
-def patch_unittest_testcase():
-    from twisted.trial.unittest import TestCase
+def patch_twisted_failure() -> None:
+    try:
+        from twisted import __version__ as twisted_version  # noqa: PLC0415
+        from twisted.python.versions import Version  # noqa: PLC0415
 
-    # In Python 3.2,
-    # - assertRaisesRegexp() was renamed to assertRaisesRegex(),
-    #   and assertRaisesRegexp() was deprecated.
-    # - assertRegexpMatches() was renamed to assertRegex()
-    #   and assertRegexpMatches() was deprecated.
-    if not getattr(TestCase, "assertRaisesRegex", None):
-        TestCase.assertRaisesRegex = TestCase.assertRaisesRegexp
-    if not getattr(TestCase, "assertRegex", None):
-        TestCase.assertRegex = TestCase.assertRegexpMatches
+        current_version = Version('twisted', *map(int, twisted_version.split('.')[:3]))
+        if current_version <= Version('twisted', 24, 7, 0):
+            return
+
+        from twisted.spread.pb import CopiedFailure  # noqa: PLC0415
+
+        original_setCopyableState = CopiedFailure.setCopyableState
+
+        def patched_setCopyableState(self: Any, state: dict[str, Any]) -> Any:
+            if 'parents' not in state:
+                state['parents'] = []
+            return original_setCopyableState(self, state)
+
+        CopiedFailure.setCopyableState = patched_setCopyableState  # type: ignore[method-assign]
+
+    except ImportError:
+        pass
 
 
-def patch_all(for_tests=False):
+def patch_all(for_tests: bool = False) -> None:
     if for_tests:
-        patch_servicechecks()
         patch_testcase_timeout()
-        patch_decorators()
-        patch_mysqlclient_warnings()
         patch_config_for_unit_tests()
-        patch_unittest_testcase()
+    patch_servicechecks()
+    patch_decorators()
+    patch_twisted_failure()

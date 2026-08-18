@@ -13,6 +13,10 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from twisted.internet import defer
 from twisted.trial import unittest
 
@@ -20,27 +24,32 @@ from buildbot.data import sourcestamps
 from buildbot.test import fakedb
 from buildbot.test.util import endpoint
 
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
+
 
 class SourceStampEndpoint(endpoint.EndpointMixin, unittest.TestCase):
-
     endpointClass = sourcestamps.SourceStampEndpoint
     resourceTypeClass = sourcestamps.SourceStamp
 
-    def setUp(self):
-        self.setUpEndpoint()
-        self.db.insertTestData([
+    @defer.inlineCallbacks
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        yield self.setUpEndpoint()
+        yield self.master.db.insert_test_data([
             fakedb.SourceStamp(id=13, branch='oak'),
-            fakedb.Patch(id=99, patch_base64='aGVsbG8sIHdvcmxk',
-                         patch_author='bar', patch_comment='foo', subdir='/foo',
-                         patchlevel=3),
+            fakedb.Patch(
+                id=99,
+                patch_base64='aGVsbG8sIHdvcmxk',
+                patch_author='bar',
+                patch_comment='foo',
+                subdir='/foo',
+                patchlevel=3,
+            ),
             fakedb.SourceStamp(id=14, patchid=99, branch='poplar'),
         ])
 
-    def tearDown(self):
-        self.tearDownEndpoint()
-
     @defer.inlineCallbacks
-    def test_get_existing(self):
+    def test_get_existing(self) -> InlineCallbacksType[None]:
         sourcestamp = yield self.callGet(('sourcestamps', 13))
 
         self.validateData(sourcestamp)
@@ -48,51 +57,69 @@ class SourceStampEndpoint(endpoint.EndpointMixin, unittest.TestCase):
         self.assertEqual(sourcestamp['patch'], None)
 
     @defer.inlineCallbacks
-    def test_get_existing_patch(self):
+    def test_get_existing_patch(self) -> InlineCallbacksType[None]:
         sourcestamp = yield self.callGet(('sourcestamps', 14))
 
         self.validateData(sourcestamp)
         self.assertEqual(sourcestamp['branch'], 'poplar')
-        self.assertEqual(sourcestamp['patch'], {
-            'patchid': 99,
-            'author': 'bar',
-            'body': b'hello, world',
-            'comment': 'foo',
-            'level': 3,
-            'subdir': '/foo',
-        })
+        self.assertEqual(
+            sourcestamp['patch'],
+            {
+                'patchid': 99,
+                'author': 'bar',
+                'body': b'hello, world',
+                'comment': 'foo',
+                'level': 3,
+                'subdir': '/foo',
+            },
+        )
 
     @defer.inlineCallbacks
-    def test_get_missing(self):
+    def test_get_missing(self) -> InlineCallbacksType[None]:
         sourcestamp = yield self.callGet(('sourcestamps', 99))
 
         self.assertEqual(sourcestamp, None)
 
 
 class SourceStampsEndpoint(endpoint.EndpointMixin, unittest.TestCase):
-
     endpointClass = sourcestamps.SourceStampsEndpoint
     resourceTypeClass = sourcestamps.SourceStamp
 
-    def setUp(self):
-        self.setUpEndpoint()
-        self.db.insertTestData([
+    @defer.inlineCallbacks
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        yield self.setUpEndpoint()
+        yield self.master.db.insert_test_data([
+            fakedb.Buildset(id=30, reason="foo", submitted_at=1300305712, results=-1),
             fakedb.SourceStamp(id=13),
             fakedb.SourceStamp(id=14),
+            fakedb.SourceStamp(id=15),
+            fakedb.BuildsetSourceStamp(sourcestampid=13, buildsetid=30),
+            fakedb.BuildsetSourceStamp(sourcestampid=14, buildsetid=30),
         ])
 
-    def tearDown(self):
-        self.tearDownEndpoint()
-
     @defer.inlineCallbacks
-    def test_get(self):
+    def test_get(self) -> InlineCallbacksType[None]:
         sourcestamps = yield self.callGet(('sourcestamps',))
 
-        [self.validateData(m) for m in sourcestamps]
-        self.assertEqual(sorted([m['ssid'] for m in sourcestamps]),
-                         [13, 14])
+        for m in sourcestamps:
+            self.validateData(m)
+
+        self.assertEqual(sorted([m['ssid'] for m in sourcestamps]), [13, 14, 15])
+
+    @defer.inlineCallbacks
+    def test_get_by_buildsetid_no_buildset(self) -> InlineCallbacksType[None]:
+        sourcestamps = yield self.callGet(("buildsets", 101, "sourcestamps"))
+        self.assertEqual(sourcestamps, [])
+
+    @defer.inlineCallbacks
+    def test_get_by_buildsetid(self) -> InlineCallbacksType[None]:
+        sourcestamps = yield self.callGet(("buildsets", 30, "sourcestamps"))
+
+        for m in sourcestamps:
+            self.validateData(m)
+
+        self.assertEqual(sorted([m['ssid'] for m in sourcestamps]), [13, 14])
 
 
 class SourceStamp(unittest.TestCase):
-
     pass

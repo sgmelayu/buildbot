@@ -1,0 +1,155 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`buildsticker component > failed 1`] = `
+<DocumentFragment>
+  <div
+    class="bb-buildsticker results_FAILURE card"
+  >
+    <div
+      class="card-body"
+    >
+      <div
+        class="bb-buildsticker-left"
+      >
+        <div
+          class="bb-badge-status results_FAILURE"
+        >
+          FAILURE
+        </div>
+        <a
+          href="/builders/2/builds/1"
+        >
+          /1
+        </a>
+      </div>
+      <div
+        class="bb-buildsticker-left"
+      >
+        <span
+          class="bb-buildsticker-time"
+        >
+          10 s
+        </span>
+        <span>
+          failed
+        </span>
+      </div>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`buildsticker component > pending 1`] = `
+<DocumentFragment>
+  <div
+    class="bb-buildsticker results_PENDING card"
+  >
+    <div
+      class="card-body"
+    >
+      <div
+        class="bb-buildsticker-left"
+      >
+        <div
+          class="bb-badge-status results_PENDING"
+        >
+          ...
+        </div>
+        <a
+          href="/builders/2/builds/1"
+        >
+          /1
+        </a>
+      </div>
+      <div
+        class="bb-buildsticker-left"
+      >
+        <span
+          class="bb-buildsticker-time"
+        >
+          18992 days 23:59:40
+        </span>
+        <span>
+          pending
+        </span>
+      </div>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`buildsticker component > simple 1`] = `
+<DocumentFragment>
+  <div
+    class="bb-buildsticker results_UNKNOWN card"
+  >
+    <div
+      class="card-body"
+    >
+      <div
+        class="bb-buildsticker-left"
+      >
+        <div
+          class="bb-badge-status results_UNKNOWN"
+        >
+          ...
+        </div>
+        <a
+          href="/builders/2/builds/1"
+        >
+          /1
+        </a>
+      </div>
+      <div
+        class="bb-buildsticker-left"
+      >
+        <span
+          class="bb-buildsticker-time"
+        >
+          18993 days 0:00:00
+        </span>
+        <span />
+      </div>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`buildsticker component > success 1`] = `
+<DocumentFragment>
+  <div
+    class="bb-buildsticker results_SUCCESS card"
+  >
+    <div
+      class="card-body"
+    >
+      <div
+        class="bb-buildsticker-left"
+      >
+        <div
+          class="bb-badge-status results_SUCCESS"
+        >
+          SUCCESS
+        </div>
+        <a
+          href="/builders/2/builds/1"
+        >
+          /1
+        </a>
+      </div>
+      <div
+        class="bb-buildsticker-left"
+      >
+        <span
+          class="bb-buildsticker-time"
+        >
+          10 s
+        </span>
+        <span>
+          finished
+        </span>
+      </div>
+    </div>
+  </div>
+</DocumentFragment>
+`;

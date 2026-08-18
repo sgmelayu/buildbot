@@ -13,6 +13,11 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from typing import Any
+from typing import TypedDict
 
 from twisted.internet import defer
 
@@ -20,64 +25,98 @@ from buildbot.data import base
 from buildbot.data import patches
 from buildbot.data import types
 
+if TYPE_CHECKING:
+    import datetime
 
-def _db2data(ss):
-    data = {
-        'ssid': ss['ssid'],
-        'branch': ss['branch'],
-        'revision': ss['revision'],
-        'project': ss['project'],
-        'repository': ss['repository'],
-        'codebase': ss['codebase'],
-        'created_at': ss['created_at'],
+    from buildbot.data.resultspec import ResultSpec
+    from buildbot.db.sourcestamps import SourceStampModel
+    from buildbot.util.twisted import InlineCallbacksType
+
+
+class SourceStampData(TypedDict):
+    ssid: int
+    branch: str | None
+    revision: str | None
+    project: str
+    repository: str
+    codebase: str
+    created_at: datetime.datetime
+    patch: PatchData | None
+
+
+class PatchData(TypedDict):
+    patchid: int
+    level: int
+    subdir: str | None
+    author: str
+    comment: str
+    body: bytes
+
+
+def _db2data(ss: SourceStampModel) -> SourceStampData:
+    data: SourceStampData = {
+        'ssid': ss.ssid,
+        'branch': ss.branch,
+        'revision': ss.revision,
+        'project': ss.project,
+        'repository': ss.repository,
+        'codebase': ss.codebase,
+        'created_at': ss.created_at,
         'patch': None,
     }
-    if ss['patch_body']:
+    if ss.patch is not None:
         data['patch'] = {
-            'patchid': ss['patchid'],
-            'level': ss['patch_level'],
-            'subdir': ss['patch_subdir'],
-            'author': ss['patch_author'],
-            'comment': ss['patch_comment'],
-            'body': ss['patch_body'],
+            'patchid': ss.patch.patchid,
+            'level': ss.patch.level,
+            'subdir': ss.patch.subdir,
+            'author': ss.patch.author,
+            'comment': ss.patch.comment,
+            'body': ss.patch.body,
         }
     return data
 
 
 class SourceStampEndpoint(base.Endpoint):
-
-    isCollection = False
-    pathPatterns = """
-        /sourcestamps/n:ssid
-    """
+    kind = base.EndpointKind.SINGLE
+    pathPatterns = [
+        "/sourcestamps/n:ssid",
+    ]
 
     @defer.inlineCallbacks
-    def get(self, resultSpec, kwargs):
-        ssdict = yield self.master.db.sourcestamps.getSourceStamp(
-            kwargs['ssid'])
+    def get(
+        self, resultSpec: ResultSpec, kwargs: dict[str, Any]
+    ) -> InlineCallbacksType[SourceStampData | None]:
+        ssdict = yield self.master.db.sourcestamps.getSourceStamp(kwargs['ssid'])
         return _db2data(ssdict) if ssdict else None
 
 
 class SourceStampsEndpoint(base.Endpoint):
-
-    isCollection = True
-    pathPatterns = """
-        /sourcestamps
-    """
+    kind = base.EndpointKind.COLLECTION
+    pathPatterns = [
+        "/sourcestamps",
+        "/buildsets/:buildsetid/sourcestamps",
+    ]
     rootLinkName = 'sourcestamps'
 
     @defer.inlineCallbacks
-    def get(self, resultSpec, kwargs):
-        return [_db2data(ssdict) for ssdict in
-            (yield self.master.db.sourcestamps.getSourceStamps())]
+    def get(
+        self, resultSpec: ResultSpec, kwargs: dict[str, Any]
+    ) -> InlineCallbacksType[list[SourceStampData]]:
+        buildsetid = kwargs.get("buildsetid")
+        if buildsetid is not None:
+            sourcestamps = yield self.master.db.sourcestamps.get_sourcestamps_for_buildset(
+                buildsetid
+            )
+        else:
+            sourcestamps = yield self.master.db.sourcestamps.getSourceStamps()
+
+        return [_db2data(ssdict) for ssdict in sourcestamps]
 
 
 class SourceStamp(base.ResourceType):
-
     name = "sourcestamp"
     plural = "sourcestamps"
     endpoints = [SourceStampEndpoint, SourceStampsEndpoint]
-    keyFields = ['ssid']
 
     class EntityType(types.Entity):
         ssid = types.Integer()
@@ -88,4 +127,5 @@ class SourceStamp(base.ResourceType):
         codebase = types.String()
         patch = types.NoneOk(patches.Patch.entityType)
         created_at = types.DateTime()
+
     entityType = EntityType(name)

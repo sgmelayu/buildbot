@@ -39,12 +39,16 @@ _build
 # downloaded by setup_requires eggs
 *.egg
 .eggs/
-master/setuptools_trial*
 sandbox
 sandbox.*
 .idea/
 /.venv*/
 
+# created by setuptools-scm
+master/buildbot/_version.py
+www/*/*/_version.py
+
 # www
 */node_modules/
 node_modules
+yarn-error.log

@@ -18,8 +18,12 @@
 # otherwise, Andrew Melo <andrew.melo@gmail.com> wrote the rest
 # but "the rest" is pretty minimal
 
+from __future__ import annotations
+
 import re
 from datetime import datetime
+from typing import TYPE_CHECKING
+from typing import Any
 
 from twisted.internet import defer
 from twisted.python import log
@@ -31,6 +35,10 @@ from buildbot.util import datetime2epoch
 from buildbot.util import unicode2bytes
 from buildbot.www import resource
 
+if TYPE_CHECKING:
+    from buildbot.master import BuildMaster
+    from buildbot.util.twisted import InlineCallbacksType
+
 
 class ChangeHookResource(resource.Resource):
     # this is a cheap sort of template thingy
@@ -38,7 +46,7 @@ class ChangeHookResource(resource.Resource):
     children = {}
     needsReconfig = True
 
-    def __init__(self, dialects=None, master=None):
+    def __init__(self, master: BuildMaster, dialects: dict[str, Any] | None = None):
         """
         The keys of 'dialects' select a modules to load under
         master/buildbot/www/hooks/
@@ -50,24 +58,24 @@ class ChangeHookResource(resource.Resource):
         if dialects is None:
             dialects = {}
         self.dialects = dialects
-        self._dialect_handlers = {}
+        self._dialect_handlers: dict[str, Any] = {}
         self.request_dialect = None
         self._plugins = get_plugins("webhooks")
 
-    def reconfigResource(self, new_config):
+    def reconfigResource(self, new_config: Any) -> None:
         self.dialects = new_config.www.get('change_hook_dialects', {})
 
-    def getChild(self, name, request):
+    def getChild(self, name: bytes, request: server.Request) -> Any:
         return self
 
-    def render_GET(self, request):
+    def render_GET(self, request: server.Request) -> int:
         """
         Responds to events and starts the build process
           different implementations can decide on what methods they will accept
         """
         return self.render_POST(request)
 
-    def render_POST(self, request):
+    def render_POST(self, request: server.Request) -> int:
         """
         Responds to events and starts the build process
           different implementations can decide on what methods they will accept
@@ -81,11 +89,11 @@ class ChangeHookResource(resource.Resource):
         except Exception:
             d = defer.fail()
 
-        def ok(_):
+        def ok(_: Any) -> None:
             request.setResponseCode(202)
             request.finish()
 
-        def err(why):
+        def err(why: Any) -> None:
             code = 500
             if why.check(ValueError):
                 code = 400
@@ -102,40 +110,46 @@ class ChangeHookResource(resource.Resource):
         return server.NOT_DONE_YET
 
     @defer.inlineCallbacks
-    def getAndSubmitChanges(self, request):
+    def getAndSubmitChanges(self, request: server.Request) -> InlineCallbacksType[None]:
         changes, src = yield self.getChanges(request)
         if not changes:
             request.write(b"no change found")
         else:
             yield self.submitChanges(changes, request, src)
-            request.write(unicode2bytes("{} change found".format(len(changes))))
+            request.write(unicode2bytes(f"{len(changes)} change found"))
 
-    def makeHandler(self, dialect):
+    def makeHandler(self, dialect: str) -> Any:
         """create and cache the handler object for this dialect"""
         if dialect not in self.dialects:
-            m = "The dialect specified, '{}', wasn't whitelisted in change_hook".format(dialect)
+            m = f"The dialect specified, '{dialect}', wasn't whitelisted in change_hook"
             log.msg(m)
-            log.msg("Note: if dialect is 'base' then it's possible your URL is "
-                    "malformed and we didn't regex it properly")
+            log.msg(
+                "Note: if dialect is 'base' then it's possible your URL is "
+                "malformed and we didn't regex it properly"
+            )
             raise ValueError(m)
 
         if dialect not in self._dialect_handlers:
-            if dialect not in self._plugins:
-                m = ("The dialect specified, '{}', is not registered as "
-                     "a buildbot.webhook plugin").format(dialect)
-                log.msg(m)
-                raise ValueError(m)
             options = self.dialects[dialect]
             if isinstance(options, dict) and 'custom_class' in options:
                 klass = options['custom_class']
             else:
+                if dialect not in self._plugins:
+                    m = (
+                        f"The dialect specified, '{dialect}', is not registered as "
+                        "a buildbot.webhook plugin"
+                    )
+                    log.msg(m)
+                    raise ValueError(m)
                 klass = self._plugins.get(dialect)
             self._dialect_handlers[dialect] = klass(self.master, self.dialects[dialect])
 
         return self._dialect_handlers[dialect]
 
     @defer.inlineCallbacks
-    def getChanges(self, request):
+    def getChanges(
+        self, request: server.Request
+    ) -> InlineCallbacksType[tuple[list[dict[str, Any]], Any]]:
         """
         Take the logic from the change hook, and then delegate it
         to the proper handler
@@ -149,9 +163,8 @@ class ChangeHookResource(resource.Resource):
         if DIALECT is unspecified, a sample implementation is provided
         """
         uriRE = re.search(r'^/change_hook/?([a-zA-Z0-9_]*)', bytes2unicode(request.uri))
-
         if not uriRE:
-            msg = "URI doesn't match change_hook regex: {}".format(request.uri)
+            msg = f"URI doesn't match change_hook regex: {bytes2unicode(request.uri)}"
             log.msg(msg)
             raise ValueError(msg)
 
@@ -169,21 +182,33 @@ class ChangeHookResource(resource.Resource):
         return (changes, src)
 
     @defer.inlineCallbacks
-    def submitChanges(self, changes, request, src):
+    def submitChanges(
+        self, changes: list[dict[str, Any]], request: server.Request, src: Any
+    ) -> InlineCallbacksType[None]:
         for chdict in changes:
             when_timestamp = chdict.get('when_timestamp')
             if isinstance(when_timestamp, datetime):
                 chdict['when_timestamp'] = datetime2epoch(when_timestamp)
             # unicodify stuff
-            for k in ('comments', 'author', 'committer', 'revision', 'branch', 'category',
-                    'revlink', 'repository', 'codebase', 'project'):
+            for k in (
+                'comments',
+                'author',
+                'committer',
+                'revision',
+                'branch',
+                'category',
+                'revlink',
+                'repository',
+                'codebase',
+                'project',
+            ):
                 if k in chdict:
                     chdict[k] = bytes2unicode(chdict[k])
             if chdict.get('files'):
-                chdict['files'] = [bytes2unicode(f)
-                                for f in chdict['files']]
+                chdict['files'] = [bytes2unicode(f) for f in chdict['files']]
             if chdict.get('properties'):
-                chdict['properties'] = dict((bytes2unicode(k), v)
-                                            for k, v in chdict['properties'].items())
+                chdict['properties'] = dict(
+                    (bytes2unicode(k), v) for k, v in chdict['properties'].items()
+                )
             chid = yield self.master.data.updates.addChange(src=bytes2unicode(src), **chdict)
-            log.msg("injected change {}".format(chid))
+            log.msg(f"injected change {chid}")

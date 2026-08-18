@@ -12,7 +12,11 @@
 # Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
 # Copyright Buildbot Team Members
+from __future__ import annotations
 
+from typing import TYPE_CHECKING
+from typing import Any
+from typing import cast
 
 from twisted.internet import defer
 from twisted.python import log
@@ -24,9 +28,14 @@ from buildbot.process.results import FAILURE
 from buildbot.steps.worker import CompositeStepMixin
 from buildbot.util import bytes2unicode
 
+if TYPE_CHECKING:
+    from buildbot.process.buildrequest import TempChange
+    from buildbot.process.buildrequest import TempSourceStamp
+    from buildbot.process.log import Log
+    from buildbot.util.twisted import InlineCallbacksType
+
 
 class Source(buildstep.BuildStep, CompositeStepMixin):
-
     """This is a base class to generate a source tree in the worker.
     Each version control system has a specialized subclass, and is expected
     to override __init__ and implement computeSourceRevision() and
@@ -34,8 +43,7 @@ class Source(buildstep.BuildStep, CompositeStepMixin):
     starts a RemoteCommand with those arguments.
     """
 
-    renderables = ['description', 'descriptionDone', 'descriptionSuffix',
-                   'workdir', 'env']
+    renderables = ['description', 'descriptionDone', 'descriptionSuffix', 'workdir', 'env']
 
     description = None  # set this to a list of short strings to override
     descriptionDone = None  # alternate description when the step is complete
@@ -45,12 +53,25 @@ class Source(buildstep.BuildStep, CompositeStepMixin):
     haltOnFailure = True
     flunkOnFailure = True
 
-    branch = None  # the default branch, should be set in __init__
+    branch: str | None = None  # the default branch, should be set in __init__
+    stdio_log: Log
+    sourcestamp: TempSourceStamp | None
 
-    def __init__(self, workdir=None, mode='update', alwaysUseLatest=False,
-                 timeout=20 * 60, retry=None, env=None, logEnviron=True,
-                 description=None, descriptionDone=None, descriptionSuffix=None,
-                 codebase='', **kwargs):
+    def __init__(
+        self,
+        workdir: str | None = None,
+        mode: str = 'update',
+        alwaysUseLatest: bool = False,
+        timeout: int = 20 * 60,
+        retry: tuple[int, int] | None = None,
+        env: dict[str, Any] | None = None,
+        logEnviron: bool = True,
+        description: str | list[str] | None = None,
+        descriptionDone: str | list[str] | None = None,
+        descriptionSuffix: str | list[str] | None = None,
+        codebase: str = '',
+        **kwargs: Any,
+    ) -> None:
         """
         @type  workdir: string
         @param workdir: local directory (relative to the Builder's root)
@@ -93,12 +114,8 @@ class Source(buildstep.BuildStep, CompositeStepMixin):
         default value will then match all changes.
         """
 
-        descriptions_for_mode = {
-            "clobber": "checkout",
-            "export": "exporting"}
-        descriptionDones_for_mode = {
-            "clobber": "checkout",
-            "export": "export"}
+        descriptions_for_mode = {"clobber": "checkout", "export": "exporting"}
+        descriptionDones_for_mode = {"clobber": "checkout", "export": "export"}
 
         if not description:
             description = [descriptions_for_mode.get(mode, "updating")]
@@ -107,21 +124,23 @@ class Source(buildstep.BuildStep, CompositeStepMixin):
         if not descriptionSuffix and codebase:
             descriptionSuffix = [codebase]
 
-        super().__init__(description=description,
-                         descriptionDone=descriptionDone,
-                         descriptionSuffix=descriptionSuffix,
-                         **kwargs)
+        super().__init__(
+            description=description,
+            descriptionDone=descriptionDone,
+            descriptionSuffix=descriptionSuffix,
+            **kwargs,
+        )
 
         # This will get added to args later, after properties are rendered
-        self.workdir = workdir
+        self.workdir: str = workdir  # type: ignore[assignment]
 
         self.sourcestamp = None
 
         self.codebase = codebase
         if self.codebase:
             self.name = properties.Interpolate(
-                "%(kw:name)s-%(kw:codebase)s",
-                name=self.name, codebase=self.codebase)
+                "%(kw:name)s-%(kw:codebase)s", name=self.name, codebase=self.codebase
+            )
 
         self.alwaysUseLatest = alwaysUseLatest
 
@@ -130,36 +149,38 @@ class Source(buildstep.BuildStep, CompositeStepMixin):
         self.timeout = timeout
         self.retry = retry
 
-    def _hasAttrGroupMember(self, attrGroup, attr):
+    def _hasAttrGroupMember(self, attrGroup: str, attr: str) -> bool:
         """
         The hasattr equivalent for attribute groups: returns whether the given
         member is in the attribute group.
         """
-        method_name = '{}_{}'.format(attrGroup, attr)
+        method_name = f'{attrGroup}_{attr}'
         return hasattr(self, method_name)
 
-    def _getAttrGroupMember(self, attrGroup, attr):
+    def _getAttrGroupMember(self, attrGroup: str, attr: str) -> Any:
         """
         The getattr equivalent for attribute groups: gets and returns the
         attribute group member.
         """
-        method_name = '{}_{}'.format(attrGroup, attr)
+        method_name = f'{attrGroup}_{attr}'
         return getattr(self, method_name)
 
-    def _listAttrGroupMembers(self, attrGroup):
+    def _listAttrGroupMembers(self, attrGroup: str) -> list[str]:
         """
         Returns a list of all members in the attribute group.
         """
-        from inspect import getmembers, ismethod
+        from inspect import getmembers  # noqa: PLC0415
+        from inspect import ismethod  # noqa: PLC0415
+
         methods = getmembers(self, ismethod)
         group_prefix = attrGroup + '_'
         group_len = len(group_prefix)
-        group_members = [method[0][group_len:]
-                         for method in methods
-                         if method[0].startswith(group_prefix)]
+        group_members = [
+            method[0][group_len:] for method in methods if method[0].startswith(group_prefix)
+        ]
         return group_members
 
-    def updateSourceProperty(self, name, value, source=''):
+    def updateSourceProperty(self, name: str, value: Any, source: str = '') -> None:
         """
         Update a property, indexing the property by codebase if codebase is not
         ''.  Source steps should generally use this instead of setProperty.
@@ -169,17 +190,19 @@ class Source(buildstep.BuildStep, CompositeStepMixin):
             source = self.__class__.__name__
 
         if self.codebase != '':
-            assert not isinstance(self.getProperty(name, None), str), \
-                "Sourcestep {} has a codebase, other sourcesteps don't".format(self.name)
+            assert not isinstance(self.getProperty(name, None), str), (
+                f"Sourcestep {self.name} has a codebase, other sourcesteps don't"
+            )
             property_dict = self.getProperty(name, {})
             property_dict[self.codebase] = value
             super().setProperty(name, property_dict, source)
         else:
-            assert not isinstance(self.getProperty(name, None), dict), \
-                "Sourcestep {} does not have a codebase, other sourcesteps do".format(self.name)
+            assert not isinstance(self.getProperty(name, None), dict), (
+                f"Sourcestep {self.name} does not have a codebase, other sourcesteps do"
+            )
             super().setProperty(name, value, source)
 
-    def computeSourceRevision(self, changes):
+    def computeSourceRevision(self, changes: list[TempChange] | None) -> Any:
         """Each subclass must implement this method to do something more
         precise than -rHEAD every time. For version control systems that use
         repository-wide change numbers (SVN, P4), this can simply take the
@@ -190,22 +213,29 @@ class Source(buildstep.BuildStep, CompositeStepMixin):
         return None
 
     @defer.inlineCallbacks
-    def applyPatch(self, patch):
-        patch_command = ['patch', '-p{}'.format(patch[0]), '--remove-empty-files',
-                         '--force', '--forward', '-i', '.buildbot-diff']
-        cmd = remotecommand.RemoteShellCommand(self.workdir,
-                                               patch_command,
-                                               env=self.env,
-                                               logEnviron=self.logEnviron)
+    def applyPatch(self, patch: Any) -> InlineCallbacksType[int]:
+        patch_command = [
+            'patch',
+            f'-p{patch[0]}',
+            '--remove-empty-files',
+            '--force',
+            '--forward',
+            '-i',
+            '.buildbot-diff',
+        ]
+        cmd = remotecommand.RemoteShellCommand(
+            self.workdir, patch_command, env=self.env, logEnviron=self.logEnviron
+        )
 
         cmd.useLog(self.stdio_log, False)
         yield self.runCommand(cmd)
         if cmd.didFail():
             raise buildstep.BuildStepFailed()
-        return cmd.rc
+        return cast(int, cmd.rc)
 
     @defer.inlineCallbacks
-    def patch(self, patch):
+    def patch(self, patch: Any) -> InlineCallbacksType[int]:
+        assert self.build is not None
         diff = patch[1]
         root = None
         if len(patch) >= 3:
@@ -222,37 +252,43 @@ class Source(buildstep.BuildStep, CompositeStepMixin):
         yield self.downloadFileContentToWorker('.buildbot-diff', diff)
         yield self.downloadFileContentToWorker('.buildbot-patched', 'patched\n')
         yield self.applyPatch(patch)
-        cmd = remotecommand.RemoteCommand('rmdir',
-                                          {'dir': self.build.path_module.join(self.workdir,
-                                                                              ".buildbot-diff"),
-                                           'logEnviron': self.logEnviron})
+        cmd = remotecommand.RemoteCommand(
+            'rmdir',
+            {
+                'dir': self.build.path_module.join(self.workdir, ".buildbot-diff"),
+                'logEnviron': self.logEnviron,
+            },
+        )
         cmd.useLog(self.stdio_log, False)
         yield self.runCommand(cmd)
 
         if cmd.didFail():
             raise buildstep.BuildStepFailed()
-        return cmd.rc
+        return cast(int, cmd.rc)
 
-    def sourcedirIsPatched(self):
-        d = self.pathExists(
-            self.build.path_module.join(self.workdir, '.buildbot-patched'))
+    def sourcedirIsPatched(self) -> defer.Deferred[bool]:
+        assert self.build is not None
+        d = self.pathExists(self.build.path_module.join(self.workdir, '.buildbot-patched'))
         return d
 
     @defer.inlineCallbacks
-    def run(self):
+    def run(self) -> InlineCallbacksType[int]:
         if getattr(self, 'startVC', None) is not None:
-            msg = 'Old-style source steps are no longer supported. Please convert your custom ' \
-                  'source step to new style (replace startVC with run_vc and convert all used ' \
-                  'old style APIs to new style). Please consider contributing the source step to ' \
-                  'upstream BuildBot so that such migrations can be avoided in the future.'
+            msg = (
+                'Old-style source steps are no longer supported. Please convert your custom '
+                'source step to new style (replace startVC with run_vc and convert all used '
+                'old style APIs to new style). Please consider contributing the source step to '
+                'upstream BuildBot so that such migrations can be avoided in the future.'
+            )
             raise NotImplementedError(msg)
 
         if not self.alwaysUseLatest:
             # what source stamp would this step like to use?
+            assert self.build is not None
             s = self.build.getSourceStamp(self.codebase)
             self.sourcestamp = s
 
-            if self.sourcestamp:
+            if s:
                 # if branch is None, then use the Step's "default" branch
                 branch = s.branch or self.branch
                 # if revision is None, use the latest sources (-rHEAD)
@@ -270,13 +306,13 @@ class Source(buildstep.BuildStep, CompositeStepMixin):
                 # root is optional.
                 patch = s.patch
                 if patch:
-                    yield self.addCompleteLog("patch", bytes2unicode(patch[1]))
+                    yield self.addCompleteLog("patch", bytes2unicode(patch[1], errors='ignore'))
             else:
-                log.msg("No sourcestamp found in build for codebase '{}'".format(self.codebase))
-                self.descriptionDone = "Codebase {} not in build".format(self.codebase)
-                yield self.addCompleteLog("log",
-                                          "No sourcestamp found in build for codebase '{}'".format(
-                                               self.codebase))
+                log.msg(f"No sourcestamp found in build for codebase '{self.codebase}'")
+                self.descriptionDone = f"Codebase {self.codebase} not in build"
+                yield self.addCompleteLog(
+                    "log", f"No sourcestamp found in build for codebase '{self.codebase}'"
+                )
                 return FAILURE
 
         else:
@@ -284,5 +320,5 @@ class Source(buildstep.BuildStep, CompositeStepMixin):
             branch = self.branch
             patch = None
 
-        res = yield self.run_vc(branch, revision, patch)
+        res = yield self.run_vc(branch, revision, patch)  # type: ignore[attr-defined]
         return res

@@ -13,9 +13,12 @@
 #
 # Copyright Buildbot Team Members
 
-import os
+from __future__ import annotations
 
-import mock
+import os
+from typing import TYPE_CHECKING
+from typing import Any
+from unittest import mock
 
 from twisted.internet import defer
 from twisted.trial import unittest
@@ -24,47 +27,48 @@ from buildbot.scripts.logwatcher import BuildmasterStartupError
 from buildbot.scripts.logwatcher import BuildmasterTimeoutError
 from buildbot.scripts.logwatcher import LogWatcher
 from buildbot.scripts.logwatcher import ReconfigError
+from buildbot.test.reactor import TestReactorMixin
 from buildbot.test.util import dirs
-from buildbot.test.util.misc import TestReactorMixin
 from buildbot.util import unicode2bytes
+
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
 
 
 class MockedLogWatcher(LogWatcher):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self.printed_output = []
-        self.created_paths = []
+        self.printed_output: list[str] = []
+        self.created_paths: list[str] = []
 
-    def create_logfile(self, path):
+    def create_logfile(self, path: str) -> None:
         self.created_paths.append(path)
 
-    def print_output(self, output):
+    def print_output(self, output: str) -> None:
         self.printed_output.append(output)
 
 
-class TestLogWatcher(unittest.TestCase, dirs.DirsMixin, TestReactorMixin):
-
+class TestLogWatcher(dirs.DirsMixin, TestReactorMixin, unittest.TestCase):
     delimiter = unicode2bytes(os.linesep)
 
-    def setUp(self):
+    def setUp(self) -> None:
         self.setUpDirs('workdir')
-        self.addCleanup(self.tearDownDirs)
 
-        self.setUpTestReactor()
+        self.setup_test_reactor()
         self.spawned_process = mock.Mock()
-        self.reactor.spawnProcess = mock.Mock(return_value=self.spawned_process)
+        self.reactor.spawnProcess = mock.Mock(return_value=self.spawned_process)  # type: ignore[method-assign]
 
-    def test_start(self):
+    def test_start(self) -> None:
         lw = MockedLogWatcher('workdir/test.log', _reactor=self.reactor)
-        lw._start = mock.Mock()
+        lw._start = mock.Mock()  # type: ignore[method-assign]
 
         lw.start()
-        self.reactor.spawnProcess.assert_called()
+        self.reactor.spawnProcess.assert_called()  # type: ignore[attr-defined]
         self.assertEqual(lw.created_paths, ['workdir/test.log'])
         self.assertTrue(lw.running)
 
     @defer.inlineCallbacks
-    def test_success_before_timeout(self):
+    def test_success_before_timeout(self) -> InlineCallbacksType[None]:
         lw = MockedLogWatcher('workdir/test.log', timeout=5, _reactor=self.reactor)
         d = lw.start()
         self.reactor.advance(4.9)
@@ -73,7 +77,7 @@ class TestLogWatcher(unittest.TestCase, dirs.DirsMixin, TestReactorMixin):
         self.assertEqual(res, 'buildmaster')
 
     @defer.inlineCallbacks
-    def test_failure_after_timeout(self):
+    def test_failure_after_timeout(self) -> InlineCallbacksType[None]:
         lw = MockedLogWatcher('workdir/test.log', timeout=5, _reactor=self.reactor)
         d = lw.start()
         self.reactor.advance(5.1)
@@ -82,7 +86,7 @@ class TestLogWatcher(unittest.TestCase, dirs.DirsMixin, TestReactorMixin):
             yield d
 
     @defer.inlineCallbacks
-    def test_progress_restarts_timeout(self):
+    def test_progress_restarts_timeout(self) -> InlineCallbacksType[None]:
         lw = MockedLogWatcher('workdir/test.log', timeout=5, _reactor=self.reactor)
         d = lw.start()
         self.reactor.advance(4.9)
@@ -93,47 +97,52 @@ class TestLogWatcher(unittest.TestCase, dirs.DirsMixin, TestReactorMixin):
         self.assertEqual(res, 'buildmaster')
 
     @defer.inlineCallbacks
-    def test_handles_very_long_lines(self):
+    def test_handles_very_long_lines(self) -> InlineCallbacksType[None]:
         lw = MockedLogWatcher('workdir/test.log', timeout=5, _reactor=self.reactor)
         d = lw.start()
-        lw.dataReceived(b't' * lw.MAX_LENGTH * 2 + self.delimiter + b'BuildMaster is running' +
-                        self.delimiter)
+        lw.dataReceived(
+            b't' * lw.MAX_LENGTH * 2 + self.delimiter + b'BuildMaster is running' + self.delimiter
+        )
         res = yield d
-        self.assertEqual(lw.printed_output, [
-            'Got an a very long line in the log (length 32768 bytes), ignoring'
-        ])
+        self.assertEqual(
+            lw.printed_output, ['Got an a very long line in the log (length 32768 bytes), ignoring']
+        )
         self.assertEqual(res, 'buildmaster')
 
     @defer.inlineCallbacks
-    def test_handles_very_long_lines_separate_packet(self):
+    def test_handles_very_long_lines_separate_packet(self) -> InlineCallbacksType[None]:
         lw = MockedLogWatcher('workdir/test.log', timeout=5, _reactor=self.reactor)
         d = lw.start()
         lw.dataReceived(b't' * lw.MAX_LENGTH * 2)
         lw.dataReceived(self.delimiter + b'BuildMaster is running' + self.delimiter)
         res = yield d
-        self.assertEqual(lw.printed_output, [
-            'Got an a very long line in the log (length 32768 bytes), ignoring'
-        ])
+        self.assertEqual(
+            lw.printed_output, ['Got an a very long line in the log (length 32768 bytes), ignoring']
+        )
         self.assertEqual(res, 'buildmaster')
 
     @defer.inlineCallbacks
-    def test_handles_very_long_lines_separate_packet_with_newline(self):
+    def test_handles_very_long_lines_separate_packet_with_newline(
+        self,
+    ) -> InlineCallbacksType[None]:
         lw = MockedLogWatcher('workdir/test.log', timeout=5, _reactor=self.reactor)
         d = lw.start()
         lw.dataReceived(b't' * lw.MAX_LENGTH * 2 + self.delimiter)
         lw.dataReceived(b'BuildMaster is running' + self.delimiter)
         res = yield d
-        self.assertEqual(lw.printed_output, [
-            'Got an a very long line in the log (length 32768 bytes), ignoring'
-        ])
+        self.assertEqual(
+            lw.printed_output, ['Got an a very long line in the log (length 32768 bytes), ignoring']
+        )
         self.assertEqual(res, 'buildmaster')
 
     @defer.inlineCallbacks
-    def test_matches_lines(self):
+    def test_matches_lines(self) -> InlineCallbacksType[None]:
         lines_and_expected = [
             (b'configuration update aborted without making any changes', ReconfigError()),
-            (b'WARNING: configuration update partially applied; master may malfunction',
-             ReconfigError()),
+            (
+                b'WARNING: configuration update partially applied; master may malfunction',
+                ReconfigError(),
+            ),
             (b'Server Shut Down', ReconfigError()),
             (b'BuildMaster startup failed', BuildmasterStartupError()),
             (b'message from master: attached', 'worker'),

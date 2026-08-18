@@ -13,10 +13,18 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from typing import Any
+
 from twisted.python import log
 
 from buildbot import config
 from buildbot.statistics.storage_backends.base import StatsStorageBase
+
+if TYPE_CHECKING:
+    from buildbot.statistics.capture import Capture
 
 try:
     from influxdb import InfluxDBClient
@@ -25,13 +33,20 @@ except ImportError:
 
 
 class InfluxStorageService(StatsStorageBase):
-
     """
     Delegates data to InfluxDB
     """
 
-    def __init__(self, url, port, user, password, db, captures,
-                 name="InfluxStorageService"):
+    def __init__(
+        self,
+        url: str,
+        port: int,
+        user: str,
+        password: str,
+        db: str,
+        captures: list[Capture],
+        name: str = "InfluxStorageService",
+    ) -> None:
         if not InfluxDBClient:
             config.error("Python client for InfluxDB not installed.")
             return
@@ -43,24 +58,25 @@ class InfluxStorageService(StatsStorageBase):
         self.name = name
 
         self.captures = captures
-        self.client = InfluxDBClient(self.url, self.port, self.user,
-                                     self.password, self.db)
+        self.client = InfluxDBClient(self.url, self.port, self.user, self.password, self.db)
         self._inited = True
 
-    def thd_postStatsValue(self, post_data, series_name, context=None):
+    def thd_postStatsValue(
+        self,
+        post_data: dict[str, Any],
+        series_name: str,
+        context: dict[str, str] | None = None,
+    ) -> None:
         if not self._inited:
-            log.err("Service {0} not initialized".format(self.name))
+            log.err(f"Service {self.name} not initialized")
             return
 
-        data = {
-            'measurement': series_name,
-            'fields': post_data
-        }
+        data: dict[str, Any] = {'measurement': series_name, 'fields': post_data}
 
         log.msg("Sending data to InfluxDB")
-        log.msg("post_data: {0!r}".format(post_data))
+        log.msg(f"post_data: {post_data!r}")
         if context:
-            log.msg("context: {0!r}".format(context))
+            log.msg(f"context: {context!r}")
             data['tags'] = context
 
         self.client.write_points([data])

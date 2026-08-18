@@ -13,54 +13,63 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from twisted.internet import defer
 from twisted.trial import unittest
 
+from buildbot.test.fake import fakemaster
 from buildbot.test.fake import httpclientservice as fakehttpclientservice
+from buildbot.test.reactor import TestReactorMixin
 from buildbot.util import httpclientservice
 from buildbot.util import service
+
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
 
 
 class myTestedService(service.BuildbotService):
     name = 'myTestedService'
 
-    @defer.inlineCallbacks
-    def reconfigService(self, baseurl):
-        self._http = yield httpclientservice.HTTPClientService.getService(self.master, baseurl)
+    def reconfigService(self, baseurl: str) -> None:  # type: ignore[override]
+        self._http = httpclientservice.HTTPSession(self.master.httpservice, baseurl)
 
     @defer.inlineCallbacks
-    def doGetRoot(self):
+    def doGetRoot(self) -> InlineCallbacksType[dict[str, str]]:
         res = yield self._http.get("/")
         # note that at this point, only the http response headers are received
         if res.code != 200:
-            raise Exception("%d: server did not succeed" % (res.code))
+            raise RuntimeError(f"{res.code}: server did not succeed")
         res_json = yield res.json()
         # res.json() returns a deferred to represent the time needed to fetch the entire body
         return res_json
 
 
-class Test(unittest.TestCase):
-
+class Test(TestReactorMixin, unittest.TestCase):
     @defer.inlineCallbacks
-    def setUp(self):
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        yield self.setup_test_reactor()  # type: ignore[func-returns-value]
+
         baseurl = 'http://127.0.0.1:8080'
-        self.parent = service.MasterService()
-        self._http = yield fakehttpclientservice.HTTPClientService.getService(
-            self.parent, self, baseurl)
+        master = yield fakemaster.make_master(self)
+
+        self._http = yield fakehttpclientservice.HTTPClientService.getService(master, self, baseurl)
         self.tested = myTestedService(baseurl)
 
-        yield self.tested.setServiceParent(self.parent)
-        yield self.parent.startService()
+        yield self.tested.setServiceParent(master)
+        yield master.startService()
 
     @defer.inlineCallbacks
-    def test_root(self):
+    def test_root(self) -> InlineCallbacksType[None]:
         self._http.expect("get", "/", content_json={'foo': 'bar'})
 
         response = yield self.tested.doGetRoot()
         self.assertEqual(response, {'foo': 'bar'})
 
     @defer.inlineCallbacks
-    def test_root_error(self):
+    def test_root_error(self) -> InlineCallbacksType[None]:
         self._http.expect("get", "/", content_json={'foo': 'bar'}, code=404)
 
         try:

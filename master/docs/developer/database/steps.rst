@@ -8,24 +8,30 @@ Steps connector
 .. py:class:: StepsConnectorComponent
 
     This class handles the steps performed within the context of a build.
-    Within a build, each step has a unique name and a unique, 0-based number.
+    Within a build, each step has a unique name and a unique 0-based number.
 
     An instance of this class is available at ``master.db.steps``.
 
     .. index:: stepdict, stepid
 
-    Builds are indexed by *stepid* and their contents represented as *stepdicts* (step dictionaries), with the following keys:
+    Steps are indexed by *stepid* and are represented by a :class:`StepModel` dataclass with the following fields:
 
     * ``id`` (the step ID, globally unique)
     * ``number`` (the step number, unique only within the build)
     * ``name`` (the step name, an 50-character :ref:`identifier <type-identifier>` unique only within the build)
     * ``buildid`` (the ID of the build containing this step)
     * ``started_at`` (datetime at which this step began)
+    * ``locks_atquired_at`` (datetime at which this step acquired or None if the step has not yet acquired locks)
     * ``complete_at`` (datetime at which this step finished, or None if it is ongoing)
     * ``state_string`` (short string describing the step's state)
     * ``results`` (results of this step; see :ref:`Build-Result-Codes`)
-    * ``urls`` (list of URLs produced by this step. Each urls is stored as a dictionary with keys `name` and `url`)
+    * ``urls`` (list of URLs produced by this step. Each urls is stored as a :class:`UrlModel` dataclass)
     * ``hidden`` (true if the step should be hidden in status displays)
+
+    Urls are represented by a :class:`UrlModel` dataclass with the following fields:
+
+    * ``name``
+    * ``url``
 
     .. py:method:: getStep(stepid=None, buildid=None, number=None, name=None)
 
@@ -34,21 +40,21 @@ Steps connector
         :param integer number: the step number
         :param name: the step name
         :type name: 50-character :ref:`identifier <type-identifier>`
-        :returns: stepdict via Deferred
+        :returns: :class:`StepModel` or ``None`` via Deferred
 
         Get a single step.
-        The step can be specified by
+        The step can be specified by:
 
-            * ``stepid`` alone;
-            * ``buildid`` and ``number``, the step number within that build; or
-            * ``buildid`` and ``name``, the unique step name within that build.
+            * ``stepid`` alone
+            * ``buildid`` and ``number``, the step number within that build
+            * ``buildid`` and ``name``, the unique step name within that build
 
     .. py:method:: getSteps(buildid)
 
         :param integer buildid: the build from which to get the step
-        :returns: list of stepdicts, sorted by number, via Deferred
+        :returns: list of :class:`StepModel`, sorted by number, via Deferred
 
-        Get all steps in the given build, in order by number.
+        Get all steps in the given build, ordered by number.
 
     .. py:method:: addStep(self, buildid, name, state_string)
 

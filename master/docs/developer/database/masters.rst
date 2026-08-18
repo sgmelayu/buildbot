@@ -11,7 +11,7 @@ Masters connector
     Masters "check in" periodically.
     Other masters monitor the last activity times, and mark masters that have not recently checked in as inactive.
 
-    Masters are represented by master dictionaries with the following keys:
+    Masters are represented by a :class:`MasterModel` dataclass with the following fields:
 
     * ``id`` -- the ID of this master
     * ``name`` -- the name of the master (generally of the form ``hostname:basedir``)
@@ -40,20 +40,20 @@ Masters connector
     .. py:method:: getMaster(masterid)
 
         :param integer masterid: the master to check in
-        :returns: Master dict or None via Deferred
+        :returns: :class:`MasterModel` or None via Deferred
 
         Get the indicated master.
 
     .. py:method:: getMasters()
 
-        :returns: list of Master dicts via Deferred
+        :returns: list of :class:`MasterModel` via Deferred
 
-        Get a list of the masters, represented as dictionaries; masters are sorted
+        Get a list of the masters, represented as :class:`MasterModel`; masters are sorted
         and paged using generic data query options
 
     .. py:method:: setAllMastersActiveLongTimeAgo()
 
         :returns: None via Deferred
 
-        This method is intended to be call by upgrade-master, and will effectively force housekeeping on all masters at next startup.
+        This method is intended to be called by upgrade-master, and will effectively force housekeeping on all masters at next startup.
         This method is not intended to be called outside of housekeeping scripts.

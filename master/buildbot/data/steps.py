@@ -13,71 +13,79 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from typing import Any
 
 from twisted.internet import defer
 
 from buildbot.data import base
 from buildbot.data import types
 
-
-class Db2DataMixin:
-
-    def db2data(self, dbdict):
-        data = {
-            'stepid': dbdict['id'],
-            'number': dbdict['number'],
-            'name': dbdict['name'],
-            'buildid': dbdict['buildid'],
-            'started_at': dbdict['started_at'],
-            'complete': dbdict['complete_at'] is not None,
-            'complete_at': dbdict['complete_at'],
-            'state_string': dbdict['state_string'],
-            'results': dbdict['results'],
-            'urls': dbdict['urls'],
-            'hidden': dbdict['hidden'],
-        }
-        return defer.succeed(data)
+if TYPE_CHECKING:
+    from buildbot.data.resultspec import ResultSpec
+    from buildbot.db.steps import StepModel
+    from buildbot.util.twisted import InlineCallbacksType
 
 
-class StepEndpoint(Db2DataMixin, base.BuildNestingMixin, base.Endpoint):
+def _db2data(model: StepModel) -> dict[str, Any]:
+    return {
+        'stepid': model.id,
+        'number': model.number,
+        'name': model.name,
+        'buildid': model.buildid,
+        'started_at': model.started_at,
+        "locks_acquired_at": model.locks_acquired_at,
+        'complete': model.complete_at is not None,
+        'complete_at': model.complete_at,
+        'state_string': model.state_string,
+        'results': model.results,
+        'urls': [{'name': item.name, 'url': item.url} for item in model.urls],
+        'hidden': model.hidden,
+    }
 
-    isCollection = False
-    pathPatterns = """
-        /steps/n:stepid
-        /builds/n:buildid/steps/i:step_name
-        /builds/n:buildid/steps/n:step_number
-        /builders/n:builderid/builds/n:build_number/steps/i:step_name
-        /builders/n:builderid/builds/n:build_number/steps/n:step_number
-        /builders/i:buildername/builds/n:build_number/steps/i:step_name
-        /builders/i:buildername/builds/n:build_number/steps/n:step_number
-        """
+
+class StepEndpoint(base.BuildNestingMixin, base.Endpoint):
+    kind = base.EndpointKind.SINGLE
+    pathPatterns = [
+        "/steps/n:stepid",
+        "/builds/n:buildid/steps/i:step_name",
+        "/builds/n:buildid/steps/n:step_number",
+        "/builders/n:builderid/builds/n:build_number/steps/i:step_name",
+        "/builders/n:builderid/builds/n:build_number/steps/n:step_number",
+        "/builders/s:buildername/builds/n:build_number/steps/i:step_name",
+        "/builders/s:buildername/builds/n:build_number/steps/n:step_number",
+    ]
 
     @defer.inlineCallbacks
-    def get(self, resultSpec, kwargs):
+    def get(
+        self, resultSpec: ResultSpec, kwargs: dict[str, Any]
+    ) -> InlineCallbacksType[dict[str, Any] | None]:
         if 'stepid' in kwargs:
             dbdict = yield self.master.db.steps.getStep(kwargs['stepid'])
-            return (yield self.db2data(dbdict)) if dbdict else None
+            return _db2data(dbdict) if dbdict else None
         buildid = yield self.getBuildid(kwargs)
         if buildid is None:
             return None
         dbdict = yield self.master.db.steps.getStep(
-            buildid=buildid,
-            number=kwargs.get('step_number'),
-            name=kwargs.get('step_name'))
-        return (yield self.db2data(dbdict)) if dbdict else None
+            buildid=buildid, number=kwargs.get('step_number'), name=kwargs.get('step_name')
+        )
+        return _db2data(dbdict) if dbdict else None
 
 
-class StepsEndpoint(Db2DataMixin, base.BuildNestingMixin, base.Endpoint):
-
-    isCollection = True
-    pathPatterns = """
-        /builds/n:buildid/steps
-        /builders/n:builderid/builds/n:build_number/steps
-        /builders/i:buildername/builds/n:build_number/steps
-    """
+class StepsEndpoint(base.BuildNestingMixin, base.Endpoint):
+    kind = base.EndpointKind.COLLECTION
+    pathPatterns = [
+        "/builds/n:buildid/steps",
+        "/builders/n:builderid/builds/n:build_number/steps",
+        "/builders/s:buildername/builds/n:build_number/steps",
+    ]
 
     @defer.inlineCallbacks
-    def get(self, resultSpec, kwargs):
+    def get(
+        self, resultSpec: ResultSpec, kwargs: dict[str, Any]
+    ) -> InlineCallbacksType[list[dict[str, Any]] | None]:
         if 'buildid' in kwargs:
             buildid = kwargs['buildid']
         else:
@@ -85,10 +93,7 @@ class StepsEndpoint(Db2DataMixin, base.BuildNestingMixin, base.Endpoint):
             if buildid is None:
                 return None
         steps = yield self.master.db.steps.getSteps(buildid=buildid)
-        results = []
-        for dbdict in steps:
-            results.append((yield self.db2data(dbdict)))
-        return results
+        return [_db2data(model) for model in steps]
 
 
 class UrlEntityType(types.Entity):
@@ -97,15 +102,13 @@ class UrlEntityType(types.Entity):
 
 
 class Step(base.ResourceType):
-
     name = "step"
     plural = "steps"
     endpoints = [StepEndpoint, StepsEndpoint]
-    keyFields = ['builderid', 'stepid']
-    eventPathPatterns = """
-        /builds/:buildid/steps/:stepid
-        /steps/:stepid
-    """
+    eventPathPatterns = [
+        "/builds/:buildid/steps/:stepid",
+        "/steps/:stepid",
+    ]
 
     class EntityType(types.Entity):
         stepid = types.Integer()
@@ -113,51 +116,69 @@ class Step(base.ResourceType):
         name = types.Identifier(50)
         buildid = types.Integer()
         started_at = types.NoneOk(types.DateTime())
+        locks_acquired_at = types.NoneOk(types.DateTime())
         complete = types.Boolean()
         complete_at = types.NoneOk(types.DateTime())
         results = types.NoneOk(types.Integer())
         state_string = types.String()
-        urls = types.List(
-            of=UrlEntityType("Url"))
+        urls = types.List(of=UrlEntityType("Url"))
         hidden = types.Boolean()
+
     entityType = EntityType(name)
 
     @defer.inlineCallbacks
-    def generateEvent(self, stepid, event):
+    def generateEvent(self, stepid: int, event: str) -> InlineCallbacksType[None]:
         step = yield self.master.data.get(('steps', stepid))
         self.produceEvent(step, event)
 
     @base.updateMethod
     @defer.inlineCallbacks
-    def addStep(self, buildid, name):
+    def addStep(self, buildid: int, name: str) -> InlineCallbacksType[tuple[int, int, str]]:
         stepid, num, name = yield self.master.db.steps.addStep(
-            buildid=buildid, name=name, state_string='pending')
+            buildid=buildid, name=name, state_string='pending'
+        )
         yield self.generateEvent(stepid, 'new')
         return (stepid, num, name)
 
     @base.updateMethod
     @defer.inlineCallbacks
-    def startStep(self, stepid):
-        yield self.master.db.steps.startStep(stepid=stepid)
+    def startStep(
+        self, stepid: int, started_at: int | None = None, locks_acquired: bool = False
+    ) -> InlineCallbacksType[None]:
+        if started_at is None:
+            started_at = int(self.master.reactor.seconds())
+        yield self.master.db.steps.startStep(
+            stepid=stepid, started_at=started_at, locks_acquired=locks_acquired
+        )
         yield self.generateEvent(stepid, 'started')
 
     @base.updateMethod
     @defer.inlineCallbacks
-    def setStepStateString(self, stepid, state_string):
-        yield self.master.db.steps.setStepStateString(
-            stepid=stepid, state_string=state_string)
+    def set_step_locks_acquired_at(
+        self, stepid: int, locks_acquired_at: int | None = None
+    ) -> InlineCallbacksType[None]:
+        if locks_acquired_at is None:
+            locks_acquired_at = int(self.master.reactor.seconds())
+
+        yield self.master.db.steps.set_step_locks_acquired_at(
+            stepid=stepid, locks_acquired_at=locks_acquired_at
+        )
         yield self.generateEvent(stepid, 'updated')
 
     @base.updateMethod
     @defer.inlineCallbacks
-    def addStepURL(self, stepid, name, url):
-        yield self.master.db.steps.addURL(
-            stepid=stepid, name=name, url=url)
+    def setStepStateString(self, stepid: int, state_string: str) -> InlineCallbacksType[None]:
+        yield self.master.db.steps.setStepStateString(stepid=stepid, state_string=state_string)
         yield self.generateEvent(stepid, 'updated')
 
     @base.updateMethod
     @defer.inlineCallbacks
-    def finishStep(self, stepid, results, hidden):
-        yield self.master.db.steps.finishStep(
-            stepid=stepid, results=results, hidden=hidden)
+    def addStepURL(self, stepid: int, name: str, url: str) -> InlineCallbacksType[None]:
+        yield self.master.db.steps.addURL(stepid=stepid, name=name, url=url)
+        yield self.generateEvent(stepid, 'updated')
+
+    @base.updateMethod
+    @defer.inlineCallbacks
+    def finishStep(self, stepid: int, results: int, hidden: bool) -> InlineCallbacksType[None]:
+        yield self.master.db.steps.finishStep(stepid=stepid, results=results, hidden=hidden)
         yield self.generateEvent(stepid, 'finished')

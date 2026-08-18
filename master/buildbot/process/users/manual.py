@@ -13,28 +13,37 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from typing import Any
+
 from twisted.internet import defer
 from twisted.python import log
 
 from buildbot import pbutil
 from buildbot.util import service
 
+if TYPE_CHECKING:
+    from buildbot.master import BuildMaster
+    from buildbot.util.twisted import InlineCallbacksType
+    from buildbot.worker.protocols.manager.base import Registration
+
 # this class is known to contain cruft and will be looked at later, so
 # no current implementation utilizes it aside from scripts.runner.
 
 
 class CommandlineUserManagerPerspective(pbutil.NewCredPerspective):
-
     """
     Perspective registered in buildbot.pbmanager and contains the real
     workings of `buildbot user` by working with the database when
     perspective_commandline is called.
     """
 
-    def __init__(self, master):
+    def __init__(self, master: BuildMaster) -> None:
         self.master = master
 
-    def formatResults(self, op, results):
+    def formatResults(self, op: str, results: list) -> str:
         """
         This formats the results of the database operations for printing
         back to the caller
@@ -54,36 +63,50 @@ class CommandlineUserManagerPerspective(pbutil.NewCredPerspective):
             formatted_results += "user(s) added:\n"
             for user in results:
                 if isinstance(user, str):
-                    formatted_results += "identifier: {}\n".format(user)
+                    formatted_results += f"identifier: {user}\n"
                 else:
-                    formatted_results += "uid: %d\n\n" % user
+                    formatted_results += f"uid: {user}\n\n"
         elif op == 'remove':
             # list of dictionaries
             formatted_results += "user(s) removed:\n"
             for user in results:
                 if user:
-                    formatted_results += "identifier: {}\n".format(user)
+                    formatted_results += f"identifier: {user}\n"
         elif op == 'update':
             # list, alternating ident, None
             formatted_results += "user(s) updated:\n"
             for user in results:
                 if user:
-                    formatted_results += "identifier: {}\n".format(user)
+                    formatted_results += f"identifier: {user}\n"
         elif op == 'get':
             # list of dictionaries
             formatted_results += "user(s) found:\n"
             for user in results:
                 if user:
-                    for key in sorted(user.keys()):
-                        if key != 'bb_password':
-                            formatted_results += "{}: {}\n".format(key, user[key])
-                    formatted_results += "\n"
+                    formatted_results += (
+                        f"uid: {user.uid}\n"
+                        f"identifier: {user.identifier}\n"
+                        f"bb_username: {user.bb_username}\n"
+                    )
+                    if user.attributes:
+                        formatted_results += "attributes:\n"
+                        formatted_results += (
+                            ''.join(f"\t{key}: {value}\n" for key, value in user.attributes.items())
+                            + '\n'
+                        )
                 else:
                     formatted_results += "no match found\n"
         return formatted_results
 
     @defer.inlineCallbacks
-    def perspective_commandline(self, op, bb_username, bb_password, ids, info):
+    def perspective_commandline(
+        self,
+        op: str,
+        bb_username: str,
+        bb_password: str,
+        ids: list[Any] | None,
+        info: list[Any] | None,
+    ) -> InlineCallbacksType[str]:
         """
         This performs the requested operations from the `buildbot user`
         call by calling the proper buildbot.db.users methods based on
@@ -116,8 +139,7 @@ class CommandlineUserManagerPerspective(pbutil.NewCredPerspective):
             for user in ids:
                 # get identifier, guaranteed to be in user from checks
                 # done in C{scripts.runner}
-                uid = yield self.master.db.users.identifierToUid(
-                    identifier=user)
+                uid = yield self.master.db.users.identifierToUid(identifier=user)
 
                 result = None
                 if op == 'remove':
@@ -125,21 +147,20 @@ class CommandlineUserManagerPerspective(pbutil.NewCredPerspective):
                         yield self.master.db.users.removeUser(uid)
                         result = user
                     else:
-                        log.msg("Unable to find uid for identifier {}".format(user))
+                        log.msg(f"Unable to find uid for identifier {user}")
                 elif op == 'get':
                     if uid:
                         result = yield self.master.db.users.getUser(uid)
                     else:
-                        log.msg("Unable to find uid for identifier {}".format(user))
+                        log.msg(f"Unable to find uid for identifier {user}")
 
                 results.append(result)
         else:
-            for user in info:
+            for user in info:  # type: ignore[union-attr]
                 # get identifier, guaranteed to be in user from checks
                 # done in C{scripts.runner}
                 ident = user.pop('identifier')
-                uid = yield self.master.db.users.identifierToUid(
-                    identifier=ident)
+                uid = yield self.master.db.users.identifierToUid(identifier=ident)
 
                 # if only an identifier was in user, we're updating only
                 # the bb_username and bb_password.
@@ -149,10 +170,11 @@ class CommandlineUserManagerPerspective(pbutil.NewCredPerspective):
                             uid=uid,
                             identifier=ident,
                             bb_username=bb_username,
-                            bb_password=bb_password)
+                            bb_password=bb_password,
+                        )
                         results.append(ident)
                     else:
-                        log.msg("Unable to find uid for identifier {}".format(user))
+                        log.msg(f"Unable to find uid for identifier {user}")
                 else:
                     # when adding, we update the user after the first attr
                     once_through = False
@@ -166,14 +188,14 @@ class CommandlineUserManagerPerspective(pbutil.NewCredPerspective):
                                     bb_username=bb_username,
                                     bb_password=bb_password,
                                     attr_type=attr,
-                                    attr_data=user[attr])
+                                    attr_data=user[attr],
+                                )
                             else:
-                                log.msg("Unable to find uid for identifier {}".format(user))
+                                log.msg(f"Unable to find uid for identifier {user}")
                         elif op == 'add':
                             result = yield self.master.db.users.findUserByAttr(
-                                identifier=ident,
-                                attr_type=attr,
-                                attr_data=user[attr])
+                                identifier=ident, attr_type=attr, attr_data=user[attr]
+                            )
                             once_through = True
                         results.append(ident)
 
@@ -181,44 +203,44 @@ class CommandlineUserManagerPerspective(pbutil.NewCredPerspective):
                         if result:
                             results.append(result)
                             uid = result
-        results = self.formatResults(op, results)
-        return results
+        formatted = self.formatResults(op, results)
+        return formatted
 
 
 class CommandlineUserManager(service.AsyncMultiService):
-
     """
     Service that runs to set up and register CommandlineUserManagerPerspective
     so `buildbot user` calls get to perspective_commandline.
     """
 
-    def __init__(self, username=None, passwd=None, port=None):
+    def __init__(
+        self, username: str | None = None, passwd: str | None = None, port: str | None = None
+    ) -> None:
         super().__init__()
-        assert username and passwd, ("A username and password pair must be given "
-                                     "to connect and use `buildbot user`")
+        assert username and passwd, (
+            "A username and password pair must be given to connect and use `buildbot user`"
+        )
         self.username = username
         self.passwd = passwd
 
         assert port, "A port must be specified for a PB connection"
         self.port = port
-        self.registration = None
+        self.registration: Registration | None = None
 
     @defer.inlineCallbacks
-    def startService(self):
+    def startService(self) -> InlineCallbacksType[None]:  # type: ignore[override]
         # set up factory and register with buildbot.pbmanager
-        def factory(mind, username):
+        def factory(mind: object, username: str) -> CommandlineUserManagerPerspective:
             return CommandlineUserManagerPerspective(self.master)
 
-        self.registration = yield self.master.pbmanager.register(self.port, self.username,
-                                                                 self.passwd, factory)
+        self.registration = yield self.master.pbmanager.register(
+            self.port, self.username, self.passwd, factory
+        )
         yield super().startService()
 
-    def stopService(self):
-        d = defer.maybeDeferred(service.AsyncMultiService.stopService, self)
+    @defer.inlineCallbacks
+    def stopService(self) -> InlineCallbacksType[None]:
+        yield defer.maybeDeferred(service.AsyncMultiService.stopService, self)
 
-        @d.addCallback
-        def unreg(_):
-            if self.registration:
-                return self.registration.unregister()
-            return None
-        return d
+        if self.registration:
+            yield self.registration.unregister()

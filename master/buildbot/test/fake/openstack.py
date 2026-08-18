@@ -13,9 +13,14 @@
 #
 # Portions Copyright Buildbot Team Members
 # Portions Copyright 2013 Cray Inc.
-
+from __future__ import annotations
 
 import uuid
+from typing import TYPE_CHECKING
+from typing import Any
+
+if TYPE_CHECKING:
+    from collections.abc import ValuesView
 
 ACTIVE = 'ACTIVE'
 BUILD = 'BUILD'
@@ -31,14 +36,13 @@ TEST_UUIDS = {
 }
 
 
-class FakeNovaClient():
+class FakeNovaClient:
     region_name = ""
 
 
 # Parts used from novaclient
-class Client():
-
-    def __init__(self, version, session):
+class Client:
+    def __init__(self, version: str, session: Session) -> None:
         self.glance = ItemManager()
         self.glance._add_items([Image(TEST_UUIDS['image'], 'CirrOS 0.3.4', 13287936)])
         self.volumes = ItemManager()
@@ -52,39 +56,42 @@ class Client():
         self.client = FakeNovaClient()
 
 
-class ItemManager():
+class ItemManager:
+    def __init__(self) -> None:
+        self._items: dict[str, Item] = {}
 
-    def __init__(self):
-        self._items = {}
-
-    def _add_items(self, new_items):
+    def _add_items(self, new_items: list[Item]) -> None:
         for item in new_items:
             self._items[item.id] = item
 
-    def list(self):
+    def list(self) -> ValuesView[Item]:
         return self._items.values()
 
-    def get(self, uuid):
+    def get(self, uuid: str) -> Item:
         if uuid in self._items:
             return self._items[uuid]
         else:
             raise NotFound
 
+    def find_image(self, name: str) -> Item:
+        for item in self.list():
+            if name in (item.name, item.id):
+                return item
+        raise NotFound
+
 
 # This exists because Image needs an attribute that isn't supported by
 # namedtuple. And once the base code is there might as well have Volume and
 # Snapshot use it too.
-class Item():
-
-    def __init__(self, id, name, size):
+class Item:
+    def __init__(self, id: str, name: str, size: int) -> None:
         self.id = id
         self.name = name
         self.size = size
 
 
 class Image(Item):
-
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         setattr(self, 'OS-EXT-IMG-SIZE:size', self.size)
 
@@ -101,20 +108,20 @@ class Snapshot(Item):
     pass
 
 
-class Servers():
+class Servers:
     fail_to_get = False
     fail_to_start = False
     gets_until_active = 3
     gets_until_disappears = 1
-    instances = {}
+    instances: dict[uuid.UUID, Instance] = {}
 
-    def create(self, *boot_args, **boot_kwargs):
+    def create(self, *boot_args: Any, **boot_kwargs: Any) -> Instance:
         instance_id = uuid.uuid4()
         instance = Instance(instance_id, self, boot_args, boot_kwargs)
         self.instances[instance_id] = instance
         return instance
 
-    def get(self, instance_id):
+    def get(self, instance_id: uuid.UUID) -> Instance:
         if instance_id not in self.instances:
             raise NotFound
         inst = self.instances[instance_id]
@@ -131,17 +138,17 @@ class Servers():
         else:
             raise NotFound
 
-    def delete(self, instance_id):
+    def delete(self, instance_id: uuid.UUID) -> None:
         if instance_id in self.instances:
             del self.instances[instance_id]
 
-    def findall(self, **kwargs):
+    def findall(self, **kwargs: Any) -> list[Instance]:
         name = kwargs.get('name', None)
         if name:
             return list(filter(lambda item: item.name == name, self.instances.values()))
         return []
 
-    def find(self, **kwargs):
+    def find(self, **kwargs: Any) -> Instance:
         result = self.findall(**kwargs)
         if len(result) > 0:
             raise NoUniqueMatch
@@ -151,9 +158,14 @@ class Servers():
 
 
 # This is returned by Servers.create().
-class Instance():
-
-    def __init__(self, id, servers, boot_args, boot_kwargs):
+class Instance:
+    def __init__(
+        self,
+        id: uuid.UUID,
+        servers: Servers,
+        boot_args: tuple[Any, ...],
+        boot_kwargs: dict[str, Any],
+    ) -> None:
         self.id = id
         self.servers = servers
         self.boot_args = boot_args
@@ -166,8 +178,9 @@ class Instance():
         except IndexError:
             self.name = 'name'
 
-    def delete(self):
+    def delete(self) -> None:
         self.servers.delete(self.id)
+
 
 # Parts used from novaclient.exceptions.
 
@@ -179,32 +192,38 @@ class NotFound(Exception):
 class NoUniqueMatch(Exception):
     pass
 
+
 # Parts used from keystoneauth1.
 
 
-def get_plugin_loader(plugin_type):
+def get_plugin_loader(plugin_type: str) -> PasswordLoader | TokenLoader:
     if plugin_type == 'password':
         return PasswordLoader()
     if plugin_type == 'token':
         return TokenLoader()
-    raise ValueError("plugin_type '{}' is not supported".format(plugin_type))
+    raise ValueError(f"plugin_type '{plugin_type}' is not supported")
 
 
-class PasswordLoader():
-
-    def load_from_options(self, **kwargs):
+class PasswordLoader:
+    def load_from_options(self, **kwargs: Any) -> PasswordAuth:
         return PasswordAuth(**kwargs)
 
 
-class TokenLoader():
-    def load_from_options(self, **kwargs):
+class TokenLoader:
+    def load_from_options(self, **kwargs: Any) -> TokenAuth:
         return TokenAuth(**kwargs)
 
 
-class PasswordAuth():
-
-    def __init__(self, auth_url, password, project_name, username, user_domain_name=None,
-                 project_domain_name=None):
+class PasswordAuth:
+    def __init__(
+        self,
+        auth_url: str,
+        password: str,
+        project_name: str,
+        username: str,
+        user_domain_name: str | None = None,
+        project_domain_name: str | None = None,
+    ) -> None:
         self.auth_url = auth_url
         self.password = password
         self.project_name = project_name
@@ -213,8 +232,8 @@ class PasswordAuth():
         self.project_domain_name = project_domain_name
 
 
-class TokenAuth():
-    def __init__(self, auth_url, token):
+class TokenAuth:
+    def __init__(self, auth_url: str, token: str) -> None:
         self.auth_url = auth_url
         self.token = token
         self.project_name = 'tenant'
@@ -223,7 +242,6 @@ class TokenAuth():
         self.project_domain_name = 'token'
 
 
-class Session():
-
-    def __init__(self, auth):
+class Session:
+    def __init__(self, auth: PasswordAuth | TokenAuth) -> None:
         self.auth = auth

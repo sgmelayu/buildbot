@@ -13,6 +13,8 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
 from twisted.python import log
 from twisted.trial import unittest
 
@@ -20,46 +22,53 @@ from buildbot.process import results
 
 
 class TestResults(unittest.TestCase):
-
-    def test_Results(self):
+    def test_Results(self) -> None:
         for r in results.Results:
             i = getattr(results, r.upper())
             self.assertEqual(results.Results[i], r)
 
-    def test_worst_status(self):
-        self.assertEqual(results.WARNINGS,
-                         results.worst_status(results.SUCCESS, results.WARNINGS))
-        self.assertEqual(results.CANCELLED,
-                         results.worst_status(results.SKIPPED, results.CANCELLED))
+    def test_worst_status(self) -> None:
+        self.assertEqual(results.WARNINGS, results.worst_status(results.SUCCESS, results.WARNINGS))
+        self.assertEqual(
+            results.CANCELLED, results.worst_status(results.SKIPPED, results.CANCELLED)
+        )
 
-    def test_sort_worst_status(self):
+    def test_sort_worst_status(self) -> None:
         res = list(range(len(results.Results)))
-        res.sort(
-            key=lambda a: a if a != results.SKIPPED else -1)
-        self.assertEqual(res, [
-            results.SKIPPED,
-            results.SUCCESS,
-            results.WARNINGS,
-            results.FAILURE,
-            results.EXCEPTION,
-            results.RETRY,
-            results.CANCELLED,
-        ])
+        res.sort(key=lambda a: a if a != results.SKIPPED else -1)
+        self.assertEqual(
+            res,
+            [
+                results.SKIPPED,
+                results.SUCCESS,
+                results.WARNINGS,
+                results.FAILURE,
+                results.EXCEPTION,
+                results.RETRY,
+                results.CANCELLED,
+            ],
+        )
 
-    def do_test_carc(self, result, previousResult, newResult, terminate,
-                     haltOnFailure=None, flunkOnWarnings=None,
-                     flunkOnFailure=None, warnOnWarnings=None,
-                     warnOnFailure=None):
+    def do_test_carc(
+        self,
+        result: int,
+        previousResult: int,
+        newResult: int,
+        terminate: bool,
+        haltOnFailure: list[bool] | None = None,
+        flunkOnWarnings: list[bool] | None = None,
+        flunkOnFailure: list[bool] | None = None,
+        warnOnWarnings: list[bool] | None = None,
+        warnOnFailure: list[bool] | None = None,
+    ) -> None:
         if haltOnFailure is None:
             haltOnFailure = [True, False]
         if flunkOnWarnings is None:
-            flunkOnWarnings = [
-                         True, False]
+            flunkOnWarnings = [True, False]
         if flunkOnFailure is None:
             flunkOnFailure = [True, False]
         if warnOnWarnings is None:
-            warnOnWarnings = [
-                         True, False]
+            warnOnWarnings = [True, False]
         if warnOnFailure is None:
             warnOnFailure = [True, False]
         for hof in haltOnFailure:
@@ -73,111 +82,156 @@ class TestResults(unittest.TestCase):
                             self.warnOnWarnings = wow
                             self.warnOnFailure = wof
                             nr, term = results.computeResultAndTermination(
-                                self, result, previousResult)
-                            log.msg("res=%r prevRes=%r hof=%r fow=%r fof=%r "
-                                    "wow=%r wof=%r => %r %r" %
-                                    (results.Results[result],
-                                     results.Results[previousResult],
-                                     hof, fow, fof, wow, wof,
-                                     results.Results[nr], term))
-                            self.assertEqual((nr, term),
-                                             (newResult, terminate),
-                                             "see test.log for details")
+                                self,  # type: ignore[arg-type]
+                                result,
+                                previousResult,
+                            )
+                            log.msg(
+                                f"res={results.Results[result]!r} "
+                                f"prevRes={results.Results[previousResult]!r} "
+                                f"hof={hof!r} fow={fow!r} fof={fof!r} "
+                                f"wow={wow!r} wof={wof!r} => "
+                                f"{results.Results[nr]!r} {term!r}"  # type: ignore[index]
+                            )
+                            self.assertEqual(
+                                (nr, term), (newResult, terminate), "see test.log for details"
+                            )
 
-    def test_carc_success_after_success(self):
-        self.do_test_carc(results.SUCCESS, results.SUCCESS,
-                          results.SUCCESS, False)
+    def test_carc_success_after_success(self) -> None:
+        self.do_test_carc(results.SUCCESS, results.SUCCESS, results.SUCCESS, False)
 
-    def test_carc_success_after_warnings(self):
-        self.do_test_carc(results.SUCCESS, results.WARNINGS,
-                          results.WARNINGS, False)
+    def test_carc_success_after_warnings(self) -> None:
+        self.do_test_carc(results.SUCCESS, results.WARNINGS, results.WARNINGS, False)
 
-    def test_carc_success_after_failure(self):
-        self.do_test_carc(results.SUCCESS, results.FAILURE,
-                          results.FAILURE, False)
+    def test_carc_success_after_failure(self) -> None:
+        self.do_test_carc(results.SUCCESS, results.FAILURE, results.FAILURE, False)
 
-    def test_carc_warnings_after_success(self):
-        self.do_test_carc(results.WARNINGS, results.SUCCESS,
-                          results.WARNINGS, False,
-                          flunkOnWarnings=[False], warnOnWarnings=[True])
-        self.do_test_carc(results.WARNINGS, results.SUCCESS,
-                          results.SUCCESS, False,
-                          flunkOnWarnings=[False], warnOnWarnings=[False])
-        self.do_test_carc(results.WARNINGS, results.SUCCESS,
-                          results.FAILURE, False,
-                          flunkOnWarnings=[True], warnOnWarnings=[True])
-        self.do_test_carc(results.WARNINGS, results.SUCCESS,
-                          results.FAILURE, False,
-                          flunkOnWarnings=[True], warnOnWarnings=[False])
+    def test_carc_warnings_after_success(self) -> None:
+        self.do_test_carc(
+            results.WARNINGS,
+            results.SUCCESS,
+            results.WARNINGS,
+            False,
+            flunkOnWarnings=[False],
+            warnOnWarnings=[True],
+        )
+        self.do_test_carc(
+            results.WARNINGS,
+            results.SUCCESS,
+            results.SUCCESS,
+            False,
+            flunkOnWarnings=[False],
+            warnOnWarnings=[False],
+        )
+        self.do_test_carc(
+            results.WARNINGS,
+            results.SUCCESS,
+            results.FAILURE,
+            False,
+            flunkOnWarnings=[True],
+            warnOnWarnings=[True],
+        )
+        self.do_test_carc(
+            results.WARNINGS,
+            results.SUCCESS,
+            results.FAILURE,
+            False,
+            flunkOnWarnings=[True],
+            warnOnWarnings=[False],
+        )
 
-    def test_carc_warnings_after_warnings(self):
-        self.do_test_carc(results.WARNINGS, results.WARNINGS,
-                          results.WARNINGS, False,
-                          flunkOnWarnings=[False])
-        self.do_test_carc(results.WARNINGS, results.WARNINGS,
-                          results.FAILURE, False,
-                          flunkOnWarnings=[True])
+    def test_carc_warnings_after_warnings(self) -> None:
+        self.do_test_carc(
+            results.WARNINGS, results.WARNINGS, results.WARNINGS, False, flunkOnWarnings=[False]
+        )
+        self.do_test_carc(
+            results.WARNINGS, results.WARNINGS, results.FAILURE, False, flunkOnWarnings=[True]
+        )
 
-    def test_carc_warnings_after_failure(self):
-        self.do_test_carc(results.WARNINGS, results.FAILURE,
-                          results.FAILURE, False,
-                          flunkOnWarnings=[False])
-        self.do_test_carc(results.WARNINGS, results.FAILURE,
-                          results.FAILURE, False,
-                          flunkOnWarnings=[True])
+    def test_carc_warnings_after_failure(self) -> None:
+        self.do_test_carc(
+            results.WARNINGS, results.FAILURE, results.FAILURE, False, flunkOnWarnings=[False]
+        )
+        self.do_test_carc(
+            results.WARNINGS, results.FAILURE, results.FAILURE, False, flunkOnWarnings=[True]
+        )
 
-    def test_carc_failure_after_success(self):
+    def test_carc_failure_after_success(self) -> None:
         for hof in False, True:
-            self.do_test_carc(results.FAILURE, results.SUCCESS,
-                              results.FAILURE, hof,
-                              haltOnFailure=[hof],
-                              flunkOnFailure=[True], warnOnFailure=[False])
-            self.do_test_carc(results.FAILURE, results.SUCCESS,
-                              results.FAILURE, hof,
-                              haltOnFailure=[hof],
-                              flunkOnFailure=[True], warnOnFailure=[True])
-            self.do_test_carc(results.FAILURE, results.SUCCESS,
-                              results.SUCCESS, hof,
-                              haltOnFailure=[hof],
-                              flunkOnFailure=[False], warnOnFailure=[False])
-            self.do_test_carc(results.FAILURE, results.SUCCESS,
-                              results.WARNINGS, hof,
-                              haltOnFailure=[hof],
-                              flunkOnFailure=[False], warnOnFailure=[True])
+            self.do_test_carc(
+                results.FAILURE,
+                results.SUCCESS,
+                results.FAILURE,
+                hof,
+                haltOnFailure=[hof],
+                flunkOnFailure=[True],
+                warnOnFailure=[False],
+            )
+            self.do_test_carc(
+                results.FAILURE,
+                results.SUCCESS,
+                results.FAILURE,
+                hof,
+                haltOnFailure=[hof],
+                flunkOnFailure=[True],
+                warnOnFailure=[True],
+            )
+            self.do_test_carc(
+                results.FAILURE,
+                results.SUCCESS,
+                results.SUCCESS,
+                hof,
+                haltOnFailure=[hof],
+                flunkOnFailure=[False],
+                warnOnFailure=[False],
+            )
+            self.do_test_carc(
+                results.FAILURE,
+                results.SUCCESS,
+                results.WARNINGS,
+                hof,
+                haltOnFailure=[hof],
+                flunkOnFailure=[False],
+                warnOnFailure=[True],
+            )
 
-    def test_carc_failure_after_warnings(self):
+    def test_carc_failure_after_warnings(self) -> None:
         for hof in False, True:
-            self.do_test_carc(results.FAILURE, results.WARNINGS,
-                              results.FAILURE, hof,
-                              haltOnFailure=[hof],
-                              flunkOnFailure=[True])
-            self.do_test_carc(results.FAILURE, results.WARNINGS,
-                              results.WARNINGS, hof,
-                              haltOnFailure=[hof],
-                              flunkOnFailure=[False])
+            self.do_test_carc(
+                results.FAILURE,
+                results.WARNINGS,
+                results.FAILURE,
+                hof,
+                haltOnFailure=[hof],
+                flunkOnFailure=[True],
+            )
+            self.do_test_carc(
+                results.FAILURE,
+                results.WARNINGS,
+                results.WARNINGS,
+                hof,
+                haltOnFailure=[hof],
+                flunkOnFailure=[False],
+            )
 
-    def test_carc_failure_after_failure(self):
+    def test_carc_failure_after_failure(self) -> None:
         for hof in False, True:
-            self.do_test_carc(results.FAILURE, results.FAILURE,
-                              results.FAILURE, hof,
-                              haltOnFailure=[hof])
+            self.do_test_carc(
+                results.FAILURE, results.FAILURE, results.FAILURE, hof, haltOnFailure=[hof]
+            )
 
-    def test_carc_exception(self):
+    def test_carc_exception(self) -> None:
         for prev in results.FAILURE, results.WARNINGS, results.SUCCESS:
-            self.do_test_carc(results.EXCEPTION, prev,
-                              results.EXCEPTION, True)
+            self.do_test_carc(results.EXCEPTION, prev, results.EXCEPTION, True)
 
-    def test_carc_retry(self):
+    def test_carc_retry(self) -> None:
         for prev in results.FAILURE, results.WARNINGS, results.SUCCESS:
-            self.do_test_carc(results.RETRY, prev,
-                              results.RETRY, True)
+            self.do_test_carc(results.RETRY, prev, results.RETRY, True)
 
-    def test_carc_cancelled(self):
+    def test_carc_cancelled(self) -> None:
         for prev in results.FAILURE, results.WARNINGS, results.SUCCESS:
-            self.do_test_carc(results.CANCELLED, prev,
-                              results.CANCELLED, True)
+            self.do_test_carc(results.CANCELLED, prev, results.CANCELLED, True)
 
-    def test_carc_skipped(self):
+    def test_carc_skipped(self) -> None:
         for prev in results.FAILURE, results.WARNINGS, results.SUCCESS:
-            self.do_test_carc(results.SKIPPED, prev,
-                              prev, False)
+            self.do_test_carc(results.SKIPPED, prev, prev, False)

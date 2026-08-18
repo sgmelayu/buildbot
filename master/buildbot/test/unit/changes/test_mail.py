@@ -13,30 +13,38 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
 import os
+from typing import TYPE_CHECKING
+from typing import Any
 
 from twisted.internet import defer
 from twisted.trial import unittest
 
 from buildbot.changes import mail
+from buildbot.test.reactor import TestReactorMixin
 from buildbot.test.util import changesource
 from buildbot.test.util import dirs
-from buildbot.test.util.misc import TestReactorMixin
+
+if TYPE_CHECKING:
+    from email.message import Message
+
+    from buildbot.util.twisted import InlineCallbacksType
 
 
-class TestMaildirSource(changesource.ChangeSourceMixin, dirs.DirsMixin,
-                        TestReactorMixin,
-                        unittest.TestCase):
-
+class TestMaildirSource(
+    changesource.ChangeSourceMixin, dirs.DirsMixin, TestReactorMixin, unittest.TestCase
+):
     @defer.inlineCallbacks
-    def setUp(self):
-        self.setUpTestReactor()
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        self.setup_test_reactor()
         self.maildir = os.path.abspath("maildir")
 
         yield self.setUpChangeSource()
         yield self.setUpDirs(self.maildir)
 
-    def populateMaildir(self):
+    def populateMaildir(self) -> None:
         "create a fake maildir with a fake new message ('newmsg') in it"
         newdir = os.path.join(self.maildir, "new")
         os.makedirs(newdir)
@@ -46,86 +54,91 @@ class TestMaildirSource(changesource.ChangeSourceMixin, dirs.DirsMixin,
 
         fake_message = "Subject: test\n\nthis is a test"
         mailfile = os.path.join(newdir, "newmsg")
-        with open(mailfile, "w") as f:
+        with open(mailfile, "w", encoding='utf-8') as f:
             f.write(fake_message)
 
-    def assertMailProcessed(self):
-        self.assertFalse(
-            os.path.exists(os.path.join(self.maildir, "new", "newmsg")))
-        self.assertTrue(
-            os.path.exists(os.path.join(self.maildir, "cur", "newmsg")))
-
-    @defer.inlineCallbacks
-    def tearDown(self):
-        yield self.tearDownDirs()
-        yield self.tearDownChangeSource()
+    def assertMailProcessed(self) -> None:
+        self.assertFalse(os.path.exists(os.path.join(self.maildir, "new", "newmsg")))
+        self.assertTrue(os.path.exists(os.path.join(self.maildir, "cur", "newmsg")))
 
     # tests
 
-    def test_describe(self):
+    def test_describe(self) -> None:
         mds = mail.MaildirSource(self.maildir)
         self.assertSubstring(self.maildir, mds.describe())
 
     @defer.inlineCallbacks
-    def test_messageReceived_svn(self):
+    def test_messageReceived_svn(self) -> InlineCallbacksType[None]:
         self.populateMaildir()
         mds = mail.MaildirSource(self.maildir)
-        self.attachChangeSource(mds)
+        yield self.attachChangeSource(mds)
 
         # monkey-patch in a parse method
-        def parse(message, prefix):
+        def parse(message: Message, prefix: str | None) -> tuple[str, dict[str, Any]] | None:
             assert 'this is a test' in message.get_payload()
-            return ('svn', dict(author='jimmy'))
-        mds.parse = parse
+            return ('svn', {"author": 'jimmy'})
+
+        mds.parse = parse  # type: ignore[assignment, method-assign]
 
         yield mds.messageReceived('newmsg')
 
         self.assertMailProcessed()
-        self.assertEqual(self.master.data.updates.changesAdded, [{
-            'author': 'jimmy',
-            'committer': None,
-            'branch': None,
-            'category': None,
-            'codebase': None,
-            'comments': None,
-            'files': None,
-            'project': '',
-            'properties': {},
-            'repository': '',
-            'revision': None,
-            'revlink': '',
-            'src': 'svn',
-            'when_timestamp': None,
-        }])
+        self.assertEqual(
+            self.master.data.updates.changesAdded,
+            [
+                {
+                    'author': 'jimmy',
+                    'committer': None,
+                    'branch': None,
+                    'category': None,
+                    'codebase': None,
+                    'comments': None,
+                    'files': None,
+                    'project': '',
+                    'properties': None,
+                    'repository': '',
+                    'revision': None,
+                    'revlink': '',
+                    'src': 'svn',
+                    'when_timestamp': None,
+                }
+            ],
+        )
 
     @defer.inlineCallbacks
-    def test_messageReceived_bzr(self):
+    def test_messageReceived_bzr(self) -> InlineCallbacksType[None]:
         self.populateMaildir()
         mds = mail.MaildirSource(self.maildir)
-        self.attachChangeSource(mds)
+        yield self.attachChangeSource(mds)
 
         # monkey-patch in a parse method
-        def parse(message, prefix):
+        def parse(message: Message, prefix: str | None) -> tuple[str, dict[str, Any]] | None:
             assert 'this is a test' in message.get_payload()
-            return ('bzr', dict(author='jimmy'))
-        mds.parse = parse
+            return ('bzr', {"author": 'jimmy'})
+
+        mds.parse = parse  # type: ignore[assignment, method-assign]
 
         yield mds.messageReceived('newmsg')
 
         self.assertMailProcessed()
-        self.assertEqual(self.master.data.updates.changesAdded, [{
-            'author': 'jimmy',
-            'committer': None,
-            'branch': None,
-            'category': None,
-            'codebase': None,
-            'comments': None,
-            'files': None,
-            'project': '',
-            'properties': {},
-            'repository': '',
-            'revision': None,
-            'revlink': '',
-            'src': 'bzr',
-            'when_timestamp': None,
-        }])
+        self.assertEqual(
+            self.master.data.updates.changesAdded,
+            [
+                {
+                    'author': 'jimmy',
+                    'committer': None,
+                    'branch': None,
+                    'category': None,
+                    'codebase': None,
+                    'comments': None,
+                    'files': None,
+                    'project': '',
+                    'properties': None,
+                    'repository': '',
+                    'revision': None,
+                    'revlink': '',
+                    'src': 'bzr',
+                    'when_timestamp': None,
+                }
+            ],
+        )

@@ -14,6 +14,8 @@
 # Copyright Buildbot Team Members
 
 
+from __future__ import annotations
+
 from buildbot.data import base
 from buildbot.data import types
 
@@ -21,11 +23,9 @@ from buildbot.data import types
 
 
 class Patch(base.ResourceType):
-
     name = "patch"
     plural = "patches"
-    endpoints = []
-    keyFields = ['patchid']
+    endpoints: list[type[base.Endpoint]] = []
 
     class EntityType(types.Entity):
         patchid = types.Integer()
@@ -34,4 +34,5 @@ class Patch(base.ResourceType):
         subdir = types.String()
         author = types.String()
         comment = types.String()
+
     entityType = EntityType(name)

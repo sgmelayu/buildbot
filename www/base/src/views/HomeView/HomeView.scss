@@ -1,0 +1,18 @@
+.bb-home-view {
+  .card-header {
+    a {
+      color: white !important;
+    }
+    background-color: var(--bb-home-card-header-bg-color) !important;
+    border-color: var(--bb-home-card-header-bg-color) !important;
+    padding: 10px 15px;
+  }
+
+  .card-body {
+    padding: 0.5rem;
+  }
+
+  .bb-home-builder-card {
+    border-color: var(--bb-home-card-header-bg-color);
+  }
+}

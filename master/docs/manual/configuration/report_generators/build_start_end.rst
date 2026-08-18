@@ -35,6 +35,7 @@ The following parameters are supported:
 
 ``add_logs``
     (boolean or a list of strings, optional).
+    (deprecated, set the ``want_logs_content`` of the passed ``message_formatter``).
     If ``True``, include all build logs as attachments to the messages.
     These can be quite large.
     This can also be set to a list of log names to send a subset of the logs.
@@ -48,8 +49,10 @@ The following parameters are supported:
 
 ``start_formatter``
     (optional, instance of ``reporters.MessageFormatter`` or ``reporters.MessageFormatterRenderable``)
-    This is an optional message formatter that can be used to generate a custom message at the start of the build.
+    This is an optional message formatter that can be used to generate a custom message at the start
+    of the build.
 
 ``end_formatter``
     (optional, instance of ``reporters.MessageFormatter`` or ``reporters.MessageFormatterRenderable``)
-    This is an optional message formatter that can be used to generate a custom message at the end of the build.
+    This is an optional message formatter that can be used to generate a custom message at the end
+    of the build.

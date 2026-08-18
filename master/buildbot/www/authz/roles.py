@@ -13,61 +13,61 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
+from typing import Any
+
 
 class RolesFromBase:
-
-    def __init__(self):
+    def __init__(self) -> None:
         pass
 
-    def getRolesFromUser(self, userDetails):
+    def getRolesFromUser(self, userDetails: dict[str, Any]) -> list[str]:
         return []
 
-    def setAuthz(self, authz):
+    def setAuthz(self, authz: Any) -> None:
         self.authz = authz
         self.master = authz.master
 
 
 class RolesFromGroups(RolesFromBase):
-
-    def __init__(self, groupPrefix=""):
+    def __init__(self, groupPrefix: str = "") -> None:
         super().__init__()
         self.groupPrefix = groupPrefix
 
-    def getRolesFromUser(self, userDetails):
+    def getRolesFromUser(self, userDetails: dict[str, Any]) -> list[str]:
         roles = []
         if 'groups' in userDetails:
             for group in userDetails['groups']:
                 if group.startswith(self.groupPrefix):
-                    roles.append(group[len(self.groupPrefix):])
+                    roles.append(group[len(self.groupPrefix) :])
         return roles
 
 
 class RolesFromEmails(RolesFromBase):
-
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: list[str]) -> None:
         super().__init__()
-        self.roles = {}
+        self.roles: dict[str, list[str]] = {}
         for role, emails in kwargs.items():
             for email in emails:
                 self.roles.setdefault(email, []).append(role)
 
-    def getRolesFromUser(self, userDetails):
+    def getRolesFromUser(self, userDetails: dict[str, Any]) -> list[str]:
         if 'email' in userDetails:
             return self.roles.get(userDetails['email'], [])
         return []
 
 
 class RolesFromDomain(RolesFromEmails):
-
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: list[str]) -> None:
         super().__init__()
 
-        self.domain_roles = {}
+        self.domain_roles: dict[str, list[str]] = {}
         for role, domains in kwargs.items():
             for domain in domains:
                 self.domain_roles.setdefault(domain, []).append(role)
 
-    def getRolesFromUser(self, userDetails):
+    def getRolesFromUser(self, userDetails: dict[str, Any]) -> list[str]:
         if 'email' in userDetails:
             email = userDetails['email']
             edomain = email.split('@')[-1]
@@ -76,12 +76,11 @@ class RolesFromDomain(RolesFromEmails):
 
 
 class RolesFromOwner(RolesFromBase):
-
-    def __init__(self, role):
+    def __init__(self, role: str) -> None:
         super().__init__()
         self.role = role
 
-    def getRolesFromUser(self, userDetails, owner):
+    def getRolesFromUser(self, userDetails: dict[str, Any], owner: str | None = None) -> list[str]:
         if 'email' in userDetails:
             if userDetails['email'] == owner and owner is not None:
                 return [self.role]
@@ -89,14 +88,15 @@ class RolesFromOwner(RolesFromBase):
 
 
 class RolesFromUsername(RolesFromBase):
-    def __init__(self, roles, usernames):
+    def __init__(self, roles: list[str], usernames: list[str]) -> None:
         self.roles = roles
         if None in usernames:
-            from buildbot import config
+            from buildbot import config  # noqa: PLC0415
+
             config.error('Usernames cannot be None')
         self.usernames = usernames
 
-    def getRolesFromUser(self, userDetails):
+    def getRolesFromUser(self, userDetails: dict[str, Any]) -> list[str]:
         if userDetails.get('username') in self.usernames:
             return self.roles
         return []

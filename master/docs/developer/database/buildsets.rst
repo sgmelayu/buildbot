@@ -14,19 +14,23 @@ Buildsets connector
 
     .. index:: bsdict, bsid
 
-    Buildsets are indexed by *bsid* and their contents represented as *bsdicts*
-    (buildset dictionaries), with keys
+    Buildsets are indexed by *bsid* and their contents are represented as :class:`BuildSetModel`
+    dataclass with the following fields:
 
     * ``bsid``
     * ``external_idstring`` (arbitrary string for mapping builds externally)
     * ``reason`` (string; reason these builds were triggered)
+    * ``rebuilt_buildid`` (integer; id of a build which was rebuilt or None if there was no rebuild.
+        In case of repeated rebuilds, only initial build id is tracked)
     * ``sourcestamps`` (list of sourcestamps for this buildset, by ID)
     * ``submitted_at`` (datetime object; time this buildset was created)
     * ``complete`` (boolean; true if all of the builds for this buildset are complete)
     * ``complete_at`` (datetime object; time this buildset was completed)
     * ``results`` (aggregate result of this buildset; see :ref:`Build-Result-Codes`)
+    * ``parent_buildid`` (optional build id that is the parent for this buildset)
+    * ``parent_relationship`` (relationship identifier for the parent)
 
-    .. py:method:: addBuildset(sourcestamps, reason, properties, builderids, external_idstring=None, parent_buildid=None, parent_relationship=None)
+    .. py:method:: addBuildset(sourcestamps, reason, properties, builderids, rebuilt_buildid=None, external_idstring=None, parent_buildid=None, parent_relationship=None)
 
         :param sourcestamps: sourcestamps for the new buildset; see below
         :type sourcestamps: list
@@ -40,15 +44,20 @@ Buildsets connector
         :type external_idstring: unicode string
         :param datetime submitted_at: time this buildset was created; defaults to the current time
         :param int parent_buildid: optional build id that is the parent for this buildset
-        :param unicode parent_relationship: relationship identifier for the parent, this is is configured relationship between the parent build, and the childs buildsets
+        :param unicode parent_relationship: relationship identifier for the parent. This is the
+            configured relationship between the parent build and the child buildsets
+        :param int rebuilt_buildid: optional rebuilt build id
         :returns: buildset ID and buildrequest IDs, via a Deferred
 
-        Add a new Buildset to the database, along with BuildRequests for each builder, returning the resulting bsid via a Deferred.
-        Arguments should be specified by keyword.
+        Add a new buildset to the database, along with build requests for each builder, returning
+        the resulting bsid via a Deferred. Arguments should be specified by keyword.
 
-        Each sourcestamp in the list of sourcestamps can be given either as an integer, assumed to be a sourcestamp ID, or a dictionary of keyword arguments to be passed to :py:meth:`~buildbot.db.sourcestamps.SourceStampsConnectorComponent.findSourceStampId`.
+        Each sourcestamp in the list of sourcestamps can be given either as an integer, assumed to
+        be a sourcestamp ID, or a dictionary of keyword arguments to be passed to
+        :py:meth:`~buildbot.db.sourcestamps.SourceStampsConnectorComponent.findSourceStampId`.
 
-        The return value is a tuple ``(bsid, brids)`` where ``bsid`` is the inserted buildset ID and ``brids`` is a dictionary mapping builderids to build request IDs.
+        The return value is a tuple ``(bsid, brids)`` where ``bsid`` is the inserted buildset ID
+        and ``brids`` is a dictionary mapping builderids to build request IDs.
 
     .. py:method:: completeBuildset(bsid, results[, complete_at=XX])
 
@@ -68,10 +77,10 @@ Buildsets connector
     .. py:method:: getBuildset(bsid)
 
         :param bsid: buildset ID
-        :returns: bsdict, or ``None``, via Deferred
+        :returns: :class:`BuildSetModel` or ``None``, via Deferred
 
-        Get a bsdict representing the given buildset, or ``None`` if no such
-        buildset exists.
+        Get a :class:`BuildSetModel` representing the given buildset, or ``None``
+        if no such buildset exists.
 
         Note that buildsets are not cached, as the values in the database are
         not fixed.
@@ -81,29 +90,29 @@ Buildsets connector
         :param complete: if true, return only complete buildsets; if false,
             return only incomplete buildsets; if ``None`` or omitted, return all
             buildsets
-        :param resultSpec: resultSpec containing filters sorting and paging request from data/REST API.
+        :param resultSpec: result spec containing filters sorting and paging requests from data/REST API.
             If possible, the db layer can optimize the SQL query using this information.
 
-        :returns: list of bsdicts, via Deferred
+        :returns: list of :class:`BuildSetModel`, via Deferred
 
-        Get a list of bsdicts matching the given criteria.
+        Get a list of :class:`BuildSetModel` matching the given criteria.
 
     .. py:method:: getRecentBuildsets(count=None, branch=None, repository=None,
                            complete=None):
 
-        :param count: maximum number of buildsets to retrieve (required).
+        :param count: maximum number of buildsets to retrieve (required)
         :type count: integer
         :param branch: optional branch name. If specified, only buildsets
-            affecting such branch will be returned.
+            affecting such branch will be returned
         :type branch: string
         :param repository: optional repository name. If specified, only
-            buildsets affecting such repository will be returned.
+            buildsets affecting such repository will be returned
         :type repository: string
         :param complete: if true, return only complete buildsets; if false,
             return only incomplete buildsets; if ``None`` or omitted, return all
             buildsets
         :type complete: Boolean
-        :returns: list of bsdicts, via Deferred
+        :returns: list of :class:`BuildSetModel`, via Deferred
 
         Get "recent" buildsets, as defined by their ``submitted_at`` times.
 

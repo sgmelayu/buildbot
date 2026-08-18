@@ -13,10 +13,13 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
 import datetime
+from typing import TYPE_CHECKING
+from typing import Any
 
 import dateutil.tz
-
 from twisted.internet import defer
 from twisted.internet import error
 from twisted.internet import reactor
@@ -26,31 +29,32 @@ from twisted.trial import unittest
 from buildbot.changes.p4poller import P4PollerError
 from buildbot.changes.p4poller import P4Source
 from buildbot.changes.p4poller import get_simple_split
+from buildbot.test.reactor import TestReactorMixin
+from buildbot.test.runprocess import ExpectMasterShell
+from buildbot.test.runprocess import MasterRunProcessMixin
 from buildbot.test.util import changesource
 from buildbot.test.util import config
-from buildbot.test.util import gpo
-from buildbot.test.util.misc import TestReactorMixin
 from buildbot.util import datetime2epoch
 
-first_p4changes = \
-    b"""Change 1 on 2006/04/13 by slamb@testclient 'first rev'
+if TYPE_CHECKING:
+    from twisted.internet import protocol
+
+    from buildbot.util.twisted import InlineCallbacksType
+
+first_p4changes = b"""Change 1 on 2006/04/13 by slamb@testclient 'first rev'
 """
 
-second_p4changes = \
-    b"""Change 3 on 2006/04/13 by bob@testclient 'short desc truncated'
+second_p4changes = b"""Change 3 on 2006/04/13 by bob@testclient 'short desc truncated'
 Change 2 on 2006/04/13 by slamb@testclient 'bar'
 """
 
-third_p4changes = \
-    b"""Change 5 on 2006/04/13 by mpatel@testclient 'first rev'
+third_p4changes = b"""Change 5 on 2006/04/13 by mpatel@testclient 'first rev'
 """
 
-fourth_p4changes = \
-    b"""Change 6 on 2006/04/14 by mpatel@testclient 'bar \xd0\x91'
+fourth_p4changes = b"""Change 6 on 2006/04/14 by mpatel@testclient 'bar \xd0\x91'
 """
 
-p4_describe_2 = \
-    b"""Change 2 by slamb@testclient on 2006/04/13 21:46:23
+p4_describe_2 = b"""Change 2 by slamb@testclient on 2006/04/13 21:46:23
 
 \tcreation
 
@@ -60,8 +64,7 @@ Affected files ...
 ... //depot/otherproject/trunk/something#1 add
 """
 
-p4_describe_3 = \
-    """Change 3 by bob@testclient on 2006/04/13 21:51:39
+p4_describe_3 = """Change 3 by bob@testclient on 2006/04/13 21:51:39
 
 \tshort desc truncated because this is a long description.
 \tASDF-GUI-P3-\u2018Upgrade Icon\u2019 disappears sometimes.
@@ -73,8 +76,7 @@ Affected files ...
 ... //depot/myproject/branch_c/whatbranch#1 branch
 """
 
-p4_describe_4 = \
-    b"""Change 4 by mpatel@testclient on 2006/04/13 21:55:39
+p4_describe_4 = b"""Change 4 by mpatel@testclient on 2006/04/13 21:55:39
 
 \tThis is a multiline comment with tabs and spaces
 \t
@@ -97,80 +99,95 @@ p4change = {
 
 
 class FakeTransport:
+    def __init__(self) -> None:
+        self.msg: bytes | None = None
 
-    def __init__(self):
-        self.msg = None
-
-    def write(self, msg):
+    def write(self, msg: bytes) -> None:
         self.msg = msg
 
-    def closeStdin(self):
+    def closeStdin(self) -> None:
         pass
 
 
-class TestP4Poller(changesource.ChangeSourceMixin,
-                   gpo.GetProcessOutputMixin,
-                   config.ConfigErrorsMixin,
-                   TestReactorMixin,
-                   unittest.TestCase):
+class TestP4Poller(
+    changesource.ChangeSourceMixin,
+    MasterRunProcessMixin,
+    config.ConfigErrorsMixin,
+    TestReactorMixin,
+    unittest.TestCase,
+):
+    @defer.inlineCallbacks
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        self.setup_test_reactor()
+        self.setup_master_run_process()
+        yield self.setUpChangeSource()
 
-    def setUp(self):
-        self.setUpTestReactor()
-        self.setUpGetProcessOutput()
-        return self.setUpChangeSource()
+    def add_p4_describe_result(self, number: int, result: bytes) -> None:
+        self.expect_commands(
+            ExpectMasterShell(['p4', 'describe', '-s', str(number)]).stdout(result)
+        )
 
-    def tearDown(self):
-        return self.tearDownChangeSource()
-
-    def add_p4_describe_result(self, number, result):
-        self.expectCommands(
-            gpo.Expect('p4', 'describe', '-s', str(number)).stdout(result))
-
-    def makeTime(self, timestring):
+    def makeTime(self, timestring: str) -> datetime.datetime:
         datefmt = '%Y/%m/%d %H:%M:%S'
         when = datetime.datetime.strptime(timestring, datefmt)
         return when
 
-    # tests
-
-    def test_describe(self):
-        self.attachChangeSource(
-            P4Source(p4port=None, p4user=None,
-                     p4base='//depot/myproject/',
-                     split_file=lambda x: x.split('/', 1)))
+    @defer.inlineCallbacks
+    def test_describe(self) -> InlineCallbacksType[None]:
+        yield self.attachChangeSource(
+            P4Source(
+                p4port=None,
+                p4user=None,
+                p4base='//depot/myproject/',
+                split_file=lambda x: x.split('/', 1),
+            )
+        )
         self.assertSubstring("p4source", self.changesource.describe())
 
-    def test_name(self):
+    def test_name(self) -> None:
         # no name:
-        cs1 = P4Source(p4port=None, p4user=None,
-                       p4base='//depot/myproject/',
-                       split_file=lambda x: x.split('/', 1))
+        cs1 = P4Source(
+            p4port=None,
+            p4user=None,
+            p4base='//depot/myproject/',
+            split_file=lambda x: x.split('/', 1),
+        )
         self.assertEqual("P4Source:None://depot/myproject/", cs1.name)
 
         # explicit name:
-        cs2 = P4Source(p4port=None, p4user=None, name='MyName',
-                       p4base='//depot/myproject/',
-                       split_file=lambda x: x.split('/', 1))
+        cs2 = P4Source(
+            p4port=None,
+            p4user=None,
+            name='MyName',
+            p4base='//depot/myproject/',
+            split_file=lambda x: x.split('/', 1),
+        )
         self.assertEqual("MyName", cs2.name)
 
     @defer.inlineCallbacks
-    def do_test_poll_successful(self, **kwargs):
+    def do_test_poll_successful(self, **kwargs: Any) -> InlineCallbacksType[None]:
         encoding = kwargs.get('encoding', 'utf8')
-        self.attachChangeSource(
-            P4Source(p4port=None, p4user=None,
-                     p4base='//depot/myproject/',
-                     split_file=lambda x: x.split('/', 1),
-                     **kwargs))
-        self.expectCommands(
-            gpo.Expect(
-                'p4', 'changes', '-m', '1', '//depot/myproject/...').stdout(first_p4changes),
-            gpo.Expect(
-                'p4', 'changes', '//depot/myproject/...@2,#head').stdout(second_p4changes),
+        yield self.attachChangeSource(
+            P4Source(
+                p4port=None,
+                p4user=None,
+                p4base='//depot/myproject/',
+                split_file=lambda x: x.split('/', 1),
+                **kwargs,
+            )
+        )
+        self.expect_commands(
+            ExpectMasterShell(['p4', 'changes', '-m', '1', '//depot/myproject/...']).stdout(
+                first_p4changes
+            ),
+            ExpectMasterShell(['p4', 'changes', '//depot/myproject/...@2,#head']).stdout(
+                second_p4changes
+            ),
         )
         encoded_p4change = p4change.copy()
-        encoded_p4change[3] = encoded_p4change[3].encode(encoding)
-        self.add_p4_describe_result(2, encoded_p4change[2])
-        self.add_p4_describe_result(3, encoded_p4change[3])
+        encoded_p4change[3] = encoded_p4change[3].encode(encoding)  # type: ignore[attr-defined]
+        self.add_p4_describe_result(2, encoded_p4change[2])  # type: ignore[arg-type]
+        self.add_p4_describe_result(3, encoded_p4change[3])  # type: ignore[arg-type]
 
         # The first time, it just learns the change to start at.
         self.assertTrue(self.changesource.last_change is None)
@@ -192,88 +209,107 @@ class TestP4Poller(changesource.ChangeSourceMixin,
         changesAdded = self.master.data.updates.changesAdded
         if changesAdded[1]['branch'] == 'branch_c':
             changesAdded[1:] = reversed(changesAdded[1:])
-        self.assertEqual(self.master.data.updates.changesAdded, [{
-            'author': 'slamb',
-            'committer': None,
-            'branch': 'trunk',
-            'category': None,
-            'codebase': None,
-            'comments': 'creation',
-            'files': ['whatbranch'],
-            'project': '',
-            'properties': {},
-            'repository': '',
-            'revision': '2',
-            'revlink': '',
-            'src': None,
-            'when_timestamp': datetime2epoch(when1),
-        }, {
-            'author': 'bob',
-            'committer': None,
-            'branch': 'branch_b',
-            'category': None,
-            'codebase': None,
-            'comments':
-                'short desc truncated because this is a long description.\n'
-                'ASDF-GUI-P3-\u2018Upgrade Icon\u2019 disappears sometimes.',
-            'files': ['branch_b_file', 'whatbranch'],
-            'project': '',
-            'properties': {},
-            'repository': '',
-            'revision': '3',
-            'revlink': '',
-            'src': None,
-            'when_timestamp': datetime2epoch(when2),
-        }, {
-            'author': 'bob',
-            'committer': None,
-            'branch': 'branch_c',
-            'category': None,
-            'codebase': None,
-            'comments':
-                'short desc truncated because this is a long description.\n'
-                'ASDF-GUI-P3-\u2018Upgrade Icon\u2019 disappears sometimes.',
-            'files': ['whatbranch'],
-            'project': '',
-            'properties': {},
-            'repository': '',
-            'revision': '3',
-            'revlink': '',
-            'src': None,
-            'when_timestamp': datetime2epoch(when2),
-        }])
-        self.assertAllCommandsRan()
+        self.assertEqual(
+            self.master.data.updates.changesAdded,
+            [
+                {
+                    'author': 'slamb',
+                    'committer': None,
+                    'branch': 'trunk',
+                    'category': None,
+                    'codebase': None,
+                    'comments': 'creation',
+                    'files': ['whatbranch'],
+                    'project': '',
+                    'properties': None,
+                    'repository': '',
+                    'revision': '2',
+                    'revlink': '',
+                    'src': None,
+                    'when_timestamp': datetime2epoch(when1),
+                },
+                {
+                    'author': 'bob',
+                    'committer': None,
+                    'branch': 'branch_b',
+                    'category': None,
+                    'codebase': None,
+                    'comments': 'short desc truncated because this is a long description.\n'
+                    'ASDF-GUI-P3-\u2018Upgrade Icon\u2019 disappears sometimes.',
+                    'files': ['branch_b_file', 'whatbranch'],
+                    'project': '',
+                    'properties': None,
+                    'repository': '',
+                    'revision': '3',
+                    'revlink': '',
+                    'src': None,
+                    'when_timestamp': datetime2epoch(when2),
+                },
+                {
+                    'author': 'bob',
+                    'committer': None,
+                    'branch': 'branch_c',
+                    'category': None,
+                    'codebase': None,
+                    'comments': 'short desc truncated because this is a long description.\n'
+                    'ASDF-GUI-P3-\u2018Upgrade Icon\u2019 disappears sometimes.',
+                    'files': ['whatbranch'],
+                    'project': '',
+                    'properties': None,
+                    'repository': '',
+                    'revision': '3',
+                    'revlink': '',
+                    'src': None,
+                    'when_timestamp': datetime2epoch(when2),
+                },
+            ],
+        )
+        self.assert_all_commands_ran()
 
-    def test_poll_successful_default_encoding(self):
+    def test_poll_successful_default_encoding(self) -> defer.Deferred[None]:
         return self.do_test_poll_successful()
 
-    def test_poll_successful_macroman_encoding(self):
+    def test_poll_successful_macroman_encoding(self) -> defer.Deferred[None]:
         return self.do_test_poll_successful(encoding='macroman')
 
-    def test_poll_failed_changes(self):
-        self.attachChangeSource(
-            P4Source(p4port=None, p4user=None,
-                     p4base='//depot/myproject/',
-                     split_file=lambda x: x.split('/', 1)))
-        self.expectCommands(
-            gpo.Expect('p4', 'changes', '-m', '1', '//depot/myproject/...')
-               .stdout(b'Perforce client error:\n...'))
+    @defer.inlineCallbacks
+    def test_poll_failed_changes(self) -> InlineCallbacksType[None]:
+        yield self.attachChangeSource(
+            P4Source(
+                p4port=None,
+                p4user=None,
+                p4base='//depot/myproject/',
+                split_file=lambda x: x.split('/', 1),
+            )
+        )
+        self.expect_commands(
+            ExpectMasterShell(['p4', 'changes', '-m', '1', '//depot/myproject/...']).stdout(
+                b'Perforce client error:\n...'
+            )
+        )
 
         # call _poll, so we can catch the failure
-        d = self.changesource._poll()
-        return self.assertFailure(d, P4PollerError)
+        with self.assertRaises(P4PollerError):
+            yield self.changesource._poll()
+
+        self.assert_all_commands_ran()
 
     @defer.inlineCallbacks
-    def test_poll_failed_describe(self):
-        self.attachChangeSource(
-            P4Source(p4port=None, p4user=None,
-                     p4base='//depot/myproject/',
-                     split_file=lambda x: x.split('/', 1)))
-        self.expectCommands(
-            gpo.Expect(
-                'p4', 'changes', '//depot/myproject/...@3,#head').stdout(second_p4changes),
+    def test_poll_failed_describe(self) -> InlineCallbacksType[None]:
+        yield self.attachChangeSource(
+            P4Source(
+                p4port=None,
+                p4user=None,
+                p4base='//depot/myproject/',
+                split_file=lambda x: x.split('/', 1),
+            )
         )
-        self.add_p4_describe_result(2, p4change[2])
+        self.expect_commands(
+            ExpectMasterShell(['p4', 'changes', '//depot/myproject/...@3,#head']).stdout(
+                second_p4changes
+            ),
+        )
+        self.add_p4_describe_result(2, p4change[2])  # type: ignore[arg-type]
         self.add_p4_describe_result(3, b'Perforce client error:\n...')
 
         # tell poll() that it's already been called once
@@ -285,110 +321,143 @@ class TestP4Poller(changesource.ChangeSourceMixin,
 
         # check that 2 was processed OK
         self.assertEqual(self.changesource.last_change, 2)
-        self.assertAllCommandsRan()
+        self.assert_all_commands_ran()
 
-    def test_poll_unicode_error(self):
-        self.attachChangeSource(
-            P4Source(p4port=None, p4user=None,
-                     p4base='//depot/myproject/',
-                     split_file=lambda x: x.split('/', 1)))
-        self.expectCommands(
-            gpo.Expect(
-                'p4', 'changes', '//depot/myproject/...@3,#head').stdout(second_p4changes),
+    @defer.inlineCallbacks
+    def test_poll_unicode_error(self) -> InlineCallbacksType[None]:
+        yield self.attachChangeSource(
+            P4Source(
+                p4port=None,
+                p4user=None,
+                p4base='//depot/myproject/',
+                split_file=lambda x: x.split('/', 1),
+            )
+        )
+        self.expect_commands(
+            ExpectMasterShell(['p4', 'changes', '//depot/myproject/...@3,#head']).stdout(
+                second_p4changes
+            ),
         )
         # Add a character which cannot be decoded with utf-8
-        undecodableText = p4change[2] + b"\x81"
+        undecodableText = p4change[2] + b"\x81"  # type: ignore[operator]
         self.add_p4_describe_result(2, undecodableText)
 
         # tell poll() that it's already been called once
         self.changesource.last_change = 2
 
         # call _poll, so we can catch the failure
-        d = self.changesource._poll()
-        return self.assertFailure(d, UnicodeError)
+        with self.assertRaises(UnicodeError):
+            yield self.changesource._poll()
 
-    def test_poll_unicode_error2(self):
-        self.attachChangeSource(
-            P4Source(p4port=None, p4user=None,
-                     p4base='//depot/myproject/',
-                     split_file=lambda x: x.split('/', 1),
-                     encoding='ascii'))
-        # Trying to decode a certain character with ascii codec should fail.
-        self.expectCommands(
-            gpo.Expect(
-                'p4', 'changes', '-m', '1', '//depot/myproject/...').stdout(fourth_p4changes),
-        )
-
-        d = self.changesource._poll()
-        return d
+        self.assert_all_commands_ran()
 
     @defer.inlineCallbacks
-    def test_acquire_ticket_auth(self):
-        self.attachChangeSource(
-            P4Source(p4port=None, p4user='buildbot_user', p4passwd='pass',
-                     p4base='//depot/myproject/',
-                     split_file=lambda x: x.split('/', 1),
-                     use_tickets=True))
-        self.expectCommands(
-            gpo.Expect(
-                'p4', 'changes', '-m', '1', '//depot/myproject/...').stdout(first_p4changes)
+    def test_poll_unicode_error2(self) -> InlineCallbacksType[None]:
+        yield self.attachChangeSource(
+            P4Source(
+                p4port=None,
+                p4user=None,
+                p4base='//depot/myproject/',
+                split_file=lambda x: x.split('/', 1),
+                encoding='ascii',
+            )
+        )
+        # Trying to decode a certain character with ascii codec should fail.
+        self.expect_commands(
+            ExpectMasterShell(['p4', 'changes', '-m', '1', '//depot/myproject/...']).stdout(
+                fourth_p4changes
+            ),
+        )
+
+        yield self.changesource._poll()
+        self.assert_all_commands_ran()
+
+    @defer.inlineCallbacks
+    def test_acquire_ticket_auth(self) -> InlineCallbacksType[None]:
+        yield self.attachChangeSource(
+            P4Source(
+                p4port=None,
+                p4user='buildbot_user',
+                p4passwd='pass',
+                p4base='//depot/myproject/',
+                split_file=lambda x: x.split('/', 1),
+                use_tickets=True,
+            )
+        )
+        self.expect_commands(
+            ExpectMasterShell(['p4', 'changes', '-m', '1', '//depot/myproject/...']).stdout(
+                first_p4changes
+            )
         )
 
         transport = FakeTransport()
 
         # p4poller uses only those arguments at the moment
-        def spawnProcess(pp, cmd, argv, env):
-            self.assertEqual([cmd, argv],
-                             ['p4', [b'p4', b'-u', b'buildbot_user', b'login']])
+        def spawnProcess(
+            pp: protocol.ProcessProtocol, cmd: str, argv: list[bytes], env: dict[str, str]
+        ) -> None:
+            self.assertEqual([cmd, argv], ['p4', [b'p4', b'-u', b'buildbot_user', b'login']])
             pp.makeConnection(transport)
             self.assertEqual(b'pass\n', transport.msg)
             pp.outReceived(b'Enter password:\nUser buildbot_user logged in.\n')
             so = error.ProcessDone(None)
             pp.processEnded(failure.Failure(so))
+
         self.patch(reactor, 'spawnProcess', spawnProcess)
 
         yield self.changesource.poll()
+        self.assert_all_commands_ran()
 
     @defer.inlineCallbacks
-    def test_acquire_ticket_auth_fail(self):
-        self.attachChangeSource(
-            P4Source(p4port=None, p4user=None, p4passwd='pass',
-                     p4base='//depot/myproject/',
-                     split_file=lambda x: x.split('/', 1),
-                     use_tickets=True))
-        self.expectCommands(
-            gpo.Expect(
-                'p4', 'changes', '-m', '1', '//depot/myproject/...').stdout(first_p4changes)
+    def test_acquire_ticket_auth_fail(self) -> InlineCallbacksType[None]:
+        yield self.attachChangeSource(
+            P4Source(
+                p4port=None,
+                p4user=None,
+                p4passwd='pass',
+                p4base='//depot/myproject/',
+                split_file=lambda x: x.split('/', 1),
+                use_tickets=True,
+            )
+        )
+        self.expect_commands(
+            ExpectMasterShell(['p4', 'changes', '-m', '1', '//depot/myproject/...']).stdout(
+                first_p4changes
+            )
         )
 
         transport = FakeTransport()
 
         # p4poller uses only those arguments at the moment
-        def spawnProcess(pp, cmd, argv, env):
-            self.assertEqual([cmd, argv],
-                             ['p4', [b'p4', b'login']])
+        def spawnProcess(
+            pp: protocol.ProcessProtocol, cmd: str, argv: list[bytes], env: dict[str, str]
+        ) -> None:
+            self.assertEqual([cmd, argv], ['p4', [b'p4', b'login']])
             pp.makeConnection(transport)
             self.assertEqual(b'pass\n', transport.msg)
             pp.outReceived(b'Enter password:\n')
             pp.errReceived(b"Password invalid.\n")
             so = error.ProcessDone(status=1)
             pp.processEnded(failure.Failure(so))
+
         self.patch(reactor, 'spawnProcess', spawnProcess)
 
         yield self.changesource.poll()
 
     @defer.inlineCallbacks
-    def test_poll_split_file(self):
+    def test_poll_split_file(self) -> InlineCallbacksType[None]:
         """Make sure split file works on branch only changes"""
-        self.attachChangeSource(
-            P4Source(p4port=None, p4user=None,
-                     p4base='//depot/myproject/',
-                     split_file=get_simple_split))
-        self.expectCommands(
-            gpo.Expect(
-                'p4', 'changes', '//depot/myproject/...@51,#head').stdout(third_p4changes),
+        yield self.attachChangeSource(
+            P4Source(
+                p4port=None, p4user=None, p4base='//depot/myproject/', split_file=get_simple_split
+            )
         )
-        self.add_p4_describe_result(5, p4change[5])
+        self.expect_commands(
+            ExpectMasterShell(['p4', 'changes', '//depot/myproject/...@51,#head']).stdout(
+                third_p4changes
+            ),
+        )
+        self.add_p4_describe_result(5, p4change[5])  # type: ignore[arg-type]
 
         self.changesource.last_change = 50
         yield self.changesource.poll()
@@ -397,87 +466,97 @@ class TestP4Poller(changesource.ChangeSourceMixin,
         # replicate that here
         when = self.makeTime("2006/04/13 21:55:39")
 
-        def changeKey(change):
-            """ Let's sort the array of changes by branch,
-                because in P4Source._poll(), changeAdded()
-                is called by iterating over a dictionary of
-                branches"""
+        def changeKey(change: dict[str, Any]) -> str | None:
+            """Let's sort the array of changes by branch,
+            because in P4Source._poll(), changeAdded()
+            is called by iterating over a dictionary of
+            branches"""
             return change['branch']
 
-        self.assertEqual(sorted(self.master.data.updates.changesAdded, key=changeKey),
-            sorted([{
-            'author': 'mpatel',
-            'committer': None,
-            'branch': 'branch_c',
-            'category': None,
-            'codebase': None,
-            'comments': 'This is a multiline comment with tabs and spaces\n\nA list:\n  '
+        self.assertEqual(
+            sorted(self.master.data.updates.changesAdded, key=changeKey),  # type: ignore[arg-type]
+            sorted(
+                [
+                    {
+                        'author': 'mpatel',
+                        'committer': None,
+                        'branch': 'branch_c',
+                        'category': None,
+                        'codebase': None,
+                        'comments': 'This is a multiline comment with tabs and spaces\n\nA list:\n  '
                         'Item 1\n\tItem 2',
-            'files': ['branch_c_file'],
-            'project': '',
-            'properties': {},
-            'repository': '',
-            'revision': '5',
-            'revlink': '',
-            'src': None,
-            'when_timestamp': datetime2epoch(when),
-        }, {
-            'author': 'mpatel',
-            'committer': None,
-            'branch': 'branch_b',
-            'category': None,
-            'codebase': None,
-            'comments': 'This is a multiline comment with tabs and spaces\n\nA list:\n  '
+                        'files': ['branch_c_file'],
+                        'project': '',
+                        'properties': None,
+                        'repository': '',
+                        'revision': '5',
+                        'revlink': '',
+                        'src': None,
+                        'when_timestamp': datetime2epoch(when),
+                    },
+                    {
+                        'author': 'mpatel',
+                        'committer': None,
+                        'branch': 'branch_b',
+                        'category': None,
+                        'codebase': None,
+                        'comments': 'This is a multiline comment with tabs and spaces\n\nA list:\n  '
                         'Item 1\n\tItem 2',
-            'files': ['branch_b_file'],
-            'project': '',
-            'properties': {},
-            'repository': '',
-            'revision': '5',
-            'revlink': '',
-            'src': None,
-            'when_timestamp': datetime2epoch(when),
-        }], key=changeKey))
+                        'files': ['branch_b_file'],
+                        'project': '',
+                        'properties': None,
+                        'repository': '',
+                        'revision': '5',
+                        'revlink': '',
+                        'src': None,
+                        'when_timestamp': datetime2epoch(when),
+                    },
+                ],
+                key=changeKey,  # type: ignore[arg-type]
+            ),
+        )
         self.assertEqual(self.changesource.last_change, 5)
-        self.assertAllCommandsRan()
+        self.assert_all_commands_ran()
 
     @defer.inlineCallbacks
-    def test_server_tz(self):
+    def test_server_tz(self) -> InlineCallbacksType[None]:
         """Verify that the server_tz parameter is handled correctly"""
-        self.attachChangeSource(
-            P4Source(p4port=None, p4user=None,
-                     p4base='//depot/myproject/',
-                     split_file=get_simple_split,
-                     server_tz="Europe/Berlin"))
-        self.expectCommands(
-            gpo.Expect(
-                'p4', 'changes', '//depot/myproject/...@51,#head').stdout(third_p4changes),
+        yield self.attachChangeSource(
+            P4Source(
+                p4port=None,
+                p4user=None,
+                p4base='//depot/myproject/',
+                split_file=get_simple_split,
+                server_tz="Europe/Berlin",
+            )
         )
-        self.add_p4_describe_result(5, p4change[5])
+        self.expect_commands(
+            ExpectMasterShell(['p4', 'changes', '//depot/myproject/...@51,#head']).stdout(
+                third_p4changes
+            ),
+        )
+        self.add_p4_describe_result(5, p4change[5])  # type: ignore[arg-type]
 
         self.changesource.last_change = 50
         yield self.changesource.poll()
 
         # when_timestamp is converted from 21:55:39 Berlin time to UTC
         when_berlin = self.makeTime("2006/04/13 21:55:39")
-        when_berlin = when_berlin.replace(
-            tzinfo=dateutil.tz.gettz('Europe/Berlin'))
+        when_berlin = when_berlin.replace(tzinfo=dateutil.tz.gettz('Europe/Berlin'))
         when = datetime2epoch(when_berlin)
 
-        self.assertEqual([ch['when_timestamp']
-                          for ch in self.master.data.updates.changesAdded],
-                         [when, when])
-        self.assertAllCommandsRan()
+        self.assertEqual(
+            [ch['when_timestamp'] for ch in self.master.data.updates.changesAdded], [when, when]
+        )
+        self.assert_all_commands_ran()
 
-    def test_resolveWho_callable(self):
-        with self.assertRaisesConfigError(
-                "You need to provide a valid callable for resolvewho"):
+    def test_resolveWho_callable(self) -> None:
+        with self.assertRaisesConfigError("You need to provide a valid callable for resolvewho"):
             P4Source(resolvewho=None)
 
 
 class TestSplit(unittest.TestCase):
-
-    def test_get_simple_split(self):
+    def test_get_simple_split(self) -> None:
         self.assertEqual(get_simple_split('foo/bar'), ('foo', 'bar'))
         self.assertEqual(get_simple_split('foo-bar'), (None, None))
         self.assertEqual(get_simple_split('/bar'), ('', 'bar'))

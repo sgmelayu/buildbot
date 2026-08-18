@@ -12,96 +12,49 @@
 # Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
 # Copyright Buildbot Team Members
+from __future__ import annotations
 
-import asyncio
 import os
 import sys
 from io import StringIO
+from typing import TYPE_CHECKING
+from typing import Any
 
-from twisted.internet import threads
 from twisted.python import log
-from twisted.python import threadpool
 from twisted.trial.unittest import TestCase
 
 import buildbot
-from buildbot.asyncio import TwistedLoop
 from buildbot.process.buildstep import BuildStep
-from buildbot.test.fake.reactor import NonThreadPool
-from buildbot.test.fake.reactor import TestReactor
-from buildbot.util.eventual import _setReactor
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from twisted.trial import unittest
+
+    _StdoutAssertionsMixinBase = unittest.TestCase
+    _DebugIntegrationLogsMixinBase = unittest.TestCase
+else:
+    _StdoutAssertionsMixinBase = object
+    _DebugIntegrationLogsMixinBase = object
 
 
-class PatcherMixin:
-
-    """
-    Mix this in to get a few special-cased patching methods
-    """
-
-    def patch_os_uname(self, replacement):
-        # twisted's 'patch' doesn't handle the case where an attribute
-        # doesn't exist..
-        if hasattr(os, 'uname'):
-            self.patch(os, 'uname', replacement)
-        else:
-            def cleanup():
-                del os.uname
-            self.addCleanup(cleanup)
-            os.uname = replacement
-
-
-class StdoutAssertionsMixin:
-
+class StdoutAssertionsMixin(_StdoutAssertionsMixinBase):
     """
     Mix this in to be able to assert on stdout during the test
     """
 
-    def setUpStdoutAssertions(self):
+    def setUpStdoutAssertions(self) -> None:
         self.stdout = StringIO()
         self.patch(sys, 'stdout', self.stdout)
 
-    def assertWasQuiet(self):
+    def assertWasQuiet(self) -> None:
         self.assertEqual(self.stdout.getvalue(), '')
 
-    def assertInStdout(self, exp):
+    def assertInStdout(self, exp: str) -> None:
         self.assertIn(exp, self.stdout.getvalue())
 
-    def getStdout(self):
+    def getStdout(self) -> str:
         return self.stdout.getvalue().strip()
-
-
-class TestReactorMixin:
-
-    """
-    Mix this in to get TestReactor as self.reactor which is correctly cleaned up
-    at the end
-    """
-    def setUpTestReactor(self, use_asyncio=False):
-
-        self.patch(threadpool, 'ThreadPool', NonThreadPool)
-        self.reactor = TestReactor()
-        _setReactor(self.reactor)
-
-        def deferToThread(f, *args, **kwargs):
-            return threads.deferToThreadPool(self.reactor, self.reactor.getThreadPool(),
-                                             f, *args, **kwargs)
-        self.patch(threads, 'deferToThread', deferToThread)
-
-        # During shutdown sequence we must first stop the reactor and only then
-        # set unset the reactor used for eventually() because any callbacks
-        # that are run during reactor.stop() may use eventually() themselves.
-        self.addCleanup(_setReactor, None)
-        self.addCleanup(self.reactor.stop)
-
-        if use_asyncio:
-            self.asyncio_loop = TwistedLoop(self.reactor)
-            asyncio.set_event_loop(self.asyncio_loop)
-            self.asyncio_loop.start()
-
-            def stop():
-                self.asyncio_loop.stop()
-                self.asyncio_loop.close()
-                asyncio.set_event_loop(None)
-            self.addCleanup(stop)
 
 
 class TimeoutableTestCase(TestCase):
@@ -110,20 +63,22 @@ class TimeoutableTestCase(TestCase):
     # TimeoutableTestCase whenever test failure may cause it to block and not
     # report anything.
 
-    def deferRunCleanups(self, ignored, result):
+    def deferRunCleanups(self, ignored: Any, result: Any) -> Any:
         self._deferRunCleanupResult = result
-        d = self._run('deferRunCleanupsTimeoutable', result)
+        d = self._run('deferRunCleanupsTimeoutable', result)  # type: ignore[call-arg]
         d.addErrback(self._ebGotMaybeTimeout, result)
         return d
 
-    def _ebGotMaybeTimeout(self, failure, result):
+    def _ebGotMaybeTimeout(self, failure: Any, result: Any) -> None:
         result.addError(self, failure)
 
-    def deferRunCleanupsTimeoutable(self):
-        return super().deferRunCleanups(None, self._deferRunCleanupResult)
+    def deferRunCleanupsTimeoutable(self) -> Any:
+        return super().deferRunCleanups(None, self._deferRunCleanupResult)  # type: ignore[misc]
 
 
-def encodeExecutableAndArgs(executable, args, encoding="utf-8"):
+def encodeExecutableAndArgs(
+    executable: str | bytes, args: Sequence[str | bytes], encoding: str = "utf-8"
+) -> tuple[bytes, list[bytes]]:
     """
     Encode executable and arguments from unicode to bytes.
     This avoids a deprecation warning when calling reactor.spawnProcess()
@@ -131,7 +86,7 @@ def encodeExecutableAndArgs(executable, args, encoding="utf-8"):
     if isinstance(executable, str):
         executable = executable.encode(encoding)
 
-    argsBytes = []
+    argsBytes: list[bytes] = []
     for arg in args:
         if isinstance(arg, str):
             arg = arg.encode(encoding)
@@ -140,25 +95,40 @@ def encodeExecutableAndArgs(executable, args, encoding="utf-8"):
     return (executable, argsBytes)
 
 
-def enable_trace(case, trace_exclusions=None, f=sys.stdout):
-    """This function can be called to enable tracing of the execution
-    """
+def enable_trace(
+    case: Any,
+    trace_exclusions: list[str] | None = None,
+    f: Any = sys.stdout,
+) -> None:
+    """This function can be called to enable tracing of the execution"""
     if trace_exclusions is None:
         trace_exclusions = [
-            "twisted", "worker_transition.py", "util/tu", "util/path",
-            "log.py", "/mq/", "/db/", "buildbot/data/", "fake/reactor.py"
+            "twisted",
+            "worker_transition.py",
+            "util/tu",
+            "util/path",
+            "log.py",
+            "/mq/",
+            "/db/",
+            "buildbot/data/",
+            "fake/reactor.py",
         ]
 
     bbbase = os.path.dirname(buildbot.__file__)
     state = {'indent': 0}
 
-    def tracefunc(frame, event, arg):
+    def tracefunc(frame: Any, event: str, arg: Any) -> Any:
         if frame.f_code.co_filename.startswith(bbbase):
             if not any(te in frame.f_code.co_filename for te in trace_exclusions):
                 if event == "call":
                     state['indent'] += 2
-                    print("-" * state['indent'], frame.f_code.co_filename.replace(bbbase, ""),
-                          frame.f_code.co_name, frame.f_code.co_varnames, file=f)
+                    print(
+                        "-" * state['indent'],
+                        frame.f_code.co_filename.replace(bbbase, ""),
+                        frame.f_code.co_name,
+                        frame.f_code.co_varnames,
+                        file=f,
+                    )
                 if event == "return":
                     state['indent'] -= 2
         return tracefunc
@@ -167,16 +137,16 @@ def enable_trace(case, trace_exclusions=None, f=sys.stdout):
     case.addCleanup(sys.settrace, lambda _a, _b, _c: None)
 
 
-class DebugIntegrationLogsMixin:
-
-    def setupDebugIntegrationLogs(self):
+class DebugIntegrationLogsMixin(_DebugIntegrationLogsMixinBase):
+    def setupDebugIntegrationLogs(self) -> None:
         # to ease debugging we display the error logs in the test log
         origAddCompleteLog = BuildStep.addCompleteLog
 
-        def addCompleteLog(self, name, _log):
+        def addCompleteLog(self: Any, name: str, _log: str) -> Any:
             if name.endswith("err.text"):
                 log.msg("got error log!", name, _log)
             return origAddCompleteLog(self, name, _log)
+
         self.patch(BuildStep, "addCompleteLog", addCompleteLog)
 
         if 'BBTRACE' in os.environ:
@@ -184,17 +154,36 @@ class DebugIntegrationLogsMixin:
 
 
 class BuildDictLookAlike:
-
-    """ a class whose instances compares to any build dict that this reporter is supposed to send
+    """a class whose instances compares to any build dict that this reporter is supposed to send
     out"""
 
-    def __init__(self, extra_keys=None, expected_missing_keys=None, **assertions):
+    def __init__(
+        self,
+        extra_keys: list[str] | None = None,
+        expected_missing_keys: list[str] | None = None,
+        **assertions: Any,
+    ) -> None:
         self.keys = [
-            'builder', 'builderid', 'buildid', 'buildrequest', 'buildrequestid',
-            'buildset', 'complete', 'complete_at', 'masterid', 'number',
-            'parentbuild', 'parentbuilder', 'properties', 'results',
-            'started_at', 'state_string', 'url', 'workerid'
-            ]
+            "builder",
+            "builderid",
+            "buildid",
+            "buildrequest",
+            "buildrequestid",
+            "buildset",
+            "complete",
+            "complete_at",
+            "locks_duration_s",
+            "masterid",
+            "number",
+            "parentbuild",
+            "parentbuilder",
+            "properties",
+            "results",
+            "started_at",
+            "state_string",
+            "url",
+            "workerid",
+        ]
         if extra_keys:
             self.keys.extend(extra_keys)
         if expected_missing_keys is not None:
@@ -203,18 +192,23 @@ class BuildDictLookAlike:
         self.keys.sort()
         self.assertions = assertions
 
-    def __eq__(self, b):
+    def __eq__(self, b: Any) -> bool:
         if sorted(b.keys()) != self.keys:
-            print(set(b.keys()) - set(self.keys))
-            print(set(self.keys) - set(b.keys()))
-            return False
+            raise AssertionError(
+                'BuildDictLookAlike is not equal to build: '
+                f'Extra keys: {set(b.keys()) - set(self.keys)} '
+                f'Missing keys: {set(self.keys) - set(b.keys())}'
+            )
         for k, v in self.assertions.items():
             if b[k] != v:
                 return False
         return True
 
-    def __ne__(self, b):
-        return not (self == b)
+    def __hash__(self) -> int:
+        return hash((self.keys, self.assertions))
 
-    def __repr__(self):
+    def __ne__(self, b: Any) -> bool:
+        return not self == b
+
+    def __repr__(self) -> str:
         return "{ any build }"

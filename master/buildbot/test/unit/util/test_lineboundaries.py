@@ -14,143 +14,141 @@
 # Copyright Buildbot Team Members
 
 
-from twisted.internet import defer
-from twisted.internet import reactor
+from __future__ import annotations
+
 from twisted.python import log
 from twisted.trial import unittest
 
 from buildbot.util import lineboundaries
 
 
-class LBF(unittest.TestCase):
+class TestLineBoundaryFinder(unittest.TestCase):
+    def setUp(self) -> None:
+        self.lbf = lineboundaries.LineBoundaryFinder()
 
-    def setUp(self):
-        self.callbacks = []
-        self.lbf = lineboundaries.LineBoundaryFinder(self._callback)
+    def test_already_terminated(self) -> None:
+        res = self.lbf.append('abcd\ndefg\n')
+        self.assertEqual(res, 'abcd\ndefg\n')
+        res = self.lbf.append('xyz\n')
+        self.assertEqual(res, 'xyz\n')
+        res = self.lbf.flush()
+        self.assertEqual(res, None)
 
-    def _callback(self, wholeLines):
-        self.assertEqual(wholeLines[-1], '\n', 'got %r' % (wholeLines))
-        self.callbacks.append(wholeLines)
-        d = defer.Deferred()
-        reactor.callLater(0, d.callback, None)
-        return d
+    def test_partial_line(self) -> None:
+        res = self.lbf.append('hello\nworld')
+        self.assertEqual(res, 'hello\n')
+        res = self.lbf.flush()
+        self.assertEqual(res, 'world\n')
 
-    def assertCallbacks(self, callbacks):
-        self.assertEqual(self.callbacks, callbacks)
-        self.callbacks = []
+    def test_empty_appends(self) -> None:
+        res = self.lbf.append('hello ')
+        self.assertEqual(res, None)
 
-    # tests
+        res = self.lbf.append('')
+        self.assertEqual(res, None)
 
-    @defer.inlineCallbacks
-    def test_already_terminated(self):
-        yield self.lbf.append('abcd\ndefg\n')
-        self.assertCallbacks(['abcd\ndefg\n'])
-        yield self.lbf.append('xyz\n')
-        self.assertCallbacks(['xyz\n'])
-        yield self.lbf.flush()
-        self.assertCallbacks([])
+        res = self.lbf.append('world\n')
+        self.assertEqual(res, 'hello world\n')
 
-    @defer.inlineCallbacks
-    def test_partial_line(self):
-        for c in "hello\nworld":
-            yield self.lbf.append(c)
-        self.assertCallbacks(['hello\n'])
-        yield self.lbf.flush()
-        self.assertCallbacks(['world\n'])
+        res = self.lbf.append('')
+        self.assertEqual(res, None)
 
-    @defer.inlineCallbacks
-    def test_empty_appends(self):
-        yield self.lbf.append('hello ')
-        yield self.lbf.append('')
-        yield self.lbf.append('world\n')
-        yield self.lbf.append('')
-        self.assertCallbacks(['hello world\n'])
+    def test_embedded_newlines(self) -> None:
+        res = self.lbf.append('hello, ')
+        self.assertEqual(res, None)
 
-    @defer.inlineCallbacks
-    def test_embedded_newlines(self):
-        yield self.lbf.append('hello, ')
-        self.assertCallbacks([])
-        yield self.lbf.append('cruel\nworld')
-        self.assertCallbacks(['hello, cruel\n'])
-        yield self.lbf.flush()
-        self.assertCallbacks(['world\n'])
+        res = self.lbf.append('cruel\nworld')
+        self.assertEqual(res, 'hello, cruel\n')
 
-    @defer.inlineCallbacks
-    def test_windows_newlines_folded(self):
+        res = self.lbf.flush()
+        self.assertEqual(res, 'world\n')
+
+    def test_windows_newlines_folded(self) -> None:
         r"Windows' \r\n is treated as and converted to a newline"
-        yield self.lbf.append('hello, ')
-        self.assertCallbacks([])
-        yield self.lbf.append('cruel\r\n\r\nworld')
-        self.assertCallbacks(['hello, cruel\n\n'])
-        yield self.lbf.flush()
-        self.assertCallbacks(['world\n'])
+        res = self.lbf.append('hello, ')
+        self.assertEqual(res, None)
 
-    @defer.inlineCallbacks
-    def test_bare_cr_folded(self):
+        res = self.lbf.append('cruel\r\n\r\nworld')
+        self.assertEqual(res, 'hello, cruel\n\n')
+
+        res = self.lbf.flush()
+        self.assertEqual(res, 'world\n')
+
+    def test_bare_cr_folded(self) -> None:
         r"a bare \r is treated as and converted to a newline"
-        yield self.lbf.append('1%\r5%\r15%\r100%\nfinished')
-        yield self.lbf.flush()
-        self.assertCallbacks(['1%\n5%\n15%\n100%\n', 'finished\n'])
+        self.lbf.append('1%\r5%\r15%\r100%\nfinished')
+        res = self.lbf.flush()
+        self.assertEqual(res, 'finished\n')
 
-    @defer.inlineCallbacks
-    def test_backspace_folded(self):
+    def test_backspace_folded(self) -> None:
         r"a lot of \b is treated as and converted to a newline"
-        yield self.lbf.append('1%\b\b5%\b\b15%\b\b\b100%\nfinished')
-        yield self.lbf.flush()
-        self.assertCallbacks(['1%\n5%\n15%\n100%\n', 'finished\n'])
+        self.lbf.append('1%\b\b5%\b\b15%\b\b\b100%\nfinished')
+        res = self.lbf.flush()
+        self.assertEqual(res, 'finished\n')
 
-    @defer.inlineCallbacks
-    def test_mixed_consecutive_newlines(self):
+    def test_mixed_consecutive_newlines(self) -> None:
         r"mixing newline styles back-to-back doesn't collapse them"
-        yield self.lbf.append('1\r\n\n\r')
-        self.assertCallbacks(['1\n\n'])  # last \r is delayed until flush
-        yield self.lbf.append('2\n\r\n')
-        self.assertCallbacks(['\n2\n\n'])
+        res = self.lbf.append('1\r\n\n\r')
+        self.assertEqual(res, '1\n\n')
 
-    @defer.inlineCallbacks
-    def test_split_newlines(self):
+        res = self.lbf.append('2\n\r\n')
+        self.assertEqual(res, '\n2\n\n')
+
+    def test_split_newlines(self) -> None:
         r"multi-character newlines, split across chunks, are converted"
         input = 'a\nb\r\nc\rd\n\re'
+        result = []
         for splitpoint in range(1, len(input) - 1):
             a, b = input[:splitpoint], input[splitpoint:]
-            yield self.lbf.append(a)
-            yield self.lbf.append(b)
-            yield self.lbf.flush()
-            res = ''.join(self.callbacks)
-            log.msg('feeding %r, %r gives %r' % (a, b, res))
+            result.append(self.lbf.append(a))
+            result.append(self.lbf.append(b))
+            result.append(self.lbf.flush())
+
+            result = [e for e in result if e is not None]
+            res = ''.join(result)  # type: ignore[arg-type]
+
+            log.msg(f'feeding {a!r}, {b!r} gives {res!r}')
             self.assertEqual(res, 'a\nb\nc\nd\n\ne\n')
-            self.callbacks = []
+            result.clear()
 
-    @defer.inlineCallbacks
-    def test_split_terminal_control(self):
+    def test_split_terminal_control(self) -> None:
         """terminal control characters are converted"""
-        yield self.lbf.append('1234\033[u4321')
-        yield self.lbf.flush()
-        self.assertCallbacks(['1234\n', '4321\n'])
-        yield self.lbf.append('1234\033[1;2H4321')
-        yield self.lbf.flush()
-        self.assertCallbacks(['1234\n', '4321\n'])
-        yield self.lbf.append('1234\033[1;2f4321')
-        yield self.lbf.flush()
-        self.assertCallbacks(['1234\n', '4321\n'])
+        res = self.lbf.append('1234\033[u4321')
+        self.assertEqual(res, '1234\n')
 
-    @defer.inlineCallbacks
-    def test_long_lines(self):
+        res = self.lbf.flush()
+        self.assertEqual(res, '4321\n')
+
+        res = self.lbf.append('1234\033[1;2H4321')
+        self.assertEqual(res, '1234\n')
+
+        res = self.lbf.flush()
+        self.assertEqual(res, '4321\n')
+
+        res = self.lbf.append('1234\033[1;2f4321')
+        self.assertEqual(res, '1234\n')
+
+        res = self.lbf.flush()
+        self.assertEqual(res, '4321\n')
+
+    def test_long_lines(self) -> None:
         """long lines are split"""
-        for i in range(4):
-            yield self.lbf.append('12' * 1000)
+        res = []
+        for _ in range(4):
+            res.append(self.lbf.append('12' * 1000))
+        res = [e for e in res if e is not None]
+        res = ''.join(res)  # type: ignore[assignment,arg-type]
         # a split at 4096 + the remaining chars
-        self.assertCallbacks(['12' * 2048 + '\n' + '12' * 952 + '\n'])
+        self.assertEqual(res, '12' * 2048 + '\n' + '12' * 952 + '\n')
 
-    @defer.inlineCallbacks
-    def test_huge_lines(self):
+    def test_huge_lines(self) -> None:
         """huge lines are split"""
-        yield self.lbf.append('12' * 32768)
-        yield self.lbf.flush()
-        self.assertCallbacks([('12' * 2048 + '\n') * 16])
+        res = []
+        res.append(self.lbf.append('12' * 32768))
+        res.append(self.lbf.flush())
+        res = [e for e in res if e is not None]
+        self.assertEqual(res, [('12' * 2048 + '\n') * 16])
 
-    @defer.inlineCallbacks
-    def test_empty_flush(self):
-        yield self.lbf.flush()
-
-        self.assertEqual(self.callbacks, [])
+    def test_empty_flush(self) -> None:
+        res = self.lbf.flush()
+        self.assertEqual(res, None)

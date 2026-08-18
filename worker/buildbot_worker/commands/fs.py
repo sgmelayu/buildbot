@@ -12,102 +12,121 @@
 # Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
 # Copyright Buildbot Team Members
-
-from __future__ import absolute_import
-from __future__ import print_function
+from __future__ import annotations
 
 import glob
 import os
+import platform
 import shutil
 import sys
+from typing import TYPE_CHECKING
+from typing import Any
 
 from twisted.internet import defer
 from twisted.internet import threads
-from twisted.python import log
 from twisted.python import runtime
 
 from buildbot_worker import runprocess
 from buildbot_worker.commands import base
 from buildbot_worker.commands import utils
 
+if TYPE_CHECKING:
+    from twisted.internet.defer import Deferred
+    from twisted.python.failure import Failure
+
+    from buildbot_worker.util.twisted import InlineCallbacksType
+
 
 class MakeDirectory(base.Command):
-
     header = "mkdir"
 
-    # args['dir'] is relative to Builder directory, and is required.
-    requiredArgs = ['dir']
+    # args['paths'] specifies the absolute paths of directories to create
+    requiredArgs = ['paths']
 
-    def start(self):
-        dirname = os.path.join(self.builder.basedir, self.args['dir'])
+    def start(self) -> None:
+        paths = self.args['paths']
 
-        try:
-            if not os.path.isdir(dirname):
-                os.makedirs(dirname)
-            self.sendStatus({'rc': 0})
-        except OSError as e:
-            log.msg("MakeDirectory {0} failed: {1}".format(dirname, e))
-            self.sendStatus(
-                {'header': '{0}: {1}: {2}'.format(self.header, e.strerror, dirname)})
-            self.sendStatus({'rc': e.errno})
+        for dirname in paths:
+            try:
+                if not os.path.isdir(dirname):
+                    os.makedirs(dirname)
+            except OSError as e:
+                self.log_msg(f"MakeDirectory {dirname} failed: {e}")
+                self.sendStatus([
+                    ('header', f'{self.header}: {e.strerror}: {dirname}'),
+                    ('rc', e.errno),
+                ])
+                return
+        self.sendStatus([('rc', 0)])
 
 
 class RemoveDirectory(base.Command):
-
     header = "rmdir"
 
-    # args['dir'] is relative to Builder directory, and is required.
-    requiredArgs = ['dir']
+    # args['paths'] specifies the absolute paths of directories or files to remove
+    requiredArgs = ['paths']
 
-    def setup(self, args):
+    def setup(self, args: dict[str, Any]) -> None:
         self.logEnviron = args.get('logEnviron', True)
 
     @defer.inlineCallbacks
-    def start(self):
+    def start(self) -> InlineCallbacksType[None]:
         args = self.args
-        dirnames = args['dir']
+        dirnames = args['paths']
 
         self.timeout = args.get('timeout', 120)
         self.maxTime = args.get('maxTime', None)
         self.rc = 0
-        if isinstance(dirnames, list):
-            assert dirnames
-            for dirname in dirnames:
-                res = yield self.removeSingleDir(dirname)
-                # Even if single removal of single file/dir consider it as
-                # failure of whole command, but continue removing other files
-                # Send 'rc' to master to handle failure cases
-                if res != 0:
-                    self.rc = res
-        else:
-            self.rc = yield self.removeSingleDir(dirnames)
 
-        self.sendStatus({'rc': self.rc})
+        assert dirnames
+        for path in dirnames:
+            res = yield self.removeSingleDir(path)
+            # Even if single removal of single file/dir consider it as
+            # failure of whole command, but continue removing other files
+            # Send 'rc' to master to handle failure cases
+            if res != 0:
+                self.rc = res
 
-    def removeSingleDir(self, dirname):
-        self.dir = os.path.join(self.builder.basedir, dirname)
+        self.sendStatus([('rc', self.rc)])
+
+    def removeSingleDir(self, path: str) -> Deferred[int]:
         if runtime.platformType != "posix":
-            d = threads.deferToThread(utils.rmdirRecursive, self.dir)
+            d = threads.deferToThread(utils.rmdirRecursive, path)
 
-            def cb(_):
+            def cb(_: Any) -> int:
                 return 0  # rc=0
 
-            def eb(f):
-                self.sendStatus(
-                    {'header': 'exception from rmdirRecursive\n' + f.getTraceback()})
+            def eb(f: Failure) -> int:
+                self.sendStatus([('header', 'exception from rmdirRecursive\n' + f.getTraceback())])
                 return -1  # rc=-1
+
             d.addCallbacks(cb, eb)
         else:
-            d = self._clobber(None)
+            d = self._clobber(None, path)
 
         return d
 
     @defer.inlineCallbacks
-    def _clobber(self, dummy, chmodDone=False):
-        command = ["rm", "-rf", self.dir]
-        c = runprocess.RunProcess(self.builder, command, self.builder.basedir,
-                                  sendRC=0, timeout=self.timeout, maxTime=self.maxTime,
-                                  logEnviron=self.logEnviron, usePTY=False)
+    def _clobber(
+        self,
+        dummy: int | None,
+        path: str,
+        chmodDone: bool = False,
+    ) -> InlineCallbacksType[int]:
+        command = ["rm", "-rf", path]
+
+        c = runprocess.RunProcess(
+            self.command_id,
+            command,
+            self.protocol_command.worker_basedir,
+            self.protocol_command.unicode_encoding,
+            self.protocol_command.send_update,
+            sendRC=0,
+            timeout=self.timeout,
+            maxTime=self.maxTime,
+            logEnviron=self.logEnviron,
+            usePTY=False,
+        )
 
         self.command = c
         # sendRC=0 means the rm command will send stdout/stderr to the
@@ -118,82 +137,103 @@ class RemoveDirectory(base.Command):
         # permissions. So if we get a failure, we attempt to chmod suitable
         # permissions and re-try the rm -rf.
         if not chmodDone:
-            rc = yield self._tryChmod(rc)
-        defer.returnValue(rc)
+            rc = yield self._tryChmod(rc, path)
+        return rc
 
     @defer.inlineCallbacks
-    def _tryChmod(self, rc):
+    def _tryChmod(self, rc: int, path: str) -> InlineCallbacksType[int]:
         assert isinstance(rc, int)
         if rc == 0:
-            defer.returnValue(0)
-            return  # pragma: no cover
+            return 0
         # Attempt a recursive chmod and re-try the rm -rf after.
 
-        command = ["chmod", "-Rf", "u+rwx",
-                   os.path.join(self.builder.basedir, self.dir)]
+        command = ["chmod", "-Rf", "u+rwx", path]
         if sys.platform.startswith('freebsd'):
             # Work around a broken 'chmod -R' on FreeBSD (it tries to recurse into a
             # directory for which it doesn't have permission, before changing that
             # permission) by running 'find' instead
-            command = ["find", os.path.join(self.builder.basedir, self.dir),
-                       '-exec', 'chmod', 'u+rwx', '{}', ';']
-        c = runprocess.RunProcess(self.builder, command, self.builder.basedir,
-                                  sendRC=0, timeout=self.timeout, maxTime=self.maxTime,
-                                  logEnviron=self.logEnviron, usePTY=False)
+            command = ["find", path, '-exec', 'chmod', 'u+rwx', '{}', ';']
+
+        c = runprocess.RunProcess(
+            self.command_id,
+            command,
+            self.protocol_command.worker_basedir,
+            self.protocol_command.unicode_encoding,
+            self.protocol_command.send_update,
+            sendRC=0,
+            timeout=self.timeout,
+            maxTime=self.maxTime,
+            logEnviron=self.logEnviron,
+            usePTY=False,
+        )
 
         self.command = c
         rc = yield c.start()
-        rc = yield self._clobber(rc, True)
-        defer.returnValue(rc)
+        rc = yield self._clobber(rc, path, True)
+        return rc
 
 
 class CopyDirectory(base.Command):
-
     header = "cpdir"
 
-    # args['todir'] and args['fromdir'] are relative to Builder directory, and
+    # args['to_path'] and args['from_path'] are relative to Builder directory, and
     # are required.
-    requiredArgs = ['todir', 'fromdir']
+    requiredArgs = ['to_path', 'from_path']
 
-    def setup(self, args):
+    def setup(self, args: dict[str, Any]) -> None:
         self.logEnviron = args.get('logEnviron', True)
 
-    def start(self):
+    def start(self) -> Deferred[None]:
         args = self.args
 
-        fromdir = os.path.join(self.builder.basedir, self.args['fromdir'])
-        todir = os.path.join(self.builder.basedir, self.args['todir'])
+        from_path = self.args['from_path']
+        to_path = self.args['to_path']
 
         self.timeout = args.get('timeout', 120)
         self.maxTime = args.get('maxTime', None)
 
         if runtime.platformType != "posix":
-            d = threads.deferToThread(shutil.copytree, fromdir, todir)
+            d = threads.deferToThread(shutil.copytree, from_path, to_path)
 
-            def cb(_):
+            def cb(_: Any) -> int:
                 return 0  # rc=0
 
-            def eb(f):
-                self.sendStatus(
-                    {'header': 'exception from copytree\n' + f.getTraceback()})
+            def eb(f: Failure) -> int:
+                self.sendStatus([('header', 'exception from copytree\n' + f.getTraceback())])
                 return -1  # rc=-1
+
             d.addCallbacks(cb, eb)
 
             @d.addCallback
-            def send_rc(rc):
-                self.sendStatus({'rc': rc})
-        else:
-            if not os.path.exists(os.path.dirname(todir)):
-                os.makedirs(os.path.dirname(todir))
-            if os.path.exists(todir):
-                # I don't think this happens, but just in case..
-                log.msg(("cp target '{0}' already exists -- cp will not do what you think!"
-                         ).format(todir))
+            def send_rc(rc: int) -> None:
+                self.sendStatus([('rc', rc)])
 
-            command = ['cp', '-R', '-P', '-p', '-v', fromdir, todir]
-            c = runprocess.RunProcess(self.builder, command, self.builder.basedir,
-                                      sendRC=False, timeout=self.timeout, maxTime=self.maxTime,
-                                      logEnviron=self.logEnviron, usePTY=False)
+        else:
+            if not os.path.exists(os.path.dirname(to_path)):
+                os.makedirs(os.path.dirname(to_path))
+            if os.path.exists(to_path):
+                # I don't think this happens, but just in case..
+                self.log_msg(
+                    f"cp target '{to_path}' already exists -- cp will not do what you think!"
+                )
+
+            if platform.system().lower().find('solaris') >= 0 or platform.system().lower() == 'aix':
+                command = ['cp', '-R', '-P', '-p', from_path, to_path]
+            else:
+                command = ['cp', '-R', '-P', '-p', '-v', from_path, to_path]
+
+            c = runprocess.RunProcess(
+                self.command_id,
+                command,
+                self.protocol_command.worker_basedir,
+                self.protocol_command.unicode_encoding,
+                self.protocol_command.send_update,
+                sendRC=False,
+                timeout=self.timeout,
+                maxTime=self.maxTime,
+                logEnviron=self.logEnviron,
+                usePTY=False,
+            )
             self.command = c
             d = c.start()
             d.addCallback(self._abandonOnFailure)
@@ -203,88 +243,80 @@ class CopyDirectory(base.Command):
 
 
 class StatFile(base.Command):
-
     header = "stat"
 
-    # args['file'] is relative to Builder directory, and is required.
-    requireArgs = ['file']
+    # args['path'] absolute path of a file
+    requireArgs = ['path']
 
-    def start(self):
-        filename = os.path.join(
-            self.builder.basedir, self.args.get('workdir', ''), self.args['file'])
+    def start(self) -> None:
+        filename = self.args['path']
 
         try:
             stat = os.stat(filename)
-            self.sendStatus({'stat': tuple(stat)})
-            self.sendStatus({'rc': 0})
+            self.sendStatus([('stat', tuple(stat)), ('rc', 0)])
         except OSError as e:
-            log.msg("StatFile {0} failed: {1}".format(filename, e))
-            self.sendStatus(
-                {'header': '{0}: {1}: {2}'.format(self.header, e.strerror, filename)})
-            self.sendStatus({'rc': e.errno})
+            self.log_msg(f"StatFile {filename} failed: {e}")
+            self.sendStatus([
+                ('header', f'{self.header}: {e.strerror}: {filename}'),
+                ('rc', e.errno),
+            ])
 
 
 class GlobPath(base.Command):
-
     header = "glob"
 
-    # args['path'] is relative to Builder directory, and is required.
+    # args['path'] shell-style path specification of a pattern
     requiredArgs = ['path']
 
-    def start(self):
-        pathname = os.path.join(self.builder.basedir, self.args['path'])
+    def start(self) -> None:
+        pathname = self.args['path']
 
         try:
-            # recursive matching is only support in python3.5+
-            if sys.version_info[:2] >= (3, 5):
-                files = glob.glob(pathname, recursive=True)
-            else:
-                files = glob.glob(pathname)
-            self.sendStatus({'files': files})
-            self.sendStatus({'rc': 0})
+            files = glob.glob(pathname, recursive=True)
+            self.sendStatus([('files', files), ('rc', 0)])
         except OSError as e:
-            log.msg("GlobPath {0} failed: {1}".format(pathname, e))
-            self.sendStatus(
-                {'header': '{0}: {1}: {2}'.format(self.header, e.strerror, pathname)})
-            self.sendStatus({'rc': e.errno})
+            self.log_msg(f"GlobPath {pathname} failed: {e}")
+            self.sendStatus([
+                ('header', f'{self.header}: {e.strerror}: {pathname}'),
+                ('rc', e.errno),
+            ])
 
 
 class ListDir(base.Command):
-
     header = "listdir"
 
-    # args['dir'] is relative to Builder directory, and is required.
-    requireArgs = ['dir']
+    # args['path'] absolute path of the directory to list
+    requireArgs = ['path']
 
-    def start(self):
-        dirname = os.path.join(self.builder.basedir, self.args['dir'])
+    def start(self) -> None:
+        dirname = self.args['path']
 
         try:
             files = os.listdir(dirname)
-            self.sendStatus({'files': files})
-            self.sendStatus({'rc': 0})
+            self.sendStatus([('files', files), ('rc', 0)])
         except OSError as e:
-            log.msg("ListDir {0} failed: {1}".format(dirname, e))
-            self.sendStatus(
-                {'header': '{0}: {1}: {2}'.format(self.header, e.strerror, dirname)})
-            self.sendStatus({'rc': e.errno})
+            self.log_msg(f"ListDir {dirname} failed: {e}")
+            self.sendStatus([
+                ('header', f'{self.header}: {e.strerror}: {dirname}'),
+                ('rc', e.errno),
+            ])
 
 
 class RemoveFile(base.Command):
-
     header = "rmfile"
 
-    # args['path'] is relative to Builder directory, and is required.
+    # args['path'] absolute path of a file to delete
     requiredArgs = ['path']
 
-    def start(self):
-        pathname = os.path.join(self.builder.basedir, self.args['path'])
+    def start(self) -> None:
+        pathname = self.args['path']
 
         try:
             os.remove(pathname)
-            self.sendStatus({'rc': 0})
+            self.sendStatus([('rc', 0)])
         except OSError as e:
-            log.msg("remove file {0} failed: {1}".format(pathname, e))
-            self.sendStatus(
-                {'header': '{0}: {1}: {2}'.format(self.header, e.strerror, pathname)})
-            self.sendStatus({'rc': e.errno})
+            self.log_msg(f"remove file {pathname} failed: {e}")
+            self.sendStatus([
+                ('header', f'{self.header}: {e.strerror}: {pathname}'),
+                ('rc', e.errno),
+            ])

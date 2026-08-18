@@ -5,19 +5,21 @@ import re
 import sys
 
 spaces = re.compile("^ +")
-for fn in sys.argv[1:]:
+
+
+def indent_file(fn: str) -> None:
     lines = []
-    with open(fn, 'r') as f:
+    with open(fn) as f:
         for line in f:
             lines.append(line)
 
-    def getIndent(i):
+    def getIndent(i: int) -> int:
         res = spaces.match(lines[i])
         if res is None:
             return 0
         return len(res.group(0))
 
-    def IndentBlock(i, numspaces):
+    def IndentBlock(i: int, numspaces: int) -> None:
         initIndent = getIndent(i)
         while i < len(lines) and initIndent <= getIndent(i):
             lines[i] = " " * numspaces + lines[i]
@@ -31,3 +33,8 @@ for fn in sys.argv[1:]:
     with open(fn, 'w') as f:
         for line in lines:
             f.write(line)
+
+
+def main() -> None:
+    for fn in sys.argv[1:]:
+        indent_file(fn)

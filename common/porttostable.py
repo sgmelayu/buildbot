@@ -1,7 +1,3 @@
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import os
 from subprocess import CalledProcessError
 from subprocess import check_output
@@ -15,7 +11,9 @@ with open(os.path.expanduser('~/.config/hub')) as f:
     s.auth = config['user'], config['oauth_token']
 
 os.system("git fetch --all")
-r = s.get("https://api.github.com/search/issues?q=label:\"port%20to%20stable\"+repo:buildbot/buildbot") # noqa pylint: disable=line-too-long
+r = s.get(
+    "https://api.github.com/search/issues?q=label:\"port%20to%20stable\"+repo:buildbot/buildbot"
+)
 to_port = r.json()
 summary = ""
 for pr in to_port['items']:

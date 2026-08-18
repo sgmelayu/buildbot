@@ -13,10 +13,16 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
 import io
 import json
 import random
 import shlex
+from typing import TYPE_CHECKING
+from typing import Any
+from typing import ClassVar
+from typing import cast
 
 from twisted.internet import defer
 from twisted.internet import reactor
@@ -43,25 +49,31 @@ from buildbot.util import httpclientservice
 from buildbot.util import service
 from buildbot.util import unicode2bytes
 
+if TYPE_CHECKING:
+    from collections.abc import Generator
+    from collections.abc import Sequence
+
+    from twisted.internet.interfaces import IReactorTime
+
+    from buildbot.util.twisted import InlineCallbacksType
+
 
 class TelegramChannel(Channel):
-
-    def __init__(self, bot, channel):
+    def __init__(self, bot: Any, channel: dict[str, Any]) -> None:
         assert isinstance(channel, dict), "channel must be a dict provided by Telegram API"
         super().__init__(bot, channel['id'])
         self.chat_info = channel
 
     @defer.inlineCallbacks
-    def list_notified_events(self):
+    def list_notified_events(self) -> InlineCallbacksType[None]:
         if self.notify_events:
-            yield self.send("The following events are being notified:\n{}"
-                            .format("\n".join(sorted(
-                                    "🔔 **{}**".format(n) for n in self.notify_events))))
+            notified_events = "\n".join(sorted(f"🔔 **{n}**" for n in self.notify_events))
+            yield self.send(f"The following events are being notified:\n{notified_events}")
         else:
             yield self.send("🔕 No events are being notified.")
 
 
-def collect_fields(fields):
+def collect_fields(fields: list[dict[str, Any]]) -> Generator[dict[str, Any], None, None]:
     for field in fields:
         if field['fullName']:
             yield field
@@ -70,55 +82,57 @@ def collect_fields(fields):
 
 
 class TelegramContact(Contact):
-
-    def __init__(self, user, channel=None):
+    def __init__(self, user: dict[str, Any], channel: Any = None) -> None:
         assert isinstance(user, dict), "user must be a dict provided by Telegram API"
         self.user_info = user
         super().__init__(user['id'], channel)
-        self.template = None
+        self.template: str | None = None
 
     @property
-    def chat_id(self):
+    def chat_id(self) -> Any:
         return self.channel.id
 
     @property
-    def user_full_name(self):
-        fullname = " ".join((self.user_info['first_name'],
-                             self.user_info.get('last_name', ''))).strip()
+    def user_full_name(self) -> str:
+        fullname = " ".join((
+            self.user_info['first_name'],
+            self.user_info.get('last_name', ''),
+        )).strip()
         return fullname
 
     @property
-    def user_name(self):
+    def user_name(self) -> str:
         return self.user_info['first_name']
 
-    def describeUser(self):
+    def describeUser(self) -> str:
         user = self.user_full_name
         try:
-            user += ' (@{})'.format(self.user_info['username'])
+            user += f" (@{self.user_info['username']})"
         except KeyError:
             pass
 
         if not self.is_private_chat:
             chat_title = self.channel.chat_info.get('title')
             if chat_title:
-                user += " on '{}'".format(chat_title)
+                user += f" on '{chat_title}'"
 
         return user
 
     ACCESS_DENIED_MESSAGES = [
         "🧙‍♂️ You shall not pass! 👹",
-        "😨 Oh NO! You are simply not allowed to to this! 😢",
+        "😨 Oh NO! You are simply not allowed to this! 😢",
         "⛔ You cannot do this. Better go outside and relax... 🌳",
         "⛔ ACCESS DENIED! This incident has ben reported to NSA, KGB, and George Soros! 🕵",
         "🚫 Unauthorized access detected! Your device will explode in 3... 2... 1... 💣",
         "☢ Radiation level too high! Continuation of the procedure forbidden! 🛑",
     ]
 
-    def access_denied(self, *args, tmessage, **kwargs):
+    def access_denied(self, *args: Any, tmessage: dict[str, Any], **kwargs: Any) -> None:
         self.send(
-            random.choice(self.ACCESS_DENIED_MESSAGES), reply_to_message_id=tmessage['message_id'])
+            random.choice(self.ACCESS_DENIED_MESSAGES), reply_to_message_id=tmessage['message_id']
+        )
 
-    def query_button(self, caption, payload):
+    def query_button(self, caption: str, payload: Any) -> dict[str, Any]:
         if isinstance(payload, str) and len(payload) < 64:
             return {'text': caption, 'callback_data': payload}
         key = hash(repr(payload))
@@ -133,25 +147,29 @@ class TelegramContact(Contact):
         return {'text': caption, 'callback_data': key}
 
     @defer.inlineCallbacks
-    def command_START(self, args, **kwargs):
-        yield self.command_HELLO(args)
-        reactor.callLater(0.2, self.command_HELP, '')
+    def command_START(self, args: Any, **kwargs: Any) -> InlineCallbacksType[None]:
+        self.bot.post(
+            '/setChatMenuButton',
+            json={'chat_id': self.channel.id, 'menu_button': {'type': 'commands'}},
+        )
+        yield self.command_HELLO(args)  # type: ignore[func-returns-value]
+        cast("IReactorTime", reactor).callLater(0.2, self.command_HELP, '')
 
-    def command_NAY(self, args, tmessage, **kwargs):
+    def command_NAY(self, args: Any, tmessage: dict[str, Any], **kwargs: Any) -> None:
         """forget the current command"""
         replied_message = tmessage.get('reply_to_message')
         if replied_message:
             if 'reply_markup' in replied_message:
-                self.bot.edit_keyboard(self.channel.id,
-                                       replied_message['message_id'])
+                self.bot.edit_keyboard(self.channel.id, replied_message['message_id'])
         if self.is_private_chat:
             self.send("Never mind...")
         else:
-            self.send("Never mind, {}...".format(self.user_name))
-    command_NAY.usage = "nay - never mind the command we are currently discussing"
+            self.send(f"Never mind, {self.user_name}...")
+
+    command_NAY.usage = "nay - never mind the command we are currently discussing"  # type: ignore[attr-defined]
 
     @classmethod
-    def describe_commands(cls):
+    def get_commands(cls) -> list[tuple[str, str]]:
         commands = cls.build_commands()
         response = []
         for command in commands:
@@ -161,11 +179,15 @@ class TelegramContact(Contact):
             doc = getattr(meth, '__doc__', None)
             if not doc:
                 doc = command
-            response.append("{} - {}".format(command, doc))
+            response.append((command, doc))
         return response
 
+    @classmethod
+    def describe_commands(cls) -> list[str]:
+        return [f"{command} - {doc}" for command, doc in cls.get_commands()]
+
     @Contact.overrideCommand
-    def command_COMMANDS(self, args, **kwargs):
+    def command_COMMANDS(self, args: Any, **kwargs: Any) -> None:
         if args.lower() == 'botfather':
             response = self.describe_commands()
             if response:
@@ -175,31 +197,35 @@ class TelegramContact(Contact):
         return None
 
     @defer.inlineCallbacks
-    def command_GETID(self, args, **kwargs):
+    def command_GETID(self, args: Any, **kwargs: Any) -> InlineCallbacksType[None]:
         """get user and chat ID"""
         if self.is_private_chat:
-            self.send("Your ID is {}.".format(self.user_id))
+            self.send(f"Your ID is `{self.user_id}`.")
         else:
-            yield self.send("{}, your ID is {}.".format(self.user_name, self.user_id))
-            self.send("This {} ID is {}.".format(self.channel.chat_info.get('type', "group"),
-                                                 self.chat_id))
-    command_GETID.usage = "getid - get user and chat ID that can be put in the master " \
-                          "configuration file"
+            yield self.send(f"{self.user_name}, your ID is `{self.user_id}`.")
+            self.send(f'This {self.channel.chat_info.get("type", "group")} ID is `{self.chat_id}`.')
+
+    command_GETID.usage = (  # type: ignore[attr-defined]
+        "getid - get user and chat ID that can be put in the master configuration file"
+    )
 
     @defer.inlineCallbacks
     @Contact.overrideCommand
-    def command_LIST(self, args, **kwargs):
+    def command_LIST(self, args: Any, **kwargs: Any) -> InlineCallbacksType[None]:
         args = self.splitArgs(args)
         if not args:
             keyboard = [
-                [self.query_button("👷️ Builders", '/list builders'),
-                 self.query_button("👷️ (including old ones)", '/list all builders')],
-                [self.query_button("⚙ Workers", '/list workers'),
-                 self.query_button("⚙ (including old ones)", '/list all workers')],
+                [
+                    self.query_button("👷️ Builders", '/list builders'),
+                    self.query_button("👷️ (including old ones)", '/list all builders'),
+                ],
+                [
+                    self.query_button("⚙ Workers", '/list workers'),
+                    self.query_button("⚙ (including old ones)", '/list all workers'),
+                ],
                 [self.query_button("📄 Changes (last 10)", '/list changes')],
             ]
-            self.send("What do you want to list?",
-                      reply_markup={'inline_keyboard': keyboard})
+            self.send("What do you want to list?", reply_markup={'inline_keyboard': keyboard})
             return
 
         all = False
@@ -215,8 +241,9 @@ class TelegramContact(Contact):
             pass
 
         if not args:
-            raise UsageError("Try '" + self.bot.commandPrefix +
-                             "list [all|N] builders|workers|changes'.")
+            raise UsageError(
+                "Try '" + self.bot.commandPrefix + "list [all|N] builders|workers|changes'."
+            )
 
         if args[0] == 'builders':
             bdicts = yield self.bot.getAllBuilders()
@@ -225,9 +252,9 @@ class TelegramContact(Contact):
             response = ["I found the following **builders**:"]
             for bdict in bdicts:
                 if bdict['builderid'] in online_builderids:
-                    response.append("`{}`".format(bdict['name']))
+                    response.append(f"`{bdict['name']}`")
                 elif all:
-                    response.append("`{}` ❌".format(bdict['name']))
+                    response.append(f"`{bdict['name']}` ❌")
             self.send('\n'.join(response))
 
         elif args[0] == 'workers':
@@ -236,15 +263,14 @@ class TelegramContact(Contact):
             response = ["I found the following **workers**:"]
             for worker in workers:
                 if worker['configured_on']:
-                    response.append("`{}`".format(worker['name']))
+                    response.append(f"`{worker['name']}`")
                     if not worker['connected_to']:
                         response[-1] += " ⚠️"
                 elif all:
-                    response.append("`{}` ❌".format(worker['name']))
+                    response.append(f"`{worker['name']}` ❌")
             self.send('\n'.join(response))
 
         elif args[0] == 'changes':
-
             wait_message = yield self.send("⏳ Getting your changes...")
 
             if all:
@@ -253,13 +279,17 @@ class TelegramContact(Contact):
                 num = len(changes)
                 if num > 50:
                     keyboard = [
-                        [self.query_button("‼ Yes, flood me with all of them!",
-                                           '/list {} changes'.format(num))],
-                        [self.query_button("✅ No, just show last 50", '/list 50 changes')]
+                        [
+                            self.query_button(
+                                "‼ Yes, flood me with all of them!", f'/list {num} changes'
+                            )
+                        ],
+                        [self.query_button("✅ No, just show last 50", '/list 50 changes')],
                     ]
-                    self.send("I found {} changes. Do you really want me "
-                              "to list them all?".format(num),
-                              reply_markup={'inline_keyboard': keyboard})
+                    self.send(
+                        f"I found {num} changes. Do you really want me to list them all?",
+                        reply_markup={'inline_keyboard': keyboard},
+                    )
                     return
 
             else:
@@ -272,17 +302,18 @@ class TelegramContact(Contact):
                 change['comment'] = change['comments'].split('\n')[0]
                 change['date'] = epoch2datetime(change['when_timestamp']).strftime('%Y-%m-%d %H:%M')
                 response.append(
-                    "[{comment}]({revlink})\n"
-                    "_Author_: {author}\n"
-                    "_Date_: {date}\n"
-                    "_Repository_: {repository}\n"
-                    "_Branch_: {branch}\n"
-                    "_Revision_: {revision}\n".format(**change))
+                    f"[{change['comment']}]({change['revlink']})\n"
+                    f"_Author_: {change['author']}\n"
+                    f"_Date_: {change['date']}\n"
+                    f"_Repository_: {change['repository']}\n"
+                    f"_Branch_: {change['branch']}\n"
+                    f"_Revision_: {change['revision']}\n"
+                )
             self.send('\n'.join(response))
 
     @defer.inlineCallbacks
-    def get_running_builders(self):
-        builders = []
+    def get_running_builders(self) -> InlineCallbacksType[list[str]]:
+        builders: list[str] = []
         for bdict in (yield self.bot.getAllBuilders()):
             if (yield self.bot.getRunningBuilds(bdict['builderid'])):
                 builders.append(bdict['name'])
@@ -290,23 +321,22 @@ class TelegramContact(Contact):
 
     @defer.inlineCallbacks
     @Contact.overrideCommand
-    def command_WATCH(self, args, **kwargs):
+    def command_WATCH(self, args: Any, **kwargs: Any) -> InlineCallbacksType[None]:
         if args:
             super().command_WATCH(args)
         else:
             builders = yield self.get_running_builders()
             if builders:
-                keyboard = [
-                    [self.query_button("🔎 " + b, '/watch {}'.format(b))]
-                    for b in builders
-                ]
-                self.send("Which builder do you want to watch?",
-                          reply_markup={'inline_keyboard': keyboard})
+                keyboard = [[self.query_button("🔎 " + b, f'/watch {b}')] for b in builders]
+                self.send(
+                    "Which builder do you want to watch?",
+                    reply_markup={'inline_keyboard': keyboard},
+                )
             else:
                 self.send("There are no currently running builds.")
 
     @Contact.overrideCommand
-    def command_NOTIFY(self, args, tquery=None, **kwargs):
+    def command_NOTIFY(self, args: Any, tquery: Any = None, **kwargs: Any) -> None:
         if args:
             want_list = args == 'list'
             if want_list and tquery:
@@ -319,44 +349,49 @@ class TelegramContact(Contact):
 
         keyboard = [
             [
-                self.query_button("{} {}".format(e.capitalize(),
-                                                 '🔔' if e in self.channel.notify_events else '🔕'),
-                                  '/notify {}-quiet {}'.format(
-                                      'off' if e in self.channel.notify_events else 'on', e))
+                self.query_button(
+                    f"{e.capitalize()} {'🔔' if e in self.channel.notify_events else '🔕'}",
+                    f"/notify {'off' if e in self.channel.notify_events else 'on'}-quiet {e}",
+                )
                 for e in evs
             ]
-            for evs in (('started', 'finished'), ('success', 'failure'), ('warnings', 'exception'),
-                        ('problem', 'recovery'), ('worse', 'better'), ('cancelled', 'worker'))
+            for evs in (
+                ('started', 'finished'),
+                ('success', 'failure'),
+                ('warnings', 'exception'),
+                ('problem', 'recovery'),
+                ('worse', 'better'),
+                ('cancelled', 'worker'),
+            )
         ] + [[self.query_button("Hide...", '/notify list')]]
 
         if tquery:
             self.bot.edit_keyboard(self.chat_id, tquery['message']['message_id'], keyboard)
         else:
-            self.send("Here are available notifications and their current state. "
-                      "Click to turn them on/off.",
-                      reply_markup={'inline_keyboard': keyboard})
+            self.send(
+                "Here are available notifications and their current state. "
+                "Click to turn them on/off.",
+                reply_markup={'inline_keyboard': keyboard},
+            )
 
-    def ask_for_reply(self, prompt, greeting='Ok'):
-        kwargs = {}
+    def ask_for_reply(self, prompt: str, greeting: str = 'Ok') -> None:
+        kwargs: dict[str, Any] = {}
         if not self.is_private_chat:
             username = self.user_info.get('username', '')
             if username:
                 if greeting:
-                    prompt = "{} @{}, now {}...".format(greeting, username, prompt)
+                    prompt = f"{greeting} @{username}, now {prompt}..."
                 else:
-                    prompt = "@{}, now {}...".format(username, prompt)
-                kwargs['reply_markup'] = {
-                    'force_reply': True,
-                    'selective': True
-                }
+                    prompt = f"@{username}, now {prompt}..."
+                kwargs['reply_markup'] = {'force_reply': True, 'selective': True}
             else:
                 if greeting:
-                    prompt = "{}, now reply to this message and {}...".format(greeting, prompt)
+                    prompt = f"{greeting}, now reply to this message and {prompt}..."
                 else:
-                    prompt = "Reply to this message and {}...".format(prompt)
+                    prompt = f"Reply to this message and {prompt}..."
         else:
             if greeting:
-                prompt = "{}, now {}...".format(greeting, prompt)
+                prompt = f"{greeting}, now {prompt}..."
             else:
                 prompt = prompt[0].upper() + prompt[1:] + "..."
             # Telegram seems to have a bug, which causes reply request to pop sometimes again.
@@ -368,48 +403,48 @@ class TelegramContact(Contact):
 
     @defer.inlineCallbacks
     @Contact.overrideCommand
-    def command_STOP(self, args, **kwargs):
+    def command_STOP(self, args: Any, **kwargs: Any) -> InlineCallbacksType[None]:
         argv = self.splitArgs(args)
-        if len(argv) >= 3 or \
-                argv and argv[0] != 'build':
+        if len(argv) >= 3 or (argv and argv[0] != 'build'):
             super().command_STOP(args)
             return
         argv = argv[1:]
         if not argv:
             builders = yield self.get_running_builders()
             if builders:
-                keyboard = [
-                    [self.query_button("🚫 " + b, '/stop build {}'.format(b))]
-                    for b in builders
-                ]
-                self.send("Select builder to stop...",
-                          reply_markup={'inline_keyboard': keyboard})
+                keyboard = [[self.query_button("🚫 " + b, f'/stop build {b}')] for b in builders]
+                self.send("Select builder to stop...", reply_markup={'inline_keyboard': keyboard})
         else:  # len(argv) == 1
             self.template = '/stop ' + args + ' {}'
-            self.ask_for_reply("give me the reason to stop build on `{}`".format(argv[0]))
+            self.ask_for_reply(f"give me the reason to stop build on `{argv[0]}`")
 
     @Contact.overrideCommand
-    def command_SHUTDOWN(self, args, **kwargs):
+    def command_SHUTDOWN(self, args: Any, **kwargs: Any) -> None:
         if args:
             return super().command_SHUTDOWN(args)
         if self.master.botmaster.shuttingDown:
-            keyboard = [[
-                 self.query_button("🔙 Stop Shutdown", '/shutdown stop'),
-                 self.query_button("‼️ Shutdown Now", '/shutdown now')
-            ]]
+            keyboard = [
+                [
+                    self.query_button("🔙 Stop Shutdown", '/shutdown stop'),
+                    self.query_button("‼️ Shutdown Now", '/shutdown now'),
+                ]
+            ]
             text = "Buildbot is currently shutting down.\n\n"
         else:
-            keyboard = [[
-                 self.query_button("↘️ Begin Shutdown", '/shutdown start'),
-                 self.query_button("‼️ Shutdown Now", '/shutdown now')
-            ]]
+            keyboard = [
+                [
+                    self.query_button("↘️ Begin Shutdown", '/shutdown start'),
+                    self.query_button("‼️ Shutdown Now", '/shutdown now'),
+                ]
+            ]
             text = ""
-        self.send(text + "What do you want to do?",
-                  reply_markup={'inline_keyboard': keyboard})
+        self.send(text + "What do you want to do?", reply_markup={'inline_keyboard': keyboard})
         return None
 
     @defer.inlineCallbacks
-    def command_FORCE(self, args, tquery=None, partial=None, **kwargs):
+    def command_FORCE(
+        self, args: Any, tquery: Any = None, partial: Any = None, **kwargs: Any
+    ) -> InlineCallbacksType[None]:
         """force a build"""
 
         try:
@@ -431,11 +466,13 @@ class TelegramContact(Contact):
                 sched = next(iter(forceschedulers))
             else:
                 keyboard = [
-                    [self.query_button(s['label'], '/force {}'.format(s['name']))]
+                    [self.query_button(s['label'], f"/force {s['name']}")]
                     for s in forceschedulers.values()
                 ]
-                self.send("Which force scheduler do you want to activate?",
-                          reply_markup={'inline_keyboard': keyboard})
+                self.send(
+                    "Which force scheduler do you want to activate?",
+                    reply_markup={'inline_keyboard': keyboard},
+                )
                 return
         else:
             if sched in forceschedulers:
@@ -443,8 +480,9 @@ class TelegramContact(Contact):
             elif len(forceschedulers) == 1:
                 sched = next(iter(forceschedulers))
             else:
-                raise UsageError("Try '/force' and follow the instructions"
-                                 " (no force scheduler {})".format(sched))
+                raise UsageError(
+                    f"Try '/force' and follow the instructions (no force scheduler {sched})"
+                )
         scheduler = forceschedulers[sched]
 
         try:
@@ -457,11 +495,12 @@ class TelegramContact(Contact):
 
         if not argv:
             keyboard = [
-                [self.query_button(b, '/force {} {} {}'.format(sched, task, b))]
+                [self.query_button(b, f'/force {sched} {task} {b}')]
                 for b in scheduler['builder_names']
             ]
-            self.send("Which builder do you want to start?",
-                      reply_markup={'inline_keyboard': keyboard})
+            self.send(
+                "Which builder do you want to start?", reply_markup={'inline_keyboard': keyboard}
+            )
             return
 
         if task == 'ask':
@@ -474,18 +513,22 @@ class TelegramContact(Contact):
 
         bldr = argv.pop(0)
         if bldr not in scheduler['builder_names']:
-            raise UsageError(("Try '/force' and follow the instructions "
-                              "(`{}` not configured for _{}_ scheduler)"
-                              ).format(bldr, scheduler['label']))
+            raise UsageError(
+                "Try '/force' and follow the instructions "
+                f"(`{bldr}` not configured for _{scheduler['label']}_ scheduler)"
+            )
 
         try:
             params = dict(arg.split('=', 1) for arg in argv)
         except ValueError as e:
-            raise UsageError("Try '/force' and follow the instructions ({})".format(e)) from e
+            raise UsageError(f"Try '/force' and follow the instructions ({e})") from e
 
         all_fields = list(collect_fields(scheduler['all_fields']))
-        required_params = [f['fullName'] for f in all_fields
-                           if f['required'] and f['fullName'] not in ('username', 'owner')]
+        required_params = [
+            f['fullName']
+            for f in all_fields
+            if f['required'] and f['fullName'] not in ('username', 'owner')
+        ]
         missing_params = [p for p in required_params if p not in params]
 
         if task == 'build':
@@ -497,50 +540,57 @@ class TelegramContact(Contact):
                     # raise UsageError
                     task = 'config'
                 else:
-                    params.update(dict(
-                        (f['fullName'], f['default']) for f in all_fields
-                        if f['type'] == 'fixed' and f['fullName'] not in ('username', 'owner')
-                    ))
+                    params.update(
+                        dict(
+                            (f['fullName'], f['default'])
+                            for f in all_fields
+                            if f['type'] == 'fixed' and f['fullName'] not in ('username', 'owner')
+                        )
+                    )
 
                     builder = yield self.bot.getBuilder(buildername=bldr)
                     for scheduler in self.master.allSchedulers():
                         if scheduler.name == sched and isinstance(scheduler, ForceScheduler):
                             break
                     else:
-                        raise ValueError("There is no force scheduler '{}'".format(sched))
+                        raise ValueError(f"There is no force scheduler '{sched}'")
                     try:
-                        yield scheduler.force(builderid=builder['builderid'],
-                                              owner=self.describeUser(),
-                                              **params)
+                        yield scheduler.force(
+                            builderid=builder['builderid'],
+                            owner=self.describeUser(),
+                            **params,  # type: ignore[arg-type]
+                        )
                     except CollectedValidationError as e:
                         raise ValueError(e.errors) from e
-                    else:
-                        self.send("Force build successfully requested.")
+                    self.send("Force build successfully requested.")
                     return
 
             except (IndexError, ValueError) as e:
-                raise UsageError("Try '/force' and follow the instructions ({})".format(e)) from e
+                raise UsageError(f"Try '/force' and follow the instructions ({e})") from e
 
         if task == 'config':
-
-            msg = "{}, you are about to start a new build on `{}`!"\
-                .format(self.user_full_name, bldr)
+            msg = f"{self.user_full_name}, you are about to start a new build on `{bldr}`!"
 
             keyboard = []
-            args = ' '.join(shlex.quote("{}={}".format(*p)) for p in params.items())
+            args = ' '.join(shlex.quote(f"{p[0]}={p[1]}") for p in params.items())
 
-            fields = [f for f in all_fields if f['type'] != 'fixed'
-                      and f['fullName'] not in ('username', 'owner')]
+            fields = [
+                f
+                for f in all_fields
+                if f['type'] != 'fixed' and f['fullName'] not in ('username', 'owner')
+            ]
 
             if fields:
                 msg += "\n\nThe current build parameters are:"
                 for field in fields:
                     if field['type'] == 'nested':
-                        msg += "\n{}".format(field['label'])
+                        msg += f"\n{field['label']}"
                     else:
                         field_name = field['fullName']
-                        value = params.get(field_name, field['default']).strip()
-                        msg += "\n    {} `{}`".format(field['label'], value)
+                        value = params.get(field_name, field['default'])
+                        if isinstance(value, str):
+                            value = value.strip()
+                        msg += f"\n    {field['label']} `{value}`"
                         if value:
                             key = "Change "
                         else:
@@ -549,10 +599,9 @@ class TelegramContact(Contact):
                         if field_name in missing_params:
                             key = "⚠️ " + key
                             msg += " ⚠️"
-                        keyboard.append(
-                            [self.query_button(key, '/force {} ask {} {} {}'
-                                               .format(sched, field_name, bldr, args))]
-                        )
+                        keyboard.append([
+                            self.query_button(key, f'/force {sched} ask {field_name} {bldr} {args}')
+                        ])
 
             msg += "\n\nWhat do you want to do?"
             if missing_params:
@@ -560,27 +609,24 @@ class TelegramContact(Contact):
 
             if not missing_params:
                 keyboard.append(
-                    [self.query_button("🚀 Start Build", '/force {} build {} {}'
-                                       .format(sched, bldr, args))],
+                    [self.query_button("🚀 Start Build", f'/force {sched} build {bldr} {args}')],
                 )
 
             self.send(msg, reply_markup={'inline_keyboard': keyboard})
 
         elif task == 'ask':
-            prompt = "enter the new value for the " + what.replace('_', ' ').lower()
-            args = ' '.join(shlex.quote("{}={}".format(*p)) for p in params.items()
-                            if p[0] != what)
-            self.template = '/force {} config {} {} {}={{}}'.format(sched, bldr, args, what)
+            prompt = "enter the new value for the " + what.replace('_', ' ').lower()  # type: ignore[union-attr]
+            args = ' '.join(shlex.quote(f"{p[0]}={p[1]}") for p in params.items() if p[0] != what)
+            self.template = f'/force {sched} config {bldr} {args} {what}={{}}'
             self.ask_for_reply(prompt, '')
 
         else:
             raise UsageError("Try '/force' and follow the instructions")
 
-    command_FORCE.usage = "force - Force a build"
+    command_FORCE.usage = "force - Force a build"  # type: ignore[attr-defined]
 
 
 class TelegramStatusBot(StatusBot):
-
     contactClass = TelegramContact
     channelClass = TelegramChannel
     commandPrefix = '/'
@@ -589,15 +635,23 @@ class TelegramStatusBot(StatusBot):
     idle_string = "idle 💤"
     running_string = "running 🌀:"
 
-    query_cache = {}
+    query_cache: dict[int, dict[str, Any]] = {}
 
     @property
-    def commandSuffix(self):
+    def commandSuffix(self) -> str | None:  # type: ignore[override]
         if self.nickname is not None:
             return '@' + self.nickname
         return None
 
-    def __init__(self, token, outgoing_http, chat_ids, *args, retry_delay=30, **kwargs):
+    def __init__(
+        self,
+        token: str,
+        outgoing_http: Any,
+        chat_ids: list[Any],
+        *args: Any,
+        retry_delay: int = 30,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
 
         self.http_client = outgoing_http
@@ -606,15 +660,20 @@ class TelegramStatusBot(StatusBot):
 
         self.chat_ids = chat_ids
 
-        self.nickname = None
+        self.nickname = None  # type: ignore[assignment]
 
     @defer.inlineCallbacks
-    def startService(self):
+    def startService(self) -> InlineCallbacksType[None]:  # type: ignore[override]
         yield super().startService()
         for c in self.chat_ids:
             channel = self.getChannel(c)
             channel.add_notification_events(self.notify_events)
         yield self.loadState()
+        commands = [
+            {'command': command, 'description': doc}
+            for command, doc in TelegramContact.get_commands()
+        ]
+        self.post('/setMyCommands', json={'commands': commands})
 
     results_emoji = {
         SUCCESS: ' ✅',
@@ -625,16 +684,15 @@ class TelegramStatusBot(StatusBot):
         CANCELLED: ' 🚫',
     }
 
-    def format_build_status(self, build, short=False):
+    def format_build_status(self, build: dict[str, Any], short: bool = False) -> str:
         br = build['results']
         if short:
             return self.results_emoji[br]
         else:
-            return self.results_descriptions[br] + \
-                   self.results_emoji[br]
+            return self.results_descriptions[br] + self.results_emoji[br]
 
-    def getContact(self, user, channel):
-        """ get a Contact instance for ``user`` on ``channel`` """
+    def getContact(self, user: dict[str, Any], channel: dict[str, Any]) -> TelegramContact:
+        """get a Contact instance for ``user`` on ``channel``"""
         assert isinstance(user, dict), "user must be a dict provided by Telegram API"
         assert isinstance(channel, dict), "channel must be a dict provided by Telegram API"
 
@@ -644,8 +702,7 @@ class TelegramStatusBot(StatusBot):
             contact = self.contacts[(cid, uid)]
         except KeyError:
             valid = self.isValidUser(uid)
-            contact = self.contactClass(user=user,
-                                        channel=self.getChannel(channel, valid))
+            contact = self.contactClass(user=user, channel=self.getChannel(channel, valid))
             if valid:
                 self.contacts[(cid, uid)] = contact
         else:
@@ -655,7 +712,7 @@ class TelegramStatusBot(StatusBot):
                 contact.channel.chat_info.update(channel)
         return contact
 
-    def getChannel(self, channel, valid=True):
+    def getChannel(self, channel: dict[str, Any] | Any, valid: bool = True) -> TelegramChannel:
         if not isinstance(channel, dict):
             channel = {'id': channel}
         cid = channel['id']
@@ -669,8 +726,8 @@ class TelegramStatusBot(StatusBot):
             return new_channel
 
     @defer.inlineCallbacks
-    def process_update(self, update):
-        data = {}
+    def process_update(self, update: dict[str, Any]) -> InlineCallbacksType[Any]:
+        data: Any = {}
 
         message = update.get('message')
         if message is None:
@@ -683,14 +740,18 @@ class TelegramStatusBot(StatusBot):
             try:
                 data = self.query_cache[int(data)]
             except ValueError:
-                text, data, notify = data, {}, None
+                text = data
+                data = {}
+                notify = None
             except KeyError:
-                text, data, notify = None, {}, "Sorry, button is no longer valid!"
+                text = None
+                data = {}
+                notify = "Sorry, button is no longer valid!"
                 if original_message:
                     try:
                         self.edit_keyboard(
-                            original_message['chat']['id'],
-                            original_message['message_id'])
+                            original_message['chat']['id'], original_message['message_id']
+                        )
                     except KeyError:
                         pass
             else:
@@ -702,7 +763,9 @@ class TelegramStatusBot(StatusBot):
                     except KeyError:
                         notify = None
                 else:
-                    text, data, notify = data, {}, None
+                    text = data
+                    data = {}
+                    notify = None
             data['tquery'] = query
             self.answer_query(query['id'], notify)
             message = {
@@ -726,7 +789,8 @@ class TelegramStatusBot(StatusBot):
 
         contact = self.getContact(user=user, channel=chat)
         data['tmessage'] = message
-        template, contact.template = contact.template, None
+        template = contact.template
+        contact.template = None
         if text.startswith(self.commandPrefix):
             result = yield contact.handleMessage(text, **data)
         else:
@@ -736,7 +800,7 @@ class TelegramStatusBot(StatusBot):
         return result
 
     @defer.inlineCallbacks
-    def post(self, path, **kwargs):
+    def post(self, path: str, **kwargs: Any) -> InlineCallbacksType[Any]:
         logme = True
         while True:
             try:
@@ -745,8 +809,7 @@ class TelegramStatusBot(StatusBot):
                 # just for tests
                 raise err
             except Exception as err:
-                msg = "ERROR: problem sending Telegram request {} (will try again): {}".format(path,
-                                                                                               err)
+                msg = f"ERROR: problem sending Telegram request {path} (will try again): {err}"
                 if logme:
                     self.log(msg)
                     logme = False
@@ -754,47 +817,57 @@ class TelegramStatusBot(StatusBot):
             else:
                 ans = yield res.json()
                 if not ans.get('ok'):
-                    self.log("ERROR: cannot send Telegram request {}: "
-                             "[{}] {}".format(path, res.code, ans.get('description')))
+                    self.log(
+                        f"ERROR: cannot send Telegram request {path}: "
+                        f"[{res.code}] {ans.get('description')}"
+                    )
                     return None
                 return ans.get('result', True)
 
     @defer.inlineCallbacks
-    def set_nickname(self):
+    def set_nickname(self) -> InlineCallbacksType[None]:
         res = yield self.post('/getMe')
         if res:
             self.nickname = res.get('username')
 
     @defer.inlineCallbacks
-    def answer_query(self, query_id, notify=None):
-        params = dict(callback_query_id=query_id)
+    def answer_query(self, query_id: Any, notify: str | None = None) -> InlineCallbacksType[Any]:
+        params: dict[str, Any] = {"callback_query_id": query_id}
         if notify is not None:
-            params.update(dict(text=notify))
+            params.update({"text": notify})
         return (yield self.post('/answerCallbackQuery', json=params))
 
     @defer.inlineCallbacks
-    def send_message(self, chat, message, parse_mode='Markdown',
-                     reply_to_message_id=None, reply_markup=None,
-                     **kwargs):
+    def send_message(
+        self,
+        chat: Any,
+        message: str,
+        parse_mode: str | None = 'Markdown',
+        reply_to_message_id: Any = None,
+        reply_markup: Any = None,
+        **kwargs: Any,
+    ) -> InlineCallbacksType[Any]:
         result = None
 
-        message = message.strip()
-        while message:
-            params = dict(chat_id=chat)
+        msg: str | None = message.strip()
+        while msg:
+            params: dict[str, Any] = {"chat_id": chat}
             if parse_mode is not None:
                 params['parse_mode'] = parse_mode
             if reply_to_message_id is not None:
                 params['reply_to_message_id'] = reply_to_message_id
                 reply_to_message_id = None  # we only mark first message as a reply
 
-            if len(message) <= 4096:
-                params['text'], message = message, None
+            if len(msg) <= 4096:
+                params['text'] = msg
+                msg = None
             else:
-                n = message[:4096].rfind('\n')
+                n = msg[:4096].rfind('\n')
                 n = n + 1 if n != -1 else 4096
-                params['text'], message = message[:n].rstrip(), message[n:].lstrip()
+                params['text'] = msg[:n].rstrip()
+                msg = msg[n:].lstrip()
 
-            if not message and reply_markup is not None:
+            if not msg and reply_markup is not None:
                 params['reply_markup'] = reply_markup
 
             params.update(kwargs)
@@ -804,119 +877,117 @@ class TelegramStatusBot(StatusBot):
         return result
 
     @defer.inlineCallbacks
-    def edit_message(self, chat, msg, message, parse_mode='Markdown', **kwargs):
-        params = dict(chat_id=chat, message_id=msg, text=message)
+    def edit_message(
+        self, chat: Any, msg: Any, message: str, parse_mode: str | None = 'Markdown', **kwargs: Any
+    ) -> InlineCallbacksType[Any]:
+        params: dict[str, Any] = {"chat_id": chat, "message_id": msg, "text": message}
         if parse_mode is not None:
             params['parse_mode'] = parse_mode
         params.update(kwargs)
         return (yield self.post('/editMessageText', json=params))
 
     @defer.inlineCallbacks
-    def edit_keyboard(self, chat, msg, keyboard=None):
-        params = dict(chat_id=chat, message_id=msg)
+    def edit_keyboard(self, chat: Any, msg: Any, keyboard: Any = None) -> InlineCallbacksType[Any]:
+        params: dict[str, Any] = {"chat_id": chat, "message_id": msg}
         if keyboard is not None:
             params['reply_markup'] = {'inline_keyboard': keyboard}
         return (yield self.post('/editMessageReplyMarkup', json=params))
 
     @defer.inlineCallbacks
-    def delete_message(self, chat, msg):
-        params = dict(chat_id=chat, message_id=msg)
+    def delete_message(self, chat: Any, msg: Any) -> InlineCallbacksType[Any]:
+        params: dict[str, Any] = {"chat_id": chat, "message_id": msg}
         return (yield self.post('/deleteMessage', json=params))
 
     @defer.inlineCallbacks
-    def send_sticker(self, chat, sticker, **kwargs):
-        params = dict(chat_id=chat, sticker=sticker)
+    def send_sticker(self, chat: Any, sticker: Any, **kwargs: Any) -> InlineCallbacksType[Any]:
+        params: dict[str, Any] = {"chat_id": chat, "sticker": sticker}
         params.update(kwargs)
         return (yield self.post('/sendSticker', json=params))
 
 
 class TelegramWebhookBot(TelegramStatusBot):
-    name = "TelegramWebhookBot"
+    name: str | None = "TelegramWebhookBot"  # type: ignore[assignment]
 
-    def __init__(self, token, *args, certificate=None, **kwargs):
+    def __init__(self, token: str, *args: Any, certificate: Any = None, **kwargs: Any) -> None:
         TelegramStatusBot.__init__(self, token, *args, **kwargs)
         self._certificate = certificate
         self.webhook = WebhookResource('telegram' + token)
         self.webhook.setServiceParent(self)
 
     @defer.inlineCallbacks
-    def startService(self):
+    def startService(self) -> InlineCallbacksType[None]:  # type: ignore[override]
         yield super().startService()
         url = bytes2unicode(self.master.config.buildbotURL)
         if not url.endswith('/'):
             url += '/'
         yield self.set_webhook(url + self.webhook.path, self._certificate)
 
-    def process_webhook(self, request):
+    def process_webhook(self, request: Any) -> Any:
         update = self.get_update(request)
         return self.process_update(update)
 
-    def get_update(self, request):
+    def get_update(self, request: Any) -> dict[str, Any]:
         content = request.content.read()
         content = bytes2unicode(content)
         content_type = request.getHeader(b'Content-Type')
         content_type = bytes2unicode(content_type)
-        if content_type is not None and \
-                content_type.startswith('application/json'):
+        if content_type is not None and content_type.startswith('application/json'):
             update = json.loads(content)
         else:
-            raise ValueError('Unknown content type: {}'
-                             .format(content_type))
+            raise ValueError(f'Unknown content type: {content_type}')
         return update
 
     @defer.inlineCallbacks
-    def set_webhook(self, url, certificate=None):
+    def set_webhook(self, url: str, certificate: Any = None) -> InlineCallbacksType[None]:
         if not certificate:
-            self.log("Setting up webhook to: {}".format(url))
-            yield self.post('/setWebhook', json=dict(url=url))
+            self.log(f"Setting up webhook to: {url}")
+            yield self.post('/setWebhook', json={"url": url})
         else:
-            self.log("Setting up webhook to: {} (custom certificate)".format(url))
-            certificate = io.BytesIO(unicode2bytes(certificate))
-            yield self.post('/setWebhook', data=dict(url=url),
-                            files=dict(certificate=certificate))
+            self.log(f"Setting up webhook to: {url} (custom certificate)")
+            cert_bytes = io.BytesIO(unicode2bytes(certificate))
+            yield self.post('/setWebhook', data={"url": url}, files={"certificate": cert_bytes})
 
 
 class TelegramPollingBot(TelegramStatusBot):
-    name = "TelegramPollingBot"
+    name: str | None = "TelegramPollingBot"  # type: ignore[assignment]
 
-    def __init__(self, *args, poll_timeout=120, **kwargs):
+    def __init__(self, *args: Any, poll_timeout: int = 120, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._polling_finished_notifier = Notifier()
+        self._polling_finished_notifier: Notifier[None] = Notifier()
         self.poll_timeout = poll_timeout
 
-    def startService(self):
+    def startService(self) -> None:  # type: ignore[override]
         super().startService()
         self._polling_continue = True
         self.do_polling()
 
     @defer.inlineCallbacks
-    def stopService(self):
+    def stopService(self) -> InlineCallbacksType[None]:
         self._polling_continue = False
         yield self._polling_finished_notifier.wait()
         yield super().stopService()
 
     @defer.inlineCallbacks
-    def do_polling(self):
+    def do_polling(self) -> InlineCallbacksType[None]:
         yield self.post('/deleteWebhook')
         offset = 0
-        kwargs = {'json': {'timeout': self.poll_timeout}}
+        kwargs: dict[str, Any] = {'json': {'timeout': self.poll_timeout}}
         logme = True
         while self._polling_continue:
             if offset:
                 kwargs['json']['offset'] = offset
             try:
-                res = yield self.http_client.post('/getUpdates',
-                                                  timeout=self.poll_timeout + 2,
-                                                  **kwargs)
+                res = yield self.http_client.post(
+                    '/getUpdates', timeout=self.poll_timeout + 2, **kwargs
+                )
                 ans = yield res.json()
                 if not ans.get('ok'):
-                    raise ValueError("[{}] {}".format(res.code, ans.get('description')))
+                    raise ValueError(f"[{res.code}] {ans.get('description')}")
                 updates = ans.get('result')
             except AssertionError as err:
                 raise err
             except Exception as err:
-                msg = ("ERROR: cannot send Telegram request /getUpdates (will try again): {}"
-                       ).format(err)
+                msg = f"ERROR: cannot send Telegram request /getUpdates (will try again): {err}"
                 if logme:
                     self.log(msg)
                     logme = False
@@ -936,27 +1007,44 @@ class TelegramBot(service.BuildbotService):
 
     in_test_harness = False
 
-    compare_attrs = ["bot_token", "chat_ids", "authz",
-                     "tags", "notify_events",
-                     "showBlameList", "useRevisions",
-                     "certificate", "useWebhook",
-                     "pollTimeout", "retryDelay"]
+    compare_attrs: ClassVar[Sequence[str]] = [
+        "bot_token",
+        "chat_ids",
+        "authz",
+        "tags",
+        "notify_events",
+        "showBlameList",
+        "useRevisions",
+        "certificate",
+        "useWebhook",
+        "pollTimeout",
+        "retryDelay",
+    ]
     secrets = ["bot_token"]
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self.bot = None
+        self.bot: TelegramPollingBot | TelegramWebhookBot | None = None
 
-    def _get_http(self, bot_token):
+    def _get_http(self, bot_token: str) -> httpclientservice.HTTPSession:
         base_url = "https://api.telegram.org/bot" + bot_token
-        return httpclientservice.HTTPClientService.getService(
-            self.master, base_url)
+        return httpclientservice.HTTPSession(self.master.httpservice, base_url)
 
-    def checkConfig(self, bot_token, chat_ids=None, authz=None,
-                    bot_username=None, tags=None, notify_events=None,
-                    showBlameList=True, useRevisions=False,
-                    useWebhook=False, certificate=None,
-                    pollTimeout=120, retryDelay=30):
+    def checkConfig(  # type: ignore[override]
+        self,
+        bot_token: Any,
+        chat_ids: Any = None,
+        authz: Any = None,
+        bot_username: Any = None,
+        tags: Any = None,
+        notify_events: Any = None,
+        showBlameList: bool = True,
+        useRevisions: bool = False,
+        useWebhook: bool = False,
+        certificate: Any = None,
+        pollTimeout: int = 120,
+        retryDelay: int = 30,
+    ) -> None:
         super().checkConfig(self.name)
 
         if authz is not None:
@@ -968,11 +1056,21 @@ class TelegramBot(service.BuildbotService):
             config.error("certificate file must be open in binary mode")
 
     @defer.inlineCallbacks
-    def reconfigService(self, bot_token, chat_ids=None, authz=None,
-                        bot_username=None, tags=None, notify_events=None,
-                        showBlameList=True, useRevisions=False,
-                        useWebhook=False, certificate=None,
-                        pollTimeout=120, retryDelay=30):
+    def reconfigService(  # type: ignore[override]
+        self,
+        bot_token: Any,
+        chat_ids: Any = None,
+        authz: Any = None,
+        bot_username: Any = None,
+        tags: Any = None,
+        notify_events: Any = None,
+        showBlameList: bool = True,
+        useRevisions: bool = False,
+        useWebhook: bool = False,
+        certificate: Any = None,
+        pollTimeout: int = 120,
+        retryDelay: int = 30,
+    ) -> InlineCallbacksType[None]:
         # need to stash these so we can detect changes later
         self.bot_token = bot_token
         if chat_ids is None:
@@ -999,19 +1097,31 @@ class TelegramBot(service.BuildbotService):
             self.removeService(self.bot)
 
         if not useWebhook:
-            self.bot = TelegramPollingBot(bot_token, http, chat_ids, authz,
-                                          tags=tags, notify_events=notify_events,
-                                          useRevisions=useRevisions,
-                                          showBlameList=showBlameList,
-                                          poll_timeout=self.pollTimeout,
-                                          retry_delay=self.retryDelay)
+            self.bot = TelegramPollingBot(
+                bot_token,
+                http,
+                chat_ids,
+                authz,
+                tags=tags,
+                notify_events=notify_events,
+                useRevisions=useRevisions,
+                showBlameList=showBlameList,
+                poll_timeout=self.pollTimeout,
+                retry_delay=self.retryDelay,
+            )
         else:
-            self.bot = TelegramWebhookBot(bot_token, http, chat_ids, authz,
-                                          tags=tags, notify_events=notify_events,
-                                          useRevisions=useRevisions,
-                                          showBlameList=showBlameList,
-                                          retry_delay=self.retryDelay,
-                                          certificate=self.certificate)
+            self.bot = TelegramWebhookBot(
+                bot_token,
+                http,
+                chat_ids,
+                authz,
+                tags=tags,
+                notify_events=notify_events,
+                useRevisions=useRevisions,
+                showBlameList=showBlameList,
+                retry_delay=self.retryDelay,
+                certificate=self.certificate,
+            )
         if bot_username is not None:
             self.bot.nickname = bot_username
         else:

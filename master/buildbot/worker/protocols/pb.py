@@ -13,84 +13,62 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
 import contextlib
+from typing import TYPE_CHECKING
+from typing import Any
 
 from twisted.internet import defer
 from twisted.python import log
 from twisted.spread import pb
+from twisted.spread.pb import RemoteReference
 
 from buildbot.pbutil import decode
-from buildbot.util import ComparableMixin
 from buildbot.util import deferwaiter
 from buildbot.worker.protocols import base
 
+if TYPE_CHECKING:
+    from collections.abc import Generator
 
-class Listener(base.Listener):
+    from twisted.internet.defer import Deferred
+    from twisted.python.failure import Failure
+
+    from buildbot.master import BuildMaster
+    from buildbot.util.twisted import InlineCallbacksType
+    from buildbot.worker.base import Worker
+    from buildbot.worker.protocols.base import RemoteCommandImpl
+    from buildbot.worker.protocols.manager.pb import PBManager
+    from buildbot_worker.base import WorkerForBuilderBase
+
+
+class Listener(base.UpdateRegistrationListener):
     name = "pbListener"
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, master: BuildMaster) -> None:
+        super().__init__(master=master)
+        self.ConnectionClass = Connection
 
-        # username : (password, portstr, PBManager registration)
-        self._registrations = {}
+    def get_manager(self) -> PBManager:
+        return self.master.pbmanager
 
-    @defer.inlineCallbacks
-    def updateRegistration(self, username, password, portStr):
-        # NOTE: this method is only present on the PB protocol; others do not
-        # use registrations
-        if username in self._registrations:
-            currentPassword, currentPortStr, currentReg = \
-                self._registrations[username]
-        else:
-            currentPassword, currentPortStr, currentReg = None, None, None
-
-        iseq = (ComparableMixin.isEquivalent(currentPassword, password) and
-                ComparableMixin.isEquivalent(currentPortStr, portStr))
-        if iseq:
-            return currentReg
-
-        if currentReg:
-            yield currentReg.unregister()
-            del self._registrations[username]
-        if portStr and password:
-            reg = yield self.master.pbmanager.register(portStr, username, password,
-                                                       self._getPerspective)
-            self._registrations[username] = (password, portStr, reg)
-            return reg
-        return currentReg
-
-    @defer.inlineCallbacks
-    def _getPerspective(self, mind, workerName):
-        workers = self.master.workers
-        log.msg("worker '{}' attaching from {}".format(workerName, mind.broker.transport.getPeer()))
-
-        # try to use TCP keepalives
+    def before_connection_setup(self, mind: object, workerName: str) -> None:
+        assert isinstance(mind, RemoteReference), type(mind)
+        log.msg(f"worker '{workerName}' attaching from {mind.broker.transport.getPeer()}")
         try:
             mind.broker.transport.setTcpKeepAlive(1)
         except Exception:
             log.err("Can't set TcpKeepAlive")
 
-        worker = workers.getWorkerByName(workerName)
-        conn = Connection(self.master, worker, mind)
-
-        # inform the manager, logging any problems in the deferred
-        accepted = yield workers.newConnection(conn, workerName)
-
-        # return the Connection as the perspective
-        if accepted:
-            return conn
-        else:
-            # TODO: return something more useful
-            raise RuntimeError("rejecting duplicate worker")
-
 
 class ReferenceableProxy(pb.Referenceable):
+    ImplClass: type
 
-    def __init__(self, impl):
+    def __init__(self, impl: object) -> None:
         assert isinstance(impl, self.ImplClass)
         self.impl = impl
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> Any:
         return getattr(self.impl, name)
 
 
@@ -112,39 +90,49 @@ class _NoSuchMethod(Exception):
 
 
 @contextlib.contextmanager
-def _wrapRemoteException():
+def _wrapRemoteException() -> Generator[None, Any, None]:
     try:
         yield
     except pb.RemoteError as e:
-        if e.remoteType in (b'twisted.spread.flavors.NoSuchMethod',
-                            'twisted.spread.flavors.NoSuchMethod'):
+        if e.remoteType in (
+            b'twisted.spread.flavors.NoSuchMethod',
+            'twisted.spread.flavors.NoSuchMethod',
+        ):
             raise _NoSuchMethod(e) from e
         raise
 
 
 class Connection(base.Connection, pb.Avatar):
-    proxies = {base.FileWriterImpl: FileWriterProxy,
-               base.FileReaderImpl: FileReaderProxy}
+    proxies: dict[type, type[ReferenceableProxy]] = {
+        base.FileWriterImpl: FileWriterProxy,
+        base.FileReaderImpl: FileReaderProxy,
+    }
     # TODO: configure keepalive_interval in
     # c['protocols']['pb']['keepalive_interval']
-    keepalive_timer = None
+    keepalive_timer: None = None
     keepalive_interval = 3600
-    info = None
+    info: Any = None
 
-    def __init__(self, master, worker, mind):
+    def __init__(self, master: BuildMaster, worker: Worker, mind: RemoteReference) -> None:
+        assert worker.workername is not None
         super().__init__(worker.workername)
         self.master = master
         self.worker = worker
-        self.mind = mind
-        self._keepalive_waiter = deferwaiter.DeferWaiter()
-        self._keepalive_action_handler = \
-            deferwaiter.RepeatedActionHandler(master.reactor, self._keepalive_waiter,
-                                              self.keepalive_interval, self._do_keepalive)
+        self.mind: RemoteReference | None = mind
+        self._keepalive_waiter: deferwaiter.DeferWaiter[None] = deferwaiter.DeferWaiter()
+        self._keepalive_action_handler = deferwaiter.RepeatedActionHandler(
+            master.reactor,
+            self._keepalive_waiter,
+            self.keepalive_interval,
+            self._do_keepalive,
+        )
+
+        self.builders: dict[str, WorkerForBuilderBase]
 
     # methods called by the PBManager
 
     @defer.inlineCallbacks
-    def attached(self, mind):
+    def attached(self, mind: RemoteReference) -> InlineCallbacksType[Connection]:
         self.startKeepaliveTimer()
         self.notifyOnDisconnect(self._stop_keepalive_timer)
         # pbmanager calls perspective.attached; pass this along to the
@@ -153,73 +141,64 @@ class Connection(base.Connection, pb.Avatar):
         # and then return a reference to the avatar
         return self
 
-    def detached(self, mind):
+    def detached(self, mind: RemoteReference) -> None:
         self.stopKeepaliveTimer()
         self.mind = None
         self.notifyDisconnected()
 
     # disconnection handling
     @defer.inlineCallbacks
-    def _stop_keepalive_timer(self):
+    def _stop_keepalive_timer(self) -> InlineCallbacksType[None]:
         self.stopKeepaliveTimer()
         yield self._keepalive_waiter.wait()
 
-    def loseConnection(self):
+    def loseConnection(self) -> None:
         self.stopKeepaliveTimer()
-        tport = self.mind.broker.transport
-        # this is the polite way to request that a socket be closed
-        tport.loseConnection()
-        try:
-            # but really we don't want to wait for the transmit queue to
-            # drain. The remote end is unlikely to ACK the data, so we'd
-            # probably have to wait for a (20-minute) TCP timeout.
-            # tport._closeSocket()
-            # however, doing _closeSocket (whether before or after
-            # loseConnection) somehow prevents the notifyOnDisconnect
-            # handlers from being run. Bummer.
-            tport.offset = 0
-            tport.dataBuffer = b""
-        except Exception:
-            # however, these hacks are pretty internal, so don't blow up if
-            # they fail or are unavailable
-            log.msg("failed to accelerate the shutdown process")
+        assert self.mind is not None
+        self.mind.broker.transport.abortConnection()
 
     # keepalive handling
 
-    def _do_keepalive(self):
+    def _do_keepalive(self) -> Deferred[None]:
+        assert self.mind is not None
         return self.mind.callRemote('print', message="keepalive")
 
-    def stopKeepaliveTimer(self):
+    def stopKeepaliveTimer(self) -> None:
         self._keepalive_action_handler.stop()
 
-    def startKeepaliveTimer(self):
+    def startKeepaliveTimer(self) -> None:
         assert self.keepalive_interval
         self._keepalive_action_handler.start()
 
     # methods to send messages to the worker
 
-    def remotePrint(self, message):
+    def remotePrint(self, message: str) -> Deferred[None]:
+        assert self.mind is not None
         return self.mind.callRemote('print', message=message)
 
     @defer.inlineCallbacks
-    def remoteGetWorkerInfo(self):
+    def remoteGetWorkerInfo(self) -> InlineCallbacksType[Any]:
         try:
             with _wrapRemoteException():
                 # Try to call buildbot-worker method.
+                assert self.mind is not None
                 info = yield self.mind.callRemote('getWorkerInfo')
             return decode(info)
         except _NoSuchMethod:
             yield self.remotePrint(
                 "buildbot-slave detected, failing back to deprecated buildslave API. "
-                "(Ignoring missing getWorkerInfo method.)")
+                "(Ignoring missing getWorkerInfo method.)"
+            )
             info = {}
 
             # Probably this is deprecated buildslave.
-            log.msg("Worker.getWorkerInfo is unavailable - falling back to "
-                    "deprecated buildslave API")
+            log.msg(
+                "Worker.getWorkerInfo is unavailable - falling back to deprecated buildslave API"
+            )
 
             try:
                 with _wrapRemoteException():
+                    assert self.mind is not None
                     info = yield self.mind.callRemote('getSlaveInfo')
             except _NoSuchMethod:
                 log.msg("Worker.getSlaveInfo is unavailable - ignoring")
@@ -234,13 +213,14 @@ class Connection(base.Connection, pb.Avatar):
             # commands and version using separate requests.
             try:
                 with _wrapRemoteException():
-                    info["worker_commands"] = yield self.mind.callRemote(
-                        'getCommands')
+                    assert self.mind is not None
+                    info["worker_commands"] = yield self.mind.callRemote('getCommands')
             except _NoSuchMethod:
                 log.msg("Worker.getCommands is unavailable - ignoring")
 
             try:
                 with _wrapRemoteException():
+                    assert self.mind is not None
                     info["version"] = yield self.mind.callRemote('getVersion')
             except _NoSuchMethod:
                 log.msg("Worker.getVersion is unavailable - ignoring")
@@ -248,27 +228,41 @@ class Connection(base.Connection, pb.Avatar):
             return decode(info)
 
     @defer.inlineCallbacks
-    def remoteSetBuilderList(self, builders):
+    def remoteSetBuilderList(
+        self,
+        builders: list[tuple[str, str]],
+    ) -> InlineCallbacksType[list[str]]:
+        assert self.mind is not None
         builders = yield self.mind.callRemote('setBuilderList', builders)
-        self.builders = builders
-        return builders
+        self.builders = builders  # type: ignore[assignment]
+        return builders  # type: ignore[return-value]
 
-    def remoteStartCommand(self, remoteCommand, builderName, commandId, commandName, args):
+    def remoteStartCommand(
+        self,
+        remoteCommand: RemoteCommandImpl,
+        builderName: str,
+        commandId: str | None,
+        commandName: str,
+        args: dict[str, Any],
+    ) -> Deferred:
         workerforbuilder = self.builders.get(builderName)
-        remoteCommand = RemoteCommand(remoteCommand)
+        remoteCommand = RemoteCommand(remoteCommand)  # type: ignore[assignment]
         args = self.createArgsProxies(args)
-        return workerforbuilder.callRemote('startCommand',
-                                           remoteCommand, commandId, commandName, args)
+        assert workerforbuilder is not None
+        return workerforbuilder.callRemote(  # type: ignore[attr-defined]
+            'startCommand', remoteCommand, commandId, commandName, args
+        )
 
     @defer.inlineCallbacks
-    def remoteShutdown(self):
+    def remoteShutdown(self) -> InlineCallbacksType[None]:
         # First, try the "new" way - calling our own remote's shutdown
         # method. The method was only added in 0.8.3, so ignore NoSuchMethod
         # failures.
         @defer.inlineCallbacks
-        def new_way():
+        def new_way() -> InlineCallbacksType[bool]:
             try:
                 with _wrapRemoteException():
+                    assert self.mind is not None
                     yield self.mind.callRemote('shutdown')
                     # successful shutdown request
                     return True
@@ -286,16 +280,16 @@ class Connection(base.Connection, pb.Avatar):
         # Now, the old way. Look for a builder with a remote reference to the
         # client side worker. If we can find one, then call "shutdown" on the
         # remote builder, which will cause the worker buildbot process to exit.
-        def old_way():
+        def old_way() -> Deferred[None]:
             d = None
             for b in self.worker.workerforbuilders.values():
-                if b.remote:
-                    d = b.mind.callRemote("shutdown")
+                if b.remote:  # type: ignore[attr-defined]
+                    d = b.mind.callRemote("shutdown")  # type: ignore[attr-defined]
                     break
 
             if d:
                 name = self.worker.workername
-                log.msg("Shutting down (old) worker: {}".format(name))
+                log.msg(f"Shutting down (old) worker: {name}")
                 # The remote shutdown call will not complete successfully since
                 # the buildbot process exits almost immediately after getting
                 # the shutdown request.
@@ -304,30 +298,43 @@ class Connection(base.Connection, pb.Avatar):
                 # shutdown as expected.
 
                 @d.addErrback
-                def _errback(why):
+                def _errback(why: Failure) -> None:
                     if why.check(pb.PBConnectionLost):
-                        log.msg("Lost connection to {}".format(name))
+                        log.msg(f"Lost connection to {name}")
                     else:
-                        log.err("Unexpected error when trying to shutdown {}".format(name))
+                        log.err(f"Unexpected error when trying to shutdown {name}")
+
                 return d
             log.err("Couldn't find remote builder to shut down worker")
             return defer.succeed(None)
+
         yield old_way()
 
-    def remoteStartBuild(self, builderName):
+    def remoteStartBuild(self, builderName: str) -> Deferred[None]:
         workerforbuilder = self.builders.get(builderName)
-        return workerforbuilder.callRemote('startBuild')
+        assert workerforbuilder is not None
+        return workerforbuilder.callRemote('startBuild')  # type: ignore[attr-defined]
 
-    def remoteInterruptCommand(self, builderName, commandId, why):
+    def remoteInterruptCommand(self, builderName: str, commandId: str, why: str) -> Deferred:
         workerforbuilder = self.builders.get(builderName)
-        return defer.maybeDeferred(workerforbuilder.callRemote, "interruptCommand",
-                                   commandId, why)
+        assert workerforbuilder is not None
+        return defer.maybeDeferred(  # type: ignore[call-overload]
+            workerforbuilder.callRemote,  # type: ignore[attr-defined]
+            "interruptCommand",
+            commandId,
+            why,
+        )
 
     # perspective methods called by the worker
 
-    def perspective_keepalive(self):
+    def perspective_keepalive(self) -> None:
         self.worker.messageReceivedFromWorker()
 
-    def perspective_shutdown(self):
+    def perspective_shutdown(self) -> None:
         self.worker.messageReceivedFromWorker()
         self.worker.shutdownRequested()
+
+    def get_peer(self) -> str:
+        assert self.mind is not None
+        p = self.mind.broker.transport.getPeer()
+        return f"{p.host}:{p.port}"

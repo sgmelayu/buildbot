@@ -13,81 +13,106 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
+from contextlib import contextmanager
+from typing import TYPE_CHECKING
+from typing import Any
+from typing import cast
 
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.exc import ProgrammingError
 
-from buildbot.config import MasterConfig
+from buildbot.config.master import DBConfig as MasterDBConfig
+from buildbot.config.master import MasterConfig
 from buildbot.db import enginestrategy
 from buildbot.db import model
 from buildbot.db import state
+from buildbot.db.connector import DBConnector
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
+
+    import sqlalchemy as sa
 
 
 class FakeDBConnector:
-    pass
+    def __init__(self, engine: sa.Engine) -> None:
+        self.pool = FakePool(engine)
+        self.master = FakeMaster()
+        self.model = model.Model(cast(DBConnector, self))
+        self.state = state.StateConnectorComponent(cast(DBConnector, self))
+
+    @contextmanager
+    def connect(self) -> Generator[sa.engine.Connection, None, None]:
+        try:
+            with self.pool.engine.connect() as conn:
+                yield conn
+        finally:
+            self.pool.engine.dispose()
 
 
 class FakeCacheManager:
-
-    def get_cache(self, cache_name, miss_fn):
+    def get_cache(self, cache_name: str, miss_fn: Any) -> None:
         return None
 
 
 class FakeMaster:
-    pass
+    def __init__(self) -> None:
+        self.caches = FakeCacheManager()
 
 
 class FakePool:
-    pass
+    def __init__(self, engine: sa.Engine) -> None:
+        self.engine = engine
 
 
 class DbConfig:
+    db_config: MasterDBConfig
 
-    def __init__(self, BuildmasterConfig, basedir, name="config"):
-        self.db_url = MasterConfig.getDbUrlFromConfig(
-            BuildmasterConfig, throwErrors=False)
+    def __init__(
+        self, BuildmasterConfig: dict[str, Any], basedir: str, name: str = "config"
+    ) -> None:
+        self.db_config = MasterConfig.get_dbconfig_from_config(BuildmasterConfig, throwErrors=False)
         self.basedir = basedir
         self.name = name
 
-    def getDb(self):
+    def getDb(self) -> FakeDBConnector | None:
         try:
-            db_engine = enginestrategy.create_engine(self.db_url,
-                                                     basedir=self.basedir)
+            db = FakeDBConnector(
+                engine=enginestrategy.create_engine(
+                    cast(str, self.db_config.db_url), basedir=self.basedir
+                )
+            )
         except Exception:
-            # db_url is probably trash. Just ignore, config.py db part will
+            # db_config.db_url is probably trash. Just ignore, config.py db part will
             # create proper message
             return None
-        db = FakeDBConnector()
-        db.master = FakeMaster()
-        db.pool = FakePool()
-        db.pool.engine = db_engine
-        db.master.caches = FakeCacheManager()
-        db.model = model.Model(db)
-        db.state = state.StateConnectorComponent(db)
-        try:
-            self.objectid = db.state.thdGetObjectId(
-                db_engine, self.name, "DbConfig")['id']
-        except (ProgrammingError, OperationalError):
-            # ProgrammingError: mysql&pg, OperationalError: sqlite
-            # assume db is not initialized
-            db.pool.engine.dispose()
-            return None
+
+        with db.connect() as conn:
+            try:
+                self.objectid = db.state.thdGetObjectId(conn, self.name, "DbConfig")['id']
+            except (ProgrammingError, OperationalError):
+                conn.rollback()
+                # ProgrammingError: mysql&pg, OperationalError: sqlite
+                # assume db is not initialized
+                return None
+
         return db
 
-    def get(self, name, default=state.StateConnectorComponent.Thunk):
+    def get(self, name: str, default: Any = state.StateConnectorComponent.Thunk) -> Any:
         db = self.getDb()
         if db is not None:
-            ret = db.state.thdGetState(
-                db.pool.engine, self.objectid, name, default=default)
-            db.pool.engine.dispose()
+            with db.connect() as conn:
+                ret = db.state.thdGetState(conn, self.objectid, name, default=default)
         else:
             if default is not state.StateConnectorComponent.Thunk:
                 return default
             raise KeyError("Db not yet initialized")
         return ret
 
-    def set(self, name, value):
+    def set(self, name: str, value: Any) -> None:
         db = self.getDb()
         if db is not None:
-            db.state.thdSetState(db.pool.engine, self.objectid, name, value)
-            db.pool.engine.dispose()
+            with db.connect() as conn:
+                db.state.thdSetState(conn, self.objectid, name, value)

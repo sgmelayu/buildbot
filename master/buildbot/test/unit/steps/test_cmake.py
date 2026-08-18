@@ -13,144 +13,139 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from twisted.internet import defer
 from twisted.trial import unittest
 
 from buildbot.config import ConfigErrors
 from buildbot.process.properties import Property
 from buildbot.process.results import SUCCESS
 from buildbot.steps.cmake import CMake
-from buildbot.test.fake.remotecommand import ExpectShell
-from buildbot.test.util.misc import TestReactorMixin
-from buildbot.test.util.steps import BuildStepMixin
+from buildbot.test.reactor import TestReactorMixin
+from buildbot.test.steps import ExpectShell
+from buildbot.test.steps import TestBuildStepMixin
+
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
 
 
-class TestCMake(BuildStepMixin, TestReactorMixin, unittest.TestCase):
+class TestCMake(TestBuildStepMixin, TestReactorMixin, unittest.TestCase):
+    @defer.inlineCallbacks
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        self.setup_test_reactor()
+        yield self.setup_test_build_step()
 
-    def setUp(self):
-        self.setUpTestReactor()
-        self.setUpBuildStep()
+    def expect_and_run_command(self, *params: str) -> defer.Deferred[None]:
+        command = [CMake.DEFAULT_CMAKE, *list(params)]
 
-    def tearDown(self):
-        self.tearDownBuildStep()
+        self.expect_commands(ExpectShell(command=command, workdir='wkdir').exit(0))
+        self.expect_outcome(result=SUCCESS)
+        return self.run_step()
 
-    def expect_and_run_command(self, *params):
-        command = [CMake.DEFAULT_CMAKE] + list(params)
-
-        self.expectCommands(
-            ExpectShell(command=command, workdir='wkdir') + 0)
-        self.expectOutcome(result=SUCCESS)
-        return self.runStep()
-
-    def test_definitions_type(self):
+    def test_definitions_type(self) -> None:
         with self.assertRaises(ConfigErrors):
-            CMake(definitions='hello')
+            CMake(definitions='hello')  # type: ignore[arg-type]
 
-    def test_options_type(self):
+    def test_options_type(self) -> None:
         with self.assertRaises(ConfigErrors):
-            CMake(options='hello')
+            CMake(options='hello')  # type: ignore[arg-type]
 
-    def test_plain(self):
-        self.setupStep(CMake())
-        self.expectCommands(
-            ExpectShell(command=[CMake.DEFAULT_CMAKE], workdir='wkdir') + 0)
-        self.expectOutcome(result=SUCCESS)
-        return self.runStep()
+    def test_plain(self) -> defer.Deferred[None]:
+        self.setup_step(CMake())
+        self.expect_commands(ExpectShell(command=[CMake.DEFAULT_CMAKE], workdir='wkdir').exit(0))
+        self.expect_outcome(result=SUCCESS)
+        return self.run_step()
 
-    def test_cmake(self):
+    def test_cmake(self) -> defer.Deferred[None]:
         cmake_bin = 'something/else/cmake'
 
-        self.setupStep(CMake(cmake=cmake_bin))
-        self.expectCommands(
-            ExpectShell(command=[cmake_bin], workdir='wkdir') + 0)
-        self.expectOutcome(result=SUCCESS)
-        return self.runStep()
+        self.setup_step(CMake(cmake=cmake_bin))
+        self.expect_commands(ExpectShell(command=[cmake_bin], workdir='wkdir').exit(0))
+        self.expect_outcome(result=SUCCESS)
+        return self.run_step()
 
-    def test_cmake_interpolation(self):
+    def test_cmake_interpolation(self) -> defer.Deferred[None]:
         prop = 'CMAKE'
         value = 'Real_CMAKE'
 
-        self.setupStep(CMake(cmake=Property(prop)))
-        self.properties.setProperty(prop, value, source='test')
+        self.setup_step(CMake(cmake=Property(prop)))
+        self.build.setProperty(prop, value, source='test')
 
-        self.expectCommands(
-            ExpectShell(command=[value], workdir='wkdir') + 0)
-        self.expectOutcome(result=SUCCESS)
-        return self.runStep()
+        self.expect_commands(ExpectShell(command=[value], workdir='wkdir').exit(0))
+        self.expect_outcome(result=SUCCESS)
+        return self.run_step()
 
-    def test_definitions(self):
-        definition = {
-            'a': 'b'
-        }
-        self.setupStep(CMake(definitions=definition))
-        self.expect_and_run_command('-D%s=%s' % list(definition.items())[0])
+    def test_definitions(self) -> None:
+        definition = {'a': 'b'}
+        self.setup_step(CMake(definitions=definition))
+        self.expect_and_run_command('-Da=b')
 
-    def test_environment(self):
+    def test_environment(self) -> defer.Deferred[None]:
         command = [CMake.DEFAULT_CMAKE]
         environment = {'a': 'b'}
-        self.setupStep(CMake(env=environment))
-        self.expectCommands(
-            ExpectShell(
-                command=command, workdir='wkdir', env={'a': 'b'}) + 0)
-        self.expectOutcome(result=SUCCESS)
-        return self.runStep()
+        self.setup_step(CMake(env=environment))
+        self.expect_commands(ExpectShell(command=command, workdir='wkdir', env={'a': 'b'}).exit(0))
+        self.expect_outcome(result=SUCCESS)
+        return self.run_step()
 
-    def test_definitions_interpolation(self):
-        b_value = 'real_b'
+    def test_definitions_interpolation(self) -> None:
+        definitions = {'a': Property('b')}
 
-        definitions = {
-            'a': Property('b')
-        }
+        self.setup_step(CMake(definitions=definitions))
+        self.build.setProperty('b', 'real_b', source='test')
+        self.expect_and_run_command('-Da=real_b')
 
-        self.setupStep(CMake(definitions=definitions))
-        self.properties.setProperty('b', b_value, source='test')
-        self.expect_and_run_command('-D%s=%s' % ('a', b_value))
-
-    def test_definitions_renderable(self):
-        b_value = 'real_b'
-
+    def test_definitions_renderable(self) -> None:
         definitions = Property('b')
-        self.setupStep(CMake(definitions=definitions))
-        self.properties.setProperty('b', {'a': b_value}, source='test')
-        self.expect_and_run_command('-D%s=%s' % ('a', b_value))
+        self.setup_step(CMake(definitions=definitions))
+        self.build.setProperty('b', {'a': 'real_b'}, source='test')
+        self.expect_and_run_command('-Da=real_b')
 
-    def test_generator(self):
+    def test_generator(self) -> None:
         generator = 'Ninja'
 
-        self.setupStep(CMake(generator=generator))
+        self.setup_step(CMake(generator=generator))
         self.expect_and_run_command('-G', generator)
 
-    def test_generator_interpolation(self):
+    def test_generator_interpolation(self) -> None:
         value = 'Our_GENERATOR'
 
-        self.setupStep(CMake(generator=Property('GENERATOR')))
-        self.properties.setProperty('GENERATOR', value, source='test')
+        self.setup_step(CMake(generator=Property('GENERATOR')))
+        self.build.setProperty('GENERATOR', value, source='test')
 
         self.expect_and_run_command('-G', value)
 
-    def test_options(self):
+    def test_options(self) -> None:
         options = ('A', 'B')
 
-        self.setupStep(CMake(options=options))
+        self.setup_step(CMake(options=options))
         self.expect_and_run_command(*options)
 
-    def test_options_interpolation(self):
+    def test_options_interpolation(self) -> None:
         prop = 'option'
         value = 'value'
 
-        self.setupStep(CMake(options=(Property(prop),)))
-        self.properties.setProperty(prop, value, source='test')
+        self.setup_step(CMake(options=(Property(prop),)))
+        self.build.setProperty(prop, value, source='test')
         self.expect_and_run_command(value)
 
-    def test_path(self):
+    def test_path(self) -> None:
         path = 'some/path'
 
-        self.setupStep(CMake(path=path))
+        self.setup_step(CMake(path=path))
         self.expect_and_run_command(path)
 
-    def test_path_interpolation(self):
+    def test_path_interpolation(self) -> None:
         prop = 'path'
         value = 'some/path'
 
-        self.setupStep(CMake(path=Property(prop)))
-        self.properties.setProperty(prop, value, source='test')
+        self.setup_step(CMake(path=Property(prop)))
+        self.build.setProperty(prop, value, source='test')
         self.expect_and_run_command(value)
+
+    def test_options_path(self) -> None:
+        self.setup_step(CMake(path='some/path', options=('A', 'B')))
+        self.expect_and_run_command('A', 'B', 'some/path')

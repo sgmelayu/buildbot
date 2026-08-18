@@ -13,12 +13,21 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from typing import Any
+
 from twisted.internet import defer
 
 from buildbot import config
 from buildbot.interfaces import IRenderable
 from buildbot.process.buildstep import BuildStep
 from buildbot.process.buildstep import ShellMixin
+
+if TYPE_CHECKING:
+    from buildbot.interfaces import IMaybeRenderableType
+    from buildbot.util.twisted import InlineCallbacksType
 
 
 class CMake(ShellMixin, BuildStep):
@@ -28,29 +37,36 @@ class CMake(ShellMixin, BuildStep):
     description = ['running', 'cmake']
     descriptionDone = ['cmake']
 
-    renderables = (
-        'cmake',
-        'definitions',
-        'generator',
-        'options',
-        'path'
-    )
+    renderables = ('cmake', 'definitions', 'generator', 'options', 'path')
 
     haltOnFailure = True
 
-    def __init__(self, path=None, generator=None, definitions=None,
-                 options=None, cmake=DEFAULT_CMAKE, **kwargs):
-
+    def __init__(
+        self,
+        path: IMaybeRenderableType[str] | None = None,
+        generator: IMaybeRenderableType[str] | None = None,
+        definitions: dict[str, Any] | IRenderable | None = None,
+        options: list[IMaybeRenderableType[str]]
+        | tuple[IMaybeRenderableType[str], ...]
+        | IRenderable
+        | None = None,
+        cmake: IMaybeRenderableType[str] = DEFAULT_CMAKE,
+        **kwargs: Any,
+    ) -> None:
         self.path = path
         self.generator = generator
 
-        if not (definitions is None or isinstance(definitions, dict)
-                or IRenderable.providedBy(definitions)):
+        if not (
+            definitions is None
+            or isinstance(definitions, dict)
+            or IRenderable.providedBy(definitions)
+        ):
             config.error('definitions must be a dictionary or implement IRenderable')
         self.definitions = definitions
 
-        if not (options is None or isinstance(options, (list, tuple))
-                or IRenderable.providedBy(options)):
+        if not (
+            options is None or isinstance(options, (list, tuple)) or IRenderable.providedBy(options)
+        ):
             config.error('options must be a list, a tuple or implement IRenderable')
         self.options = options
 
@@ -59,26 +75,26 @@ class CMake(ShellMixin, BuildStep):
         super().__init__(**kwargs)
 
     @defer.inlineCallbacks
-    def run(self):
+    def run(self) -> InlineCallbacksType[int]:
         """
         run CMake
         """
         command = [self.cmake]
 
         if self.generator:
-            command.extend([
-                '-G', self.generator
-            ])
+            command.extend(['-G', self.generator])
+
+        if self.definitions is not None:
+            assert isinstance(self.definitions, dict)
+            for item in self.definitions.items():
+                command.append(f'-D{item[0]}={item[1]}')
+
+        if self.options is not None:
+            assert isinstance(self.options, (list, tuple))
+            command.extend(self.options)
 
         if self.path:
             command.append(self.path)
-
-        if self.definitions is not None:
-            for item in self.definitions.items():
-                command.append('-D%s=%s' % item)
-
-        if self.options is not None:
-            command.extend(self.options)
 
         cmd = yield self.makeRemoteShellCommand(command=command)
 

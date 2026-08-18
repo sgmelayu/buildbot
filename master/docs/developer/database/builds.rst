@@ -15,7 +15,7 @@ Builds connector
 
     .. index:: bdict, buildid
 
-    Builds are indexed by *buildid* and their contents represented as *builddicts* (build dictionaries), with the following keys:
+    Builds are indexed by *buildid* and their contents represented as :class:`BuildModel` dataclass, with the following fields:
 
     * ``id`` (the build ID, globally unique)
     * ``number`` (the build number, unique only within the builder)
@@ -25,13 +25,15 @@ Builds connector
     * ``masterid`` (the ID of the master on which this build was performed)
     * ``started_at`` (datetime at which this build began)
     * ``complete_at`` (datetime at which this build finished, or None if it is ongoing)
+    * ``locks_duration_s`` (the amount of time spent acquiring locks so far, not including
+      any running steps)
     * ``state_string`` (short string describing the build's state)
     * ``results`` (results of this build; see :ref:`Build-Result-Codes`)
 
     .. py:method:: getBuild(buildid)
 
         :param integer buildid: build id
-        :returns: Build dictionary as above or ``None``, via Deferred
+        :returns: :class:`BuildModel` or ``None``, via Deferred
 
         Get a single build, in the format described above.
         Returns ``None`` if there is no such build.
@@ -40,7 +42,7 @@ Builds connector
 
         :param integer builder: builder id
         :param integer number: build number within that builder
-        :returns: Build dictionary as above or ``None``, via Deferred
+        :returns: :class:`BuildModel` or ``None``, via Deferred
 
         Get a single build, in the format described above, specified by builder and number, rather than build id.
         Returns ``None`` if there is no such build.
@@ -50,21 +52,21 @@ Builds connector
         :param integer builderid: builder to get builds for
         :param integer number: the current build number. Previous build will be taken from this number
         :param list ssBuild: the list of sourcestamps for the current build number
-        :returns: None or a build dictionary
+        :returns: :class:`BuildModel` or ``None``, via Deferred
 
-        Returns the last successful build from the current build number with the same repository/repository/codebase
+        Returns the last successful build from the current build number with the same repository, branch, or codebase.
 
     .. py:method:: getBuilds(builderid=None, buildrequestid=None, complete=None, resultSpec=None)
 
         :param integer builderid: builder to get builds for
         :param integer buildrequestid: buildrequest to get builds for
         :param boolean complete: if not None, filters results based on completeness
-        :param resultSpec: resultSpec containing filters sorting and paging request from data/REST API.
+        :param resultSpec: result spec containing filters sorting and paging requests from data/REST API.
             If possible, the db layer can optimize the SQL query using this information.
-        :returns: list of build dictionaries as above, via Deferred
+        :returns: list of :class:`BuildModel`, via Deferred
 
         Get a list of builds, in the format described above.
-        Each of the parameters limit the resulting set of builds.
+        Each of the parameters limits the resulting set of builds.
 
     .. py:method:: addBuild(builderid, buildrequestid, workerid, masterid, state_string)
 
@@ -86,6 +88,14 @@ Builds connector
 
         Update the state strings for the given build.
 
+    .. py:method:: add_build_locks_duration(buildid, duration_s):
+
+        :param integer buildid: build id
+        :param integer duration_s: time duration to add
+        :returns: Deferred
+
+        Adds the given duration to the ``locks_duration_s`` field of the build.
+
     .. py:method:: finishBuild(buildid, results)
 
         :param integer buildid: build id
@@ -98,12 +108,14 @@ Builds connector
 
             This update is done unconditionally, even if the build is already finished.
 
-    .. py:method:: getBuildProperties(buildid)
+    .. py:method:: getBuildProperties(buildid, resultSpec=None)
 
         :param buildid: build ID
+        :param resultSpec: resultSpec
         :returns: dictionary mapping property name to ``value, source``, via Deferred
 
         Return the properties for a build, in the same format they were given to :py:meth:`addBuild`.
+        Optional filtering via resultSpec is available and optimized in the db layer.
 
         Note that this method does not distinguish a non-existent build from a build with no properties, and returns ``{}`` in either case.
 

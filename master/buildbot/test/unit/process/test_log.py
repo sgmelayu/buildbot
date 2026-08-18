@@ -13,37 +13,61 @@
 #
 # Copyright Buildbot Team Members
 
-import mock
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from typing import Any
+from unittest import mock
 
 from twisted.internet import defer
 from twisted.internet import reactor
 from twisted.trial import unittest
 
 from buildbot.process import log
+from buildbot.test import fakedb
 from buildbot.test.fake import fakemaster
 from buildbot.test.fake import logfile as fakelogfile
+from buildbot.test.reactor import TestReactorMixin
 from buildbot.test.util import interfaces
-from buildbot.test.util.misc import TestReactorMixin
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from buildbot.process.log import PlainLog
+    from buildbot.process.log import StreamLog
+    from buildbot.util.twisted import InlineCallbacksType
 
 
 class Tests(TestReactorMixin, unittest.TestCase):
+    @defer.inlineCallbacks
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        self.setup_test_reactor()
+        self.master = yield fakemaster.make_master(self, wantData=True)
 
-    def setUp(self):
-        self.setUpTestReactor()
-        self.master = fakemaster.make_master(self, wantData=True)
+        master_id = fakedb.FakeDBConnector.MASTER_ID
+        self.master.db.insert_test_data([
+            fakedb.Master(id=master_id),
+            fakedb.Worker(id=47),
+            fakedb.Buildset(id=20),
+            fakedb.Builder(id=80, name='b1'),
+            fakedb.BuildRequest(id=41, buildsetid=20, builderid=80),
+            fakedb.Build(
+                id=30, buildrequestid=41, number=7, masterid=master_id, builderid=80, workerid=47
+            ),
+            fakedb.Step(id=27, buildid=30, number=1, name='make'),
+        ])
 
     @defer.inlineCallbacks
-    def makeLog(self, type, logEncoding='utf-8'):
-        logid = yield self.master.data.updates.addLog(
-            stepid=27, name='testlog', type=str(type))
+    def makeLog(self, type: str, logEncoding: str = 'utf-8') -> InlineCallbacksType[log.Log]:
+        logid = yield self.master.data.updates.addLog(stepid=27, name='testlog', type=str(type))
         return log.Log.new(self.master, 'testlog', type, logid, logEncoding)
 
     @defer.inlineCallbacks
-    def test_creation(self):
+    def test_creation(self) -> InlineCallbacksType[None]:
         for type in 'ths':
             yield self.makeLog(type)
 
-    def test_logDecodeFunctionFromConfig(self):
+    def test_logDecodeFunctionFromConfig(self) -> None:
         otilde = '\u00f5'
         otilde_utf8 = otilde.encode('utf-8')
         otilde_latin1 = otilde.encode('latin1')
@@ -58,47 +82,58 @@ class Tests(TestReactorMixin, unittest.TestCase):
         self.assertEqual(f(invalid_utf8), replacement)
 
         f = log.Log._decoderFromString(lambda s: str(s[::-1]))
-        self.assertEqual(f('abc'), 'cba')
+        self.assertEqual(f('abc'), 'cba')  # type: ignore[arg-type]
 
     @defer.inlineCallbacks
-    def test_updates_plain(self):
+    def test_updates_plain(self) -> InlineCallbacksType[None]:
         _log = yield self.makeLog('t')
 
         _log.addContent('hello\n')
         _log.addContent('hello ')
         _log.addContent('cruel ')
         _log.addContent('world\nthis is a second line')  # unfinished
-        _log.finish()
+        yield _log.finish()
 
-        self.assertEqual(self.master.data.updates.logs[_log.logid], {
-            'content': ['hello\n', 'hello cruel world\n',
-                        'this is a second line\n'],
-            'finished': True,
-            'type': 't',
-            'name': 'testlog',
-        })
+        log_data = yield self.master.data.get(('logs', _log.logid))
+        log_content = yield self.master.data.get(('logs', _log.logid, 'contents'))
+
+        self.assertEqual(
+            log_data,
+            {
+                'complete': True,
+                'logid': 1,
+                'name': 'testlog',
+                'num_lines': 3,
+                'slug': 'testlog',
+                'stepid': 27,
+                'type': 't',
+            },
+        )
+        self.assertEqual(
+            log_content['content'], 'hello\nhello cruel world\nthis is a second line\n'
+        )
 
     @defer.inlineCallbacks
-    def test_updates_different_encoding(self):
+    def test_updates_different_encoding(self) -> InlineCallbacksType[None]:
         _log = yield self.makeLog('t', logEncoding='latin-1')
         # 0xa2 is latin-1 encoding for CENT SIGN
         _log.addContent('$ and \xa2\n')
-        _log.finish()
+        yield _log.finish()
 
-        self.assertEqual(self.master.data.updates.logs[_log.logid]['content'],
-                         ['$ and \N{CENT SIGN}\n'])
+        log_content = yield self.master.data.get(('logs', _log.logid, 'contents'))
+        self.assertEqual(log_content['content'], '$ and \N{CENT SIGN}\n')
 
     @defer.inlineCallbacks
-    def test_updates_unicode_input(self):
+    def test_updates_unicode_input(self) -> InlineCallbacksType[None]:
         _log = yield self.makeLog('t', logEncoding='something-invalid')
         _log.addContent('\N{SNOWMAN}\n')
-        _log.finish()
+        yield _log.finish()
 
-        self.assertEqual(self.master.data.updates.logs[_log.logid]['content'],
-                         ['\N{SNOWMAN}\n'])
+        log_content = yield self.master.data.get(('logs', _log.logid, 'contents'))
+        self.assertEqual(log_content['content'], '\N{SNOWMAN}\n')
 
     @defer.inlineCallbacks
-    def test_subscription_plain(self):
+    def test_subscription_plain(self) -> InlineCallbacksType[None]:
         _log = yield self.makeLog('t')
         calls = []
         _log.subscribe(lambda stream, content: calls.append((stream, content)))
@@ -113,15 +148,14 @@ class Tests(TestReactorMixin, unittest.TestCase):
         yield _log.addContent('cruel ')
         self.assertEqual(calls, [])
         yield _log.addContent('world\nthis is a second line\n')
-        self.assertEqual(calls, [
-            (None, 'hello cruel world\nthis is a second line\n')])
+        self.assertEqual(calls, [(None, 'hello cruel world\nthis is a second line\n')])
         calls = []
 
         yield _log.finish()
         self.assertEqual(calls, [(None, None)])
 
     @defer.inlineCallbacks
-    def test_subscription_unsubscribe(self):
+    def test_subscription_unsubscribe(self) -> InlineCallbacksType[None]:
         _log = yield self.makeLog('t')
         sub_fn = mock.Mock()
         sub = _log.subscribe(sub_fn)
@@ -130,7 +164,7 @@ class Tests(TestReactorMixin, unittest.TestCase):
         sub_fn.assert_not_called()
 
     @defer.inlineCallbacks
-    def test_subscription_stream(self):
+    def test_subscription_stream(self) -> InlineCallbacksType[None]:
         _log = yield self.makeLog('s')
         calls = []
         _log.subscribe(lambda stream, content: calls.append((stream, content)))
@@ -153,59 +187,77 @@ class Tests(TestReactorMixin, unittest.TestCase):
         calls = []
 
         yield _log.addStdout('world\nthis is a second line')  # unfinished
-        self.assertEqual(calls, [
-            ('o', 'hello cruel world\n')])
+        self.assertEqual(calls, [('o', 'hello cruel world\n')])
         calls = []
 
         yield _log.finish()
-        self.assertEqual(calls, [
-            ('o', 'this is a second line\n'),
-            (None, None)])
+        self.assertEqual(calls, [('o', 'this is a second line\n'), (None, None)])
 
     @defer.inlineCallbacks
-    def test_updates_stream(self):
+    def test_updates_stream(self) -> InlineCallbacksType[None]:
         _log = yield self.makeLog('s')
 
-        _log.addStdout('hello\n')
-        _log.addStdout('hello ')
-        _log.addStderr('oh noes!\n')
-        _log.addStdout('cruel world\n')
-        _log.addStderr('bad things!')  # unfinished
-        _log.finish()
+        _log.addStdout('out1\n')
+        _log.addStdout('out2 ')
+        _log.addStderr('err2\n')
+        _log.addStdout('out3\n')
+        _log.addStderr('err3')  # unfinished
+        yield _log.finish()
 
-        self.assertEqual(self.master.data.updates.logs[_log.logid], {
-            'content': ['ohello\n', 'eoh noes!\n', 'ohello cruel world\n',
-                        'ebad things!\n'],
-            'finished': True,
-            'name': 'testlog',
-            'type': 's',
-        })
+        log_data = yield self.master.data.get(('logs', _log.logid))
+        log_content = yield self.master.data.get(('logs', _log.logid, 'contents'))
+
+        self.assertEqual(
+            log_data,
+            {
+                'complete': True,
+                'logid': 1,
+                'name': 'testlog',
+                'num_lines': 4,
+                'slug': 'testlog',
+                'stepid': 27,
+                'type': 's',
+            },
+        )
+        self.assertEqual(log_content['content'], 'oout1\neerr2\noout2 out3\neerr3\n')
 
     @defer.inlineCallbacks
-    def test_unyielded_finish(self):
+    def test_updates_flush(self) -> InlineCallbacksType[None]:
+        _log = yield self.makeLog('s')
+
+        _log.addStdout('out1\n')
+        _log.addStdout('out2 ')
+        _log.addStderr('err2\n')
+        _log.addStdout('out3')
+        _log.addStderr('err3')  # unfinished
+        yield _log.flush()
+
+        log_data = yield self.master.data.get(('logs', _log.logid))
+        log_content = yield self.master.data.get(('logs', _log.logid, 'contents'))
+
+        self.assertEqual(
+            log_data,
+            {
+                'complete': False,
+                'logid': 1,
+                'name': 'testlog',
+                'num_lines': 4,
+                'slug': 'testlog',
+                'stepid': 27,
+                'type': 's',
+            },
+        )
+        self.assertEqual(log_content['content'], 'oout1\neerr2\noout2 out3\neerr3\n')
+
+    @defer.inlineCallbacks
+    def test_unyielded_finish(self) -> InlineCallbacksType[None]:
         _log = yield self.makeLog('s')
         _log.finish()
         with self.assertRaises(AssertionError):
             yield _log.finish()
 
-    @defer.inlineCallbacks
-    def test_isFinished(self):
-        _log = yield self.makeLog('s')
-        self.assertFalse(_log.isFinished())
-        yield _log.finish()
-        self.assertTrue(_log.isFinished())
-
-    @defer.inlineCallbacks
-    def test_waitUntilFinished(self):
-        _log = yield self.makeLog('s')
-        d = _log.waitUntilFinished()
-        self.assertFalse(d.called)
-        yield _log.finish()
-        self.assertTrue(d.called)
-
 
 class InterfaceTests(interfaces.InterfaceTests):
-
     # for compatibility between old-style and new-style steps, both
     # buildbot.status.logfile.LogFile and buildbot.process.log.StreamLog must
     # meet this interface, at least until support for old-style steps is
@@ -213,137 +265,124 @@ class InterfaceTests(interfaces.InterfaceTests):
 
     # ILogFile
 
-    def test_signature_addStdout(self):
-        @self.assertArgSpecMatches(self.log.addStdout)
-        def addStdout(self, text):
+    def test_signature_addStdout(self) -> None:
+        @self.assertArgSpecMatches(self.log.addStdout)  # type: ignore[attr-defined]
+        def addStdout(self: object, text: str | bytes) -> None:
             pass
 
-    def test_signature_addStderr(self):
-        @self.assertArgSpecMatches(self.log.addStderr)
-        def addStderr(self, text):
+    def test_signature_addStderr(self) -> None:
+        @self.assertArgSpecMatches(self.log.addStderr)  # type: ignore[attr-defined]
+        def addStderr(self: object, text: str | bytes) -> None:
             pass
 
-    def test_signature_addHeader(self):
-        @self.assertArgSpecMatches(self.log.addHeader)
-        def addHeader(self, text):
+    def test_signature_addHeader(self) -> None:
+        @self.assertArgSpecMatches(self.log.addHeader)  # type: ignore[attr-defined]
+        def addHeader(self: object, text: str | bytes) -> None:
             pass
 
-    def test_signature_finish(self):
-        @self.assertArgSpecMatches(self.log.finish)
-        def finish(self):
+    def test_signature_finish(self) -> None:
+        @self.assertArgSpecMatches(self.log.finish)  # type: ignore[attr-defined]
+        def finish(self: object) -> None:
             pass
 
-    # IStatusLog
-
-    def test_signature_getName(self):
-        @self.assertArgSpecMatches(self.log.getName)
-        def getName(self):
+    def test_signature_getName(self) -> None:
+        @self.assertArgSpecMatches(self.log.getName)  # type: ignore[attr-defined]
+        def getName(self: object) -> None:
             pass
 
-    def test_getName(self):
-        self.assertEqual(self.log.getName(), 'stdio')
+    def test_getName(self) -> None:
+        self.assertEqual(self.log.getName(), 'stdio')  # type: ignore[attr-defined]
 
-    def test_signature_isFinished(self):
-        @self.assertArgSpecMatches(self.log.isFinished)
-        def isFinished(self):
+    def test_signature_subscribe(self) -> None:
+        @self.assertArgSpecMatches(self.log.subscribe)  # type: ignore[attr-defined]
+        def subscribe(self: object, callback: Callable[..., Any]) -> None:
             pass
 
-    def test_signature_waitUntilFinished(self):
-        @self.assertArgSpecMatches(self.log.waitUntilFinished)
-        def waitUntilFinished(self):
-            pass
-
-    def test_signature_subscribe(self):
-        @self.assertArgSpecMatches(self.log.subscribe)
-        def subscribe(self, callback):
-            pass
-
-    def test_signature_unsubscribe(self):
+    def test_signature_unsubscribe(self) -> None:
         # method has been removed
-        self.assertFalse(hasattr(self.log, 'unsubscribe'))
+        self.assertFalse(hasattr(self.log, 'unsubscribe'))  # type: ignore[attr-defined]
 
-    def test_signature_getStep_removed(self):
-        self.assertFalse(hasattr(self.log, 'getStep'))
+    def test_signature_getStep_removed(self) -> None:
+        self.assertFalse(hasattr(self.log, 'getStep'))  # type: ignore[attr-defined]
 
-    def test_signature_subscribeConsumer_removed(self):
-        self.assertFalse(hasattr(self.log, 'subscribeConsumer'))
+    def test_signature_subscribeConsumer_removed(self) -> None:
+        self.assertFalse(hasattr(self.log, 'subscribeConsumer'))  # type: ignore[attr-defined]
 
-    def test_signature_hasContents_removed(self):
-        self.assertFalse(hasattr(self.log, 'hasContents'))
+    def test_signature_hasContents_removed(self) -> None:
+        self.assertFalse(hasattr(self.log, 'hasContents'))  # type: ignore[attr-defined]
 
-    def test_signature_getText_removed(self):
-        self.assertFalse(hasattr(self.log, 'getText'))
+    def test_signature_getText_removed(self) -> None:
+        self.assertFalse(hasattr(self.log, 'getText'))  # type: ignore[attr-defined]
 
-    def test_signature_readlines_removed(self):
-        self.assertFalse(hasattr(self.log, 'readlines'))
+    def test_signature_readlines_removed(self) -> None:
+        self.assertFalse(hasattr(self.log, 'readlines'))  # type: ignore[attr-defined]
 
-    def test_signature_getTextWithHeaders_removed(self):
-        self.assertFalse(hasattr(self.log, 'getTextWithHeaders'))
+    def test_signature_getTextWithHeaders_removed(self) -> None:
+        self.assertFalse(hasattr(self.log, 'getTextWithHeaders'))  # type: ignore[attr-defined]
 
-    def test_signature_getChunks_removed(self):
-        self.assertFalse(hasattr(self.log, 'getChunks'))
-
-
-class TestProcessItfc(unittest.TestCase, InterfaceTests):
-
-    def setUp(self):
-        self.log = log.StreamLog(mock.Mock(name='master'), 'stdio', 's',
-                                 101, str)
+    def test_signature_getChunks_removed(self) -> None:
+        self.assertFalse(hasattr(self.log, 'getChunks'))  # type: ignore[attr-defined]
 
 
-class TestFakeLogFile(unittest.TestCase, InterfaceTests):
+class TestProcessItfc(InterfaceTests, unittest.TestCase):
+    def setUp(self) -> None:
+        self.log = log.StreamLog(mock.Mock(name='master'), 'stdio', 's', 101, str)
 
-    def setUp(self):
+
+class TestFakeLogFile(InterfaceTests, unittest.TestCase):
+    def setUp(self) -> None:
         self.log = fakelogfile.FakeLogFile('stdio')
 
 
 class TestErrorRaised(unittest.TestCase):
+    def instrumentTestedLoggerForError(
+        self, testedLog: StreamLog | PlainLog
+    ) -> StreamLog | PlainLog:
+        def addRawLines(msg: str) -> defer.Deferred[None]:
+            d: defer.Deferred[None] = defer.Deferred()
 
-    def instrumentTestedLoggerForError(self, testedLog):
-        def addRawLines(msg):
-            d = defer.Deferred()
-
-            def raiseError(_):
+            def raiseError(_: None) -> None:
                 d.errback(RuntimeError('DB has gone away'))
-            reactor.callLater(10 ** (-6), raiseError, None)
+
+            reactor.callLater(10 ** (-6), raiseError, None)  # type: ignore[attr-defined]
             return d
 
         self.patch(testedLog, 'addRawLines', addRawLines)
         return testedLog
 
     @defer.inlineCallbacks
-    def testErrorOnStreamLog(self):
+    def testErrorOnStreamLog(self) -> InlineCallbacksType[None]:
         tested_log = self.instrumentTestedLoggerForError(
-            log.StreamLog(mock.Mock(name='master'), 'stdio', 's',
-                          101, str))
+            log.StreamLog(mock.Mock(name='master'), 'stdio', 's', 101, str)
+        )
 
         correct_error_raised = False
         try:
-            yield tested_log.addStdout('msg\n')
+            yield tested_log.addStdout('msg\n')  # type: ignore[union-attr]
         except Exception as e:
             correct_error_raised = 'DB has gone away' in str(e)
         self.assertTrue(correct_error_raised)
 
     @defer.inlineCallbacks
-    def testErrorOnPlainLog(self):
+    def testErrorOnPlainLog(self) -> InlineCallbacksType[None]:
         tested_log = self.instrumentTestedLoggerForError(
-            log.PlainLog(mock.Mock(name='master'), 'stdio', 's',
-                         101, str))
+            log.PlainLog(mock.Mock(name='master'), 'stdio', 's', 101, str)
+        )
         correct_error_raised = False
         try:
-            yield tested_log.addContent('msg\n')
+            yield tested_log.addContent('msg\n')  # type: ignore[union-attr]
         except Exception as e:
             correct_error_raised = 'DB has gone away' in str(e)
         self.assertTrue(correct_error_raised)
 
     @defer.inlineCallbacks
-    def testErrorOnPlainLogFlush(self):
+    def testErrorOnPlainLogFlush(self) -> InlineCallbacksType[None]:
         tested_log = self.instrumentTestedLoggerForError(
-            log.PlainLog(mock.Mock(name='master'), 'stdio', 's',
-                         101, str))
+            log.PlainLog(mock.Mock(name='master'), 'stdio', 's', 101, str)
+        )
         correct_error_raised = False
         try:
-            yield tested_log.addContent('msg')
+            yield tested_log.addContent('msg')  # type: ignore[union-attr]
             yield tested_log.finish()
         except Exception as e:
             correct_error_raised = 'DB has gone away' in str(e)

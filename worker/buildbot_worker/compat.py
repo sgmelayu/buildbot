@@ -1,4 +1,3 @@
-# coding=utf-8
 # This file is part of Buildbot.  Buildbot is free software: you can
 # redistribute it and/or modify it under the terms of the GNU General Public
 # License as published by the Free Software Foundation, version 2.
@@ -19,77 +18,63 @@ Helpers for handling compatibility differences
 between Python 2 and Python 3.
 """
 
-from __future__ import absolute_import
-from __future__ import print_function
-from future.utils import text_type
+from __future__ import annotations
 
-if str != bytes:
-    # On Python 3 and higher, str and bytes
-    # are not equivalent.  We must use StringIO for
-    # doing io on native strings.
-    from io import StringIO as NativeStringIO
-else:
-    # On Python 2 and older, str and bytes
-    # are equivalent.  We must use BytesIO for
-    # doing io on native strings.
-    from io import BytesIO as NativeStringIO
+from typing import TYPE_CHECKING
+from typing import overload
+
+if TYPE_CHECKING:
+    from typing import Any
+    from typing import TypeVar
+
+    _T = TypeVar('_T')
 
 
-def bytes2NativeString(x, encoding='utf-8'):
-    """
-    Convert C{bytes} to a native C{str}.
-
-    On Python 3 and higher, str and bytes
-    are not equivalent.  In this case, decode
-    the bytes, and return a native string.
-
-    On Python 2 and lower, str and bytes
-    are equivalent.  In this case, just
-    just return the native string.
-
-    @param x: a string of type C{bytes}
-    @param encoding: an optional codec, default: 'utf-8'
-    @return: a string of type C{str}
-    """
-    if isinstance(x, bytes) and str != bytes:
-        return x.decode(encoding)
-    return x
+@overload
+def unicode2bytes(x: str, encoding: str = 'utf-8', errors: str = 'strict') -> bytes: ...
 
 
-def unicode2bytes(x, encoding='utf-8', errors='strict'):
+@overload
+def unicode2bytes(x: _T, encoding: str = 'utf-8', errors: str = 'strict') -> _T: ...
+
+
+def unicode2bytes(x: str | _T, encoding: str = 'utf-8', errors: str = 'strict') -> bytes | _T:
     """
     Convert a unicode string to C{bytes}.
 
-    @param x: a unicode string, of type C{unicode} on Python 2,
-              or C{str} on Python 3.
+    @param x: a unicode string, of type C{str}.
     @param encoding: an optional codec, default: 'utf-8'
     @param errors: error handling scheme, default 'strict'
     @return: a string of type C{bytes}
     """
-    if isinstance(x, text_type):
-        x = x.encode(encoding, errors)
+    if isinstance(x, str):
+        return x.encode(encoding, errors)
     return x
 
 
-def bytes2unicode(x, encoding='utf-8', errors='strict'):
+@overload
+def bytes2unicode(x: None, encoding: str = 'utf-8', errors: str = 'strict') -> None: ...
+
+
+@overload
+def bytes2unicode(x: Any, encoding: str = 'utf-8', errors: str = 'strict') -> str: ...
+
+
+def bytes2unicode(x: Any | None, encoding: str = 'utf-8', errors: str = 'strict') -> str | None:
     """
     Convert a C{bytes} to a unicode string.
 
-    @param x: a unicode string, of type C{unicode} on Python 2,
-              or C{str} on Python 3.
+    @param x: a unicode string, of type C{str}.
     @param encoding: an optional codec, default: 'utf-8'
     @param errors: error handling scheme, default 'strict'
     @return: a unicode string of type C{unicode} on Python 2, or
              C{str} on Python 3.
     """
-    if isinstance(x, (text_type, type(None))):
+    if x is None:
+        return None
+    if isinstance(x, str):
         return x
-    return text_type(x, encoding, errors)
+    return str(x, encoding, errors)
 
 
-__all__ = [
-    "NativeStringIO",
-    "bytes2NativeString",
-    "bytes2unicode",
-    "unicode2bytes"
-]
+__all__ = ["bytes2unicode", "unicode2bytes"]

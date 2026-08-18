@@ -12,26 +12,24 @@
 # Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
 # Copyright Buildbot Team Members
-
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
+from __future__ import annotations
 
 import os
 import signal
 import time
+from typing import Any
 
 from buildbot_worker.scripts import base
 
 
 class WorkerNotRunning(Exception):
-
     """
     raised when trying to stop worker process that is not running
     """
 
 
-def stopWorker(basedir, quiet, signame="TERM"):
+# TODO: change type to `signame: signal.Signals`
+def stopWorker(basedir: str, quiet: bool, signame: str = "TERM") -> int:
     """
     Stop worker process by sending it a signal.
 
@@ -47,9 +45,9 @@ def stopWorker(basedir, quiet, signame="TERM"):
 
     os.chdir(basedir)
     try:
-        f = open("twistd.pid", "rt")
-    except IOError:
-        raise WorkerNotRunning()
+        f = open("twistd.pid")
+    except OSError as e:
+        raise WorkerNotRunning() from e
 
     pid = int(f.read().strip())
     signum = getattr(signal, "SIG" + signame)
@@ -67,7 +65,7 @@ def stopWorker(basedir, quiet, signame="TERM"):
             os.kill(pid, 0)
         except OSError:
             if not quiet:
-                print("worker process {0} is dead".format(pid))
+                print(f"worker process {pid} is dead")
             return 0
         timer += 1
         time.sleep(1)
@@ -76,7 +74,7 @@ def stopWorker(basedir, quiet, signame="TERM"):
     return 1
 
 
-def stop(config, signame="TERM"):
+def stop(config: dict[str, Any], signame: str = "TERM") -> int:
     quiet = config['quiet']
     basedir = config['basedir']
 

@@ -14,6 +14,10 @@
 # Copyright Buildbot Team Members
 
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from twisted.internet import defer
 
 from buildbot.process import results
@@ -21,25 +25,41 @@ from buildbot.process.buildstep import BuildStep
 from buildbot.process.buildstep import CommandMixin
 from buildbot.test.util.integration import RunMasterBase
 
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
+
 
 # This integration test creates a master and worker environment,
 # and makes sure the command mixin is working.
 class CommandMixinMaster(RunMasterBase):
+    @defer.inlineCallbacks
+    def setup_config(self) -> InlineCallbacksType[None]:
+        c = {}
+        from buildbot.config import BuilderConfig  # noqa: PLC0415
+        from buildbot.plugins import schedulers  # noqa: PLC0415
+        from buildbot.process.factory import BuildFactory  # noqa: PLC0415
+
+        c['schedulers'] = [schedulers.AnyBranchScheduler(name="sched", builderNames=["testy"])]
+
+        f = BuildFactory()
+        f.addStep(TestCommandMixinStep())
+        c['builders'] = [BuilderConfig(name="testy", workernames=["local1"], factory=f)]
+        yield self.setup_master(c)
 
     @defer.inlineCallbacks
-    def test_commandmixin(self):
-        yield self.setupConfig(masterConfig())
+    def test_commandmixin(self) -> InlineCallbacksType[None]:
+        yield self.setup_config()
 
-        change = dict(branch="master",
-                      files=["foo.c"],
-                      author="me@foo.com",
-                      committer="me@foo.com",
-                      comments="good stuff",
-                      revision="HEAD",
-                      project="none"
-                      )
-        build = yield self.doForceBuild(wantSteps=True, useChange=change,
-                                        wantLogs=True)
+        change = {
+            "branch": "master",
+            "files": ["foo.c"],
+            "author": "me@foo.com",
+            "committer": "me@foo.com",
+            "comments": "good stuff",
+            "revision": "HEAD",
+            "project": "none",
+        }
+        build = yield self.doForceBuild(wantSteps=True, useChange=change, wantLogs=True)
         self.assertEqual(build['buildid'], 1)
         self.assertEqual(build['results'], results.SUCCESS)
 
@@ -48,10 +68,13 @@ class CommandMixinMasterPB(CommandMixinMaster):
     proto = "pb"
 
 
-class TestCommandMixinStep(BuildStep, CommandMixin):
+class CommandMixinMasterMsgPack(CommandMixinMaster):
+    proto = "msgpack"
 
+
+class TestCommandMixinStep(BuildStep, CommandMixin):
     @defer.inlineCallbacks
-    def run(self):
+    def run(self) -> InlineCallbacksType[int]:
         contents = yield self.runGlob('*')
         if contents != []:
             return results.FAILURE
@@ -77,24 +100,3 @@ class TestCommandMixinStep(BuildStep, CommandMixin):
             return results.FAILURE
 
         return results.SUCCESS
-
-
-# master configuration
-def masterConfig():
-    c = {}
-    from buildbot.config import BuilderConfig
-    from buildbot.process.factory import BuildFactory
-    from buildbot.plugins import schedulers
-
-    c['schedulers'] = [
-        schedulers.AnyBranchScheduler(
-            name="sched",
-            builderNames=["testy"])]
-
-    f = BuildFactory()
-    f.addStep(TestCommandMixinStep())
-    c['builders'] = [
-        BuilderConfig(name="testy",
-                      workernames=["local1"],
-                      factory=f)]
-    return c

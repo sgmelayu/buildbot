@@ -13,10 +13,12 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
 
 import os
 from binascii import hexlify
 from hashlib import sha1
+from typing import TYPE_CHECKING
 
 from twisted.internet import defer
 from twisted.python import log
@@ -24,13 +26,18 @@ from twisted.python import log
 from buildbot.util import bytes2unicode
 from buildbot.util import unicode2bytes
 
+if TYPE_CHECKING:
+    from buildbot.db.users import UserModel
+    from buildbot.master import BuildMaster
+    from buildbot.util.twisted import InlineCallbacksType
+
 # TODO: fossil comes from a plugin. We should have an API that plugins could use to
 # register allowed user types.
 srcs = ['git', 'svn', 'hg', 'cvs', 'darcs', 'bzr', 'fossil']
 salt_len = 8
 
 
-def createUserObject(master, author, src=None):
+def createUserObject(master: BuildMaster, author: str, src: str | None = None) -> defer.Deferred:
     """
     Take a Change author and source and translate them into a User Object,
     storing the user in master.db, or returning None if the src is not
@@ -51,32 +58,39 @@ def createUserObject(master, author, src=None):
         return defer.succeed(None)
 
     if src in srcs:
-        usdict = dict(identifier=author, attr_type=src, attr_data=author)
+        usdict = {"identifier": author, "attr_type": src, "attr_data": author}
     else:
-        log.msg("Unrecognized source argument: {}".format(src))
+        log.msg(f"Unrecognized source argument: {src}")
         return defer.succeed(None)
 
     return master.db.users.findUserByAttr(
         identifier=usdict['identifier'],
         attr_type=usdict['attr_type'],
-        attr_data=usdict['attr_data'])
+        attr_data=usdict['attr_data'],
+    )
 
 
-def _extractContact(usdict, contact_types, uid):
-    if usdict:
+def _extractContact(user: UserModel | None, contact_types: list[str], uid: int) -> str | None:
+    if user is not None and user.attributes is not None:
         for type in contact_types:
-            contact = usdict.get(type)
+            contact = user.attributes.get(type)
             if contact:
                 break
     else:
         contact = None
     if contact is None:
-        log.msg(format="Unable to find any of %(contact_types)r for uid: %(uid)r",
-                contact_types=contact_types, uid=uid)
+        log.msg(
+            format="Unable to find any of %(contact_types)r for uid: %(uid)r",
+            contact_types=contact_types,
+            uid=uid,
+        )
     return contact
 
 
-def getUserContact(master, contact_types, uid):
+@defer.inlineCallbacks
+def getUserContact(
+    master: BuildMaster, contact_types: list[str], uid: int
+) -> InlineCallbacksType[str | None]:
     """
     This is a simple getter function that returns a user attribute
     that matches the contact_types argument, or returns None if no
@@ -94,12 +108,12 @@ def getUserContact(master, contact_types, uid):
 
     @returns: string of contact information or None via deferred
     """
-    d = master.db.users.getUser(uid)
-    d.addCallback(_extractContact, contact_types, uid)
-    return d
+    user = yield master.db.users.getUser(uid)
+    contact = _extractContact(user, contact_types, uid)
+    return contact
 
 
-def encrypt(passwd):
+def encrypt(passwd: str) -> str:
     """
     Encrypts the incoming password after adding some salt to store
     it in the database.
@@ -116,7 +130,7 @@ def encrypt(passwd):
     return crypted
 
 
-def check_passwd(guess, passwd):
+def check_passwd(guess: str, passwd: str) -> bool:
     """
     Tests to see if the guess, after salting and hashing, matches the
     passwd from the database.
@@ -127,8 +141,8 @@ def check_passwd(guess, passwd):
     @returns: boolean
     """
     m = sha1()
-    salt = passwd[:salt_len * 2]  # salt_len * 2 due to encode('hex_codec')
+    salt = passwd[: salt_len * 2]  # salt_len * 2 due to encode('hex_codec')
     m.update(unicode2bytes(guess) + unicode2bytes(salt))
     crypted_guess = bytes2unicode(salt) + m.hexdigest()
 
-    return (crypted_guess == bytes2unicode(passwd))
+    return crypted_guess == bytes2unicode(passwd)

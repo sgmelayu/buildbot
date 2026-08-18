@@ -19,17 +19,31 @@
 # but "the rest" is pretty minimal
 
 
+from __future__ import annotations
+
 import json
+from typing import TYPE_CHECKING
+from typing import Any
+from typing import cast
+
+from twisted.internet import defer
 
 from buildbot.util import bytes2unicode
 
+if TYPE_CHECKING:
+    from twisted.web.server import Request
+
+    from buildbot.master import BuildMaster
+
 
 class BaseHookHandler:
-    def __init__(self, master, options):
+    def __init__(self, master: BuildMaster, options: dict[str, Any] | None):
         self.master = master
         self.options = options
 
-    def getChanges(self, request):
+    def getChanges(
+        self, request: Request
+    ) -> defer.Deferred[tuple[list[dict[str, Any]], str | None]]:
         """
         Consumes a naive build notification (the default for now)
         basically, set POST variables to match commit object parameters:
@@ -38,18 +52,18 @@ class BaseHookHandler:
         files, links and properties will be de-json'd, the rest are interpreted as strings
         """
 
-        def firstOrNothing(value):
+        def firstOrNothing(value: Any) -> str:
             """
             Small helper function to return the first value (if value is a list)
             or return the whole thing otherwise.
 
             Make sure to properly decode bytes to unicode strings.
             """
-            if (isinstance(value, type([]))):
+            if isinstance(value, type([])):
                 value = value[0]
             return bytes2unicode(value)
 
-        args = request.args
+        args = cast(dict[bytes, list[bytes]], request.args)
         # first, convert files, links and properties
         files = None
         if args.get(b'files'):
@@ -64,7 +78,7 @@ class BaseHookHandler:
             properties = {}
 
         revision = firstOrNothing(args.get(b'revision'))
-        when = firstOrNothing(args.get(b'when_timestamp'))
+        when: str | float | None = firstOrNothing(args.get(b'when_timestamp'))
         if when is None:
             when = firstOrNothing(args.get(b'when'))
         if when is not None:
@@ -81,12 +95,22 @@ class BaseHookHandler:
         project = firstOrNothing(args.get(b'project')) or ''
         codebase = firstOrNothing(args.get(b'codebase'))
 
-        chdict = dict(author=author, committer=committer, files=files, comments=comments,
-                      revision=revision, when_timestamp=when,
-                      branch=branch, category=category, revlink=revlink,
-                      properties=properties, repository=repository,
-                      project=project, codebase=codebase)
-        return ([chdict], None)
+        chdict = {
+            "author": author,
+            "committer": committer,
+            "files": files,
+            "comments": comments,
+            "revision": revision,
+            "when_timestamp": when,
+            "branch": branch,
+            "category": category,
+            "revlink": revlink,
+            "properties": properties,
+            "repository": repository,
+            "project": project,
+            "codebase": codebase,
+        }
+        return defer.succeed(([chdict], None))
 
 
 base = BaseHookHandler  # alternate name for buildbot plugin

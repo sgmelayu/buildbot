@@ -13,113 +13,130 @@
 #
 # Copyright Buildbot Team Members
 
-import mock
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from typing import Any
+from unittest import mock
 
 from twisted.internet import defer
 from twisted.trial import unittest
 
 from buildbot.data import logs
+from buildbot.db.logs import LogSlugExistsError
 from buildbot.test import fakedb
 from buildbot.test.fake import fakemaster
+from buildbot.test.reactor import TestReactorMixin
 from buildbot.test.util import endpoint
 from buildbot.test.util import interfaces
-from buildbot.test.util.misc import TestReactorMixin
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from twisted.internet.defer import Deferred
+
+    from buildbot.util.twisted import InlineCallbacksType
 
 
 class LogEndpoint(endpoint.EndpointMixin, unittest.TestCase):
-
     endpointClass = logs.LogEndpoint
     resourceTypeClass = logs.Log
 
-    def setUp(self):
-        self.setUpEndpoint()
-        self.db.insertTestData([
+    @defer.inlineCallbacks
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        yield self.setUpEndpoint()
+        yield self.master.db.insert_test_data([
             fakedb.Builder(id=77, name='builder77'),
             fakedb.Master(id=88),
             fakedb.Worker(id=13, name='wrk'),
             fakedb.Buildset(id=8822),
-            fakedb.BuildRequest(id=82, buildsetid=8822),
-            fakedb.Build(id=13, builderid=77, masterid=88, workerid=13,
-                         buildrequestid=82, number=3),
+            fakedb.BuildRequest(id=82, builderid=77, buildsetid=8822),
+            fakedb.Build(
+                id=13, builderid=77, masterid=88, workerid=13, buildrequestid=82, number=3
+            ),
             fakedb.Step(id=50, buildid=13, number=5, name='make'),
-            fakedb.Log(id=60, stepid=50, name='stdio',
-                       slug='stdio', type='s'),
-            fakedb.Log(id=61, stepid=50, name='errors',
-                       slug='errors', type='t'),
+            fakedb.Log(id=60, stepid=50, name='stdio', slug='stdio', type='s'),
+            fakedb.Log(id=61, stepid=50, name='errors', slug='errors', type='t'),
         ])
 
-    def tearDown(self):
-        self.tearDownEndpoint()
-
     @defer.inlineCallbacks
-    def test_get_existing(self):
+    def test_get_existing(self) -> InlineCallbacksType[None]:
         log = yield self.callGet(('logs', 60))
         self.validateData(log)
-        self.assertEqual(log, {
-            'logid': 60,
-            'name': 'stdio',
-            'slug': 'stdio',
-            'stepid': 50,
-            'complete': False,
-            'num_lines': 0,
-            'type': 's'})
+        self.assertEqual(
+            log,
+            {
+                'logid': 60,
+                'name': 'stdio',
+                'slug': 'stdio',
+                'stepid': 50,
+                'complete': False,
+                'num_lines': 0,
+                'type': 's',
+            },
+        )
 
     @defer.inlineCallbacks
-    def test_get_missing(self):
+    def test_get_missing(self) -> InlineCallbacksType[None]:
         log = yield self.callGet(('logs', 62))
         self.assertEqual(log, None)
 
     @defer.inlineCallbacks
-    def test_get_by_stepid(self):
+    def test_get_by_stepid(self) -> InlineCallbacksType[None]:
         log = yield self.callGet(('steps', 50, 'logs', 'errors'))
         self.validateData(log)
         self.assertEqual(log['name'], 'errors')
 
     @defer.inlineCallbacks
-    def test_get_by_buildid(self):
+    def test_get_by_buildid(self) -> InlineCallbacksType[None]:
         log = yield self.callGet(('builds', 13, 'steps', 5, 'logs', 'errors'))
         self.validateData(log)
         self.assertEqual(log['name'], 'errors')
 
     @defer.inlineCallbacks
-    def test_get_by_builder(self):
-        log = yield self.callGet(
-            ('builders', '77', 'builds', 3, 'steps', 5, 'logs', 'errors'))
+    def test_get_by_builder(self) -> InlineCallbacksType[None]:
+        log = yield self.callGet(('builders', '77', 'builds', 3, 'steps', 5, 'logs', 'errors'))
         self.validateData(log)
         self.assertEqual(log['name'], 'errors')
 
     @defer.inlineCallbacks
-    def test_get_by_builder_step_name(self):
-        log = yield self.callGet(
-            ('builders', '77', 'builds', 3, 'steps', 'make',
-             'logs', 'errors'))
+    def test_get_by_builder_step_name(self) -> InlineCallbacksType[None]:
+        log = yield self.callGet(('builders', '77', 'builds', 3, 'steps', 'make', 'logs', 'errors'))
         self.validateData(log)
         self.assertEqual(log['name'], 'errors')
 
     @defer.inlineCallbacks
-    def test_get_by_buildername_step_name(self):
-        log = yield self.callGet(
-            ('builders', 'builder77', 'builds', 3, 'steps', 'make',
-             'logs', 'errors'))
+    def test_get_by_buildername_step_name(self) -> InlineCallbacksType[None]:
+        log = yield self.callGet((
+            'builders',
+            'builder77',
+            'builds',
+            3,
+            'steps',
+            'make',
+            'logs',
+            'errors',
+        ))
         self.validateData(log)
         self.assertEqual(log['name'], 'errors')
 
 
 class LogsEndpoint(endpoint.EndpointMixin, unittest.TestCase):
-
     endpointClass = logs.LogsEndpoint
     resourceTypeClass = logs.Log
 
-    def setUp(self):
-        self.setUpEndpoint()
-        self.db.insertTestData([
+    @defer.inlineCallbacks
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        yield self.setUpEndpoint()
+        yield self.master.db.insert_test_data([
             fakedb.Builder(id=77),
             fakedb.Master(id=88),
             fakedb.Worker(id=13, name='wrk'),
             fakedb.Buildset(id=8822),
-            fakedb.BuildRequest(id=82, buildsetid=8822),
-            fakedb.Build(id=13, builderid=77, masterid=88, workerid=13,
-                         buildrequestid=82, number=3),
+            fakedb.BuildRequest(id=82, builderid=77, buildsetid=8822),
+            fakedb.Build(
+                id=13, builderid=77, masterid=88, workerid=13, buildrequestid=82, number=3
+            ),
             fakedb.Step(id=50, buildid=13, number=9, name='make'),
             fakedb.Log(id=60, stepid=50, name='stdio', type='s'),
             fakedb.Log(id=61, stepid=50, name='errors', type='t'),
@@ -129,75 +146,79 @@ class LogsEndpoint(endpoint.EndpointMixin, unittest.TestCase):
             fakedb.Step(id=52, buildid=13, number=11, name='nothing'),
         ])
 
-    def tearDown(self):
-        self.tearDownEndpoint()
-
     @defer.inlineCallbacks
-    def test_get_stepid(self):
+    def test_get_stepid(self) -> InlineCallbacksType[None]:
         logs = yield self.callGet(('steps', 50, 'logs'))
 
-        [self.validateData(log)
-         for log in logs]
-        self.assertEqual(sorted([b['name'] for b in logs]),
-                         ['errors', 'stdio'])
+        for log in logs:
+            self.validateData(log)
+
+        self.assertEqual(sorted([b['name'] for b in logs]), ['errors', 'stdio'])
 
     @defer.inlineCallbacks
-    def test_get_stepid_empty(self):
+    def test_get_stepid_empty(self) -> InlineCallbacksType[None]:
         logs = yield self.callGet(('steps', 52, 'logs'))
         self.assertEqual(logs, [])
 
     @defer.inlineCallbacks
-    def test_get_stepid_missing(self):
+    def test_get_stepid_missing(self) -> InlineCallbacksType[None]:
         logs = yield self.callGet(('steps', 99, 'logs'))
         self.assertEqual(logs, [])
 
     @defer.inlineCallbacks
-    def test_get_buildid_step_name(self):
-        logs = yield self.callGet(
-            ('builds', 13, 'steps', 'make_install', 'logs'))
-        [self.validateData(log)
-         for log in logs]
-        self.assertEqual(sorted([b['name'] for b in logs]),
-                         ['results_html', 'stdio'])
+    def test_get_buildid_step_name(self) -> InlineCallbacksType[None]:
+        logs = yield self.callGet(('builds', 13, 'steps', 'make_install', 'logs'))
+
+        for log in logs:
+            self.validateData(log)
+
+        self.assertEqual(sorted([b['name'] for b in logs]), ['results_html', 'stdio'])
 
     @defer.inlineCallbacks
-    def test_get_buildid_step_number(self):
+    def test_get_buildid_step_number(self) -> InlineCallbacksType[None]:
         logs = yield self.callGet(('builds', 13, 'steps', 10, 'logs'))
-        [self.validateData(log)
-         for log in logs]
-        self.assertEqual(sorted([b['name'] for b in logs]),
-                         ['results_html', 'stdio'])
+
+        for log in logs:
+            self.validateData(log)
+
+        self.assertEqual(sorted([b['name'] for b in logs]), ['results_html', 'stdio'])
 
     @defer.inlineCallbacks
-    def test_get_builder_build_number_step_name(self):
-        logs = yield self.callGet(
-            ('builders', 77, 'builds', 3, 'steps', 'make', 'logs'))
-        [self.validateData(log)
-         for log in logs]
-        self.assertEqual(sorted([b['name'] for b in logs]),
-                         ['errors', 'stdio'])
+    def test_get_builder_build_number_step_name(self) -> InlineCallbacksType[None]:
+        logs = yield self.callGet(('builders', 77, 'builds', 3, 'steps', 'make', 'logs'))
+
+        for log in logs:
+            self.validateData(log)
+
+        self.assertEqual(sorted([b['name'] for b in logs]), ['errors', 'stdio'])
 
     @defer.inlineCallbacks
-    def test_get_builder_build_number_step_number(self):
-        logs = yield self.callGet(
-            ('builders', 77, 'builds', 3, 'steps', 10, 'logs'))
-        [self.validateData(log)
-         for log in logs]
-        self.assertEqual(sorted([b['name'] for b in logs]),
-                         ['results_html', 'stdio'])
+    def test_get_builder_build_number_step_number(self) -> InlineCallbacksType[None]:
+        logs = yield self.callGet(('builders', 77, 'builds', 3, 'steps', 10, 'logs'))
+
+        for log in logs:
+            self.validateData(log)
+
+        self.assertEqual(sorted([b['name'] for b in logs]), ['results_html', 'stdio'])
 
 
 class Log(TestReactorMixin, interfaces.InterfaceTests, unittest.TestCase):
-
-    def setUp(self):
-        self.setUpTestReactor()
-        self.master = fakemaster.make_master(self, wantMq=True, wantDb=True,
-                                             wantData=True)
+    @defer.inlineCallbacks
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        self.setup_test_reactor()
+        self.master = yield fakemaster.make_master(self, wantMq=True, wantDb=True, wantData=True)
         self.rtype = logs.Log(self.master)
 
     @defer.inlineCallbacks
-    def do_test_callthrough(self, dbMethodName, method, exp_args=None,
-                            exp_kwargs=None, *args, **kwargs):
+    def do_test_callthrough(
+        self,
+        dbMethodName: str,
+        method: Callable[..., Deferred[Any]],
+        exp_args: tuple[Any, ...] | None = None,
+        exp_kwargs: dict[str, Any] | None = None,
+        *args: Any,
+        **kwargs: Any,
+    ) -> InlineCallbacksType[None]:
         rv = (1, 2)
         m = mock.Mock(return_value=defer.succeed(rv))
         setattr(self.master.db.logs, dbMethodName, m)
@@ -205,64 +226,66 @@ class Log(TestReactorMixin, interfaces.InterfaceTests, unittest.TestCase):
         self.assertIdentical(res, rv)
         m.assert_called_with(*(exp_args or args), **(exp_kwargs or kwargs))
 
-    def test_signature_addLog(self):
+    def test_signature_addLog(self) -> None:
         @self.assertArgSpecMatches(
             self.master.data.updates.addLog,  # fake
-            self.rtype.addLog)  # real
-        def addLog(self, stepid, name, type):
+            self.rtype.addLog,
+        )  # real
+        def addLog(self: object, stepid: int, name: str, type: str) -> None:
             pass
 
     @defer.inlineCallbacks
-    def test_addLog_uniquify(self):
+    def test_addLog_uniquify(self) -> InlineCallbacksType[None]:
         tries = []
 
         @self.assertArgSpecMatches(self.master.db.logs.addLog)
-        def addLog(stepid, name, slug, type):
+        def addLog(stepid: int, name: str, slug: str, type: str) -> defer.Deferred[int]:
             tries.append((stepid, name, slug, type))
             if len(tries) < 3:
-                return defer.fail(KeyError())
+                return defer.fail(LogSlugExistsError())
             return defer.succeed(23)
-        self.patch(self.master.db.logs, 'addLog', addLog)
-        logid = yield self.rtype.addLog(
-            stepid=13, name='foo', type='s')
-        self.assertEqual(logid, 23)
-        self.assertEqual(tries, [
-            (13, 'foo', 'foo', 's'),
-            (13, 'foo', 'foo_2', 's'),
-            (13, 'foo', 'foo_3', 's'),
-        ])
 
-    def test_signature_finishLog(self):
+        self.patch(self.master.db.logs, 'addLog', addLog)
+        logid = yield self.rtype.addLog(stepid=13, name='foo', type='s')
+        self.assertEqual(logid, 23)
+        self.assertEqual(
+            tries,
+            [
+                (13, 'foo', 'foo', 's'),
+                (13, 'foo', 'foo_2', 's'),
+                (13, 'foo', 'foo_3', 's'),
+            ],
+        )
+
+    def test_signature_finishLog(self) -> None:
         @self.assertArgSpecMatches(
             self.master.data.updates.finishLog,  # fake
-            self.rtype.finishLog)  # real
-        def finishLog(self, logid):
+            self.rtype.finishLog,
+        )  # real
+        def finishLog(self: object, logid: int) -> None:
             pass
 
-    def test_finishLog(self):
-        self.do_test_callthrough('finishLog', self.rtype.finishLog,
-                                 logid=10)
+    def test_finishLog(self) -> None:
+        self.do_test_callthrough('finishLog', self.rtype.finishLog, logid=10)
 
-    def test_signature_compressLog(self):
+    def test_signature_compressLog(self) -> None:
         @self.assertArgSpecMatches(
             self.master.data.updates.compressLog,  # fake
-            self.rtype.compressLog)  # real
-        def compressLog(self, logid):
+            self.rtype.compressLog,
+        )  # real
+        def compressLog(self: object, logid: int) -> None:
             pass
 
-    def test_compressLog(self):
-        self.do_test_callthrough('compressLog',
-                                 self.rtype.compressLog,
-                                 logid=10)
+    def test_compressLog(self) -> None:
+        self.do_test_callthrough('compressLog', self.rtype.compressLog, logid=10)
 
-    def test_signature_appendLog(self):
+    def test_signature_appendLog(self) -> None:
         @self.assertArgSpecMatches(
             self.master.data.updates.appendLog,  # fake
-            self.rtype.appendLog)  # real
-        def appendLog(self, logid, content):
+            self.rtype.appendLog,
+        )  # real
+        def appendLog(self: object, logid: int, content: str) -> None:
             pass
 
-    def test_appendLog(self):
-        self.do_test_callthrough('appendLog',
-                                 self.rtype.appendLog,
-                                 logid=10, content='foo\nbar\n')
+    def test_appendLog(self) -> None:
+        self.do_test_callthrough('appendLog', self.rtype.appendLog, logid=10, content='foo\nbar\n')

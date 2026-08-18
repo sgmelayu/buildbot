@@ -23,10 +23,29 @@ Define the interfaces that are implemented by various buildbot classes.
 # pylint: disable=no-method-argument
 # pylint: disable=inherit-non-class
 
-from twisted.python.deprecate import deprecatedModuleAttribute
-from twisted.python.versions import Version
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from typing import Any
+from typing import Generic
+from typing import Protocol
+from typing import TypeVar
+from typing import Union
+
 from zope.interface import Attribute
 from zope.interface import Interface
+
+T = TypeVar('T')
+
+if TYPE_CHECKING:
+    from twisted.internet.defer import Deferred
+
+    from buildbot.config.master import MasterConfig
+    from buildbot.process.build import Build
+    from buildbot.process.log import Log
+    from buildbot.process.properties import Properties
+    from buildbot.process.workerforbuilder import LatentWorkerForBuilder
+    from buildbot.reporters.base import ReporterBase
 
 # exceptions that can be raised while trying to start a build
 
@@ -39,36 +58,28 @@ class WorkerSetupError(Exception):
     pass
 
 
-WorkerTooOldError = WorkerSetupError
-deprecatedModuleAttribute(
-    Version("buildbot", 2, 9, 0),
-    message="Use WorkerSetupError instead.",
-    moduleName="buildbot.interfaces",
-    name="WorkerTooOldError",
-)
-
-
 class LatentWorkerFailedToSubstantiate(Exception):
-    pass
+    def __str__(self) -> str:
+        return " ".join(str(arg) for arg in self.args)
 
 
 class LatentWorkerCannotSubstantiate(Exception):
-    pass
+    def __str__(self) -> str:
+        return " ".join(str(arg) for arg in self.args)
 
 
 class LatentWorkerSubstantiatiationCancelled(Exception):
-    pass
+    def __str__(self) -> str:
+        return " ".join(str(arg) for arg in self.args)
 
 
 class IPlugin(Interface):
-
     """
     Base interface for all Buildbot plugins
     """
 
 
 class IChangeSource(IPlugin):
-
     """
     Service which feeds Change objects to the changemaster. When files or
     directories are changed in version control, this object should represent
@@ -78,15 +89,15 @@ class IChangeSource(IPlugin):
 
     See 'Writing Change Sources' in the manual for more information.
     """
-    master = Attribute('master',
-                       'Pointer to BuildMaster, automatically set when started.')
 
-    def describe():
+    master = Attribute('master', 'Pointer to BuildMaster, automatically set when started.')
+
+    def describe() -> str:
         """Return a string which briefly describes this source."""
+        raise NotImplementedError
 
 
 class ISourceStamp(Interface):
-
     """
     @cvar branch: branch from which source was drawn
     @type branch: string or None
@@ -109,93 +120,99 @@ class ISourceStamp(Interface):
     @type repository: string
     """
 
-    def canBeMergedWith(self, other):
+    def canBeMergedWith(other: ISourceStamp) -> bool:
         """
         Can this SourceStamp be merged with OTHER?
         """
+        raise NotImplementedError
 
-    def mergeWith(self, others):
+    def mergeWith(others: list[ISourceStamp]) -> ISourceStamp:
         """Generate a SourceStamp for the merger of me and all the other
         SourceStamps. This is called by a Build when it starts, to figure
         out what its sourceStamp should be."""
+        raise NotImplementedError
 
-    def getAbsoluteSourceStamp(self, got_revision):
+    def getAbsoluteSourceStamp(got_revision: str) -> ISourceStamp:
         """Get a new SourceStamp object reflecting the actual revision found
         by a Source step."""
+        raise NotImplementedError
 
-    def getText(self):
+    def getText() -> str:
         """Returns a list of strings to describe the stamp. These are
         intended to be displayed in a narrow column. If more space is
         available, the caller should join them together with spaces before
         presenting them to the user."""
+        raise NotImplementedError
 
 
 class IEmailSender(Interface):
-
     """I know how to send email, and can be used by other parts of the
     Buildbot to contact developers."""
 
 
 class IEmailLookup(Interface):
-
-    def getAddress(user):
+    def getAddress(user: str) -> Deferred:
         """Turn a User-name string into a valid email address. Either return
         a string (with an @ in it), None (to indicate that the user cannot
         be reached by email), or a Deferred which will fire with the same."""
+        raise NotImplementedError
 
 
 class ILogObserver(Interface):
-
     """Objects which provide this interface can be used in a BuildStep to
     watch the output of a LogFile and parse it incrementally.
     """
 
     # internal methods
-    def setStep(step):
+    def setStep(step: IBuildStep) -> None:
         pass
 
-    def setLog(log):
+    def setLog(log: Log) -> None:
         pass
 
     # methods called by the LogFile
-    def logChunk(build, step, log, channel, text):
+    def logChunk(build: Build, step: IBuildStep, log: Log, channel: str, text: str) -> None:
         pass
 
 
 class IWorker(IPlugin):
     # callback methods from the manager
-    pass
+
+    workername = Attribute('workername', 'The worker name')
 
 
 class ILatentWorker(IWorker):
+    """A worker that is not always running, but can run when requested."""
 
-    """A worker that is not always running, but can run when requested.
-    """
-    substantiated = Attribute('Substantiated',
-                              'Whether the latent worker is currently '
-                              'substantiated with a real instance.')
+    substantiated = Attribute(
+        'Substantiated',
+        'Whether the latent worker is currently substantiated with a real instance.',
+    )
 
-    def substantiate():
+    def substantiate(wfb: Any, build: Any) -> Deferred[Any]:
         """Request that the worker substantiate with a real instance.
 
         Returns a deferred that will callback when a real instance has
         attached."""
+        raise NotImplementedError
 
     # there is an insubstantiate too, but that is not used externally ATM.
 
-    def buildStarted(wfb):
+    def buildStarted(wfb: LatentWorkerForBuilder) -> None:
         """Inform the latent worker that a build has started.
 
         @param wfb: a L{LatentWorkerForBuilder}.  The wfb is the one for whom the
         build finished.
         """
+        raise NotImplementedError
 
-    def buildFinished(wfb):
+    def buildFinished(wfb: LatentWorkerForBuilder) -> None:
         """Inform the latent worker that a build has finished.
 
         @param wfb: a L{LatentWorkerForBuilder}.  The wfb is the one for whom the
         build finished.
         """
+        raise NotImplementedError
 
 
 class IMachine(Interface):
@@ -203,37 +220,41 @@ class IMachine(Interface):
 
 
 class IMachineAction(Interface):
-    def perform(self, manager):
-        """ Perform an action on the machine managed by manager. Returns a
-            deferred evaluating to True if it was possible to execute the
-            action.
+    def perform(manager: IMachine) -> Deferred:
+        """Perform an action on the machine managed by manager. Returns a
+        deferred evaluating to True if it was possible to execute the
+        action.
         """
 
 
 class ILatentMachine(IMachine):
-    """ A machine that is not always running, but can be started when requested.
-    """
+    """A machine that is not always running, but can be started when requested."""
+
+
+class IRenderableType(Protocol, Generic[T]):
+    def getRenderingFor(self, iprops: IProperties) -> Deferred[T]: ...
+
+
+IMaybeRenderableType = Union[IRenderableType[T], T]
 
 
 class IRenderable(Interface):
+    """An object that can be interpolated with properties from a build."""
 
-    """An object that can be interpolated with properties from a build.
-    """
-
-    def getRenderingFor(iprops):
+    def getRenderingFor(iprops: IProperties) -> Deferred:
         """Return a deferred that fires with interpolation with the given properties
 
         @param iprops: the L{IProperties} provider supplying the properties.
         """
+        raise NotImplementedError
 
 
 class IProperties(Interface):
-
     """
     An object providing access to build properties
     """
 
-    def getProperty(name, default=None):
+    def getProperty(name: str, default: Any = None) -> object:
         """Get the named property, returning the default if the property does
         not exist.
 
@@ -244,19 +265,22 @@ class IProperties(Interface):
 
         @returns: property value
         """
+        raise NotImplementedError
 
-    def hasProperty(name):
+    def hasProperty(name: str) -> bool:
         """Return true if the named property exists.
 
         @param name: property name
         @type name: string
         @returns: boolean
         """
+        raise NotImplementedError
 
-    def has_key(name):
+    def has_key(name: str) -> bool:
         """Deprecated name for L{hasProperty}."""
+        raise NotImplementedError
 
-    def setProperty(name, value, source, runtime=False):
+    def setProperty(name: str, value: object, source: str, runtime: bool = False) -> None:
         """Set the given property, overwriting any existing value.  The source
         describes the source of the value for human interpretation.
 
@@ -274,7 +298,7 @@ class IProperties(Interface):
         @type runtime: boolean
         """
 
-    def getProperties():
+    def getProperties() -> Properties:
         """Get the L{buildbot.process.properties.Properties} instance storing
         these properties.  Note that the interface for this class is not
         stable, so where possible the other methods of this interface should be
@@ -282,8 +306,9 @@ class IProperties(Interface):
 
         @returns: L{buildbot.process.properties.Properties} instance
         """
+        raise NotImplementedError
 
-    def getBuild():
+    def getBuild() -> Build:
         """Get the L{buildbot.process.build.Build} instance for the current
         build.  Note that this object is not available after the build is
         complete, at which point this method will return None.
@@ -293,8 +318,9 @@ class IProperties(Interface):
 
         @returns L{buildbot.process.build.Build} instance
         """
+        raise NotImplementedError
 
-    def render(value):
+    def render(value: Any) -> Deferred[IRenderable]:
         """Render @code{value} as an L{IRenderable}.  This essentially coerces
         @code{value} to an L{IRenderable} and calls its @L{getRenderingFor}
         method.
@@ -302,6 +328,7 @@ class IProperties(Interface):
         @name value: value to render
         @returns: rendered value
         """
+        raise NotImplementedError
 
 
 class IScheduler(IPlugin):
@@ -309,72 +336,74 @@ class IScheduler(IPlugin):
 
 
 class ITriggerableScheduler(Interface):
-
     """
     A scheduler that can be triggered by buildsteps.
     """
 
-    def trigger(waited_for, sourcestamps=None, set_props=None,
-                parent_buildid=None, parent_relationship=None):
-        """Trigger a build with the given source stamp and properties.
-        """
+    def trigger(
+        waited_for: bool,
+        sourcestamps: Any = None,
+        set_props: Any = None,
+        parent_buildid: Any = None,
+        parent_relationship: Any = None,
+    ) -> Any:
+        """Trigger a build with the given source stamp and properties."""
 
 
 class IBuildStepFactory(Interface):
-
-    def buildStep():
+    def buildStep() -> IBuildStep:
         pass
 
 
 class IBuildStep(IPlugin):
-
     """
     A build step
     """
+
     # Currently has nothing
 
 
 class IConfigured(Interface):
-
-    def getConfigDict():
-        pass
+    def getConfigDict() -> dict[str, Any]:
+        return {}  # return something to silence warnings at call sites
 
 
 class IReportGenerator(Interface):
-
-    def generate(self, master, reporter, key, build):
-        pass
+    def generate(
+        master: IConfigured, reporter: ReporterBase, key: str, build: Build
+    ) -> Deferred[None]:
+        raise NotImplementedError
 
 
 class IConfigLoader(Interface):
-
-    def loadConfig():
+    def loadConfig() -> MasterConfig:
         """
         Load the specified configuration.
 
         :return MasterConfig:
         """
+        raise NotImplementedError
 
 
 class IHttpResponse(Interface):
-
-    def content():
+    def content() -> Deferred:
         """
         :returns: raw (``bytes``) content of the response via deferred
         """
-    def json():
+        raise NotImplementedError
+
+    def json() -> Deferred:
         """
         :returns: json decoded content of the response via deferred
         """
-    code = Attribute('code',
-                     "http status code of the request's response (e.g 200)")
-    url = Attribute('url',
-                    "request's url (e.g https://api.github.com/endpoint')")
+        raise NotImplementedError
+
+    code = Attribute('code', "http status code of the request's response (e.g 200)")
+    url = Attribute('url', "request's url (e.g https://api.github.com/endpoint')")
 
 
 class IConfigurator(Interface):
-
-    def configure(config_dict):
+    def configure(config_dict: dict[str, Any]) -> None:
         """
         Alter the buildbot config_dict, as defined in master.cfg
 
@@ -383,3 +412,4 @@ class IConfigurator(Interface):
 
         :returns: None
         """
+        raise NotImplementedError

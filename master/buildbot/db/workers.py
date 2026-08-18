@@ -13,32 +13,97 @@
 #
 # Copyright Buildbot Team Members
 
-import sqlalchemy as sa
+from __future__ import annotations
 
+from dataclasses import dataclass
+from dataclasses import field
+from typing import TYPE_CHECKING
+from typing import Any
+
+import sqlalchemy as sa
 from twisted.internet import defer
 
 from buildbot.db import base
 from buildbot.util import identifiers
+from buildbot.warnings import warn_deprecated
+
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
+
+
+@dataclass
+class BuilderMasterModel:
+    builderid: int
+    masterid: int
+
+    # For backward compatibility
+    def __getitem__(self, key: str) -> Any:
+        warn_deprecated(
+            '4.1.0',
+            (
+                'WorkersConnectorComponent '
+                'getWorker, and getWorkers '
+                'no longer return Worker as dictionnaries. '
+                'Usage of [] accessor is deprecated: please access the member directly'
+            ),
+        )
+
+        if hasattr(self, key):
+            return getattr(self, key)
+
+        raise KeyError(key)
+
+
+@dataclass
+class WorkerModel:
+    id: int
+    name: str
+    workerinfo: dict[str, Any]
+    paused: bool = False
+    pause_reason: str | None = None
+    graceful: bool = False
+
+    configured_on: list[BuilderMasterModel] = field(default_factory=list)
+    connected_to: list[int] = field(default_factory=list)
+
+    # For backward compatibility
+    def __getitem__(self, key: str) -> Any:
+        warn_deprecated(
+            '4.1.0',
+            (
+                'WorkersConnectorComponent '
+                'getWorker, and getWorkers '
+                'no longer return Worker as dictionnaries. '
+                'Usage of [] accessor is deprecated: please access the member directly'
+            ),
+        )
+
+        if hasattr(self, key):
+            return getattr(self, key)
+
+        raise KeyError(key)
 
 
 class WorkersConnectorComponent(base.DBConnectorComponent):
-    # Documentation is in developer/database.rst
-
-    def findWorkerId(self, name):
+    def findWorkerId(self, name: str) -> defer.Deferred[int]:
         tbl = self.db.model.workers
         # callers should verify this and give good user error messages
         assert identifiers.isIdentifier(50, name)
         return self.findSomethingId(
             tbl=tbl,
             whereclause=(tbl.c.name == name),
-            insert_values=dict(
-                name=name,
-                info={},
-                paused=0,
-                graceful=0,
-            ))
+            insert_values={
+                "name": name,
+                "info": {},
+                "paused": 0,
+                "pause_reason": None,
+                "graceful": 0,
+            },
+        )
 
-    def _deleteFromConfiguredWorkers_thd(self, conn, buildermasterids, workerid=None):
+    def _deleteFromConfiguredWorkers_thd(
+        self, conn: sa.engine.Connection, buildermasterids: Any, workerid: int | None = None
+    ) -> None:
         cfg_tbl = self.db.model.configured_workers
         # batch deletes to avoid using too many variables
         for batch in self.doBatch(buildermasterids, 100):
@@ -49,104 +114,122 @@ class WorkersConnectorComponent(base.DBConnectorComponent):
             conn.execute(q).close()
 
     # returns a Deferred which returns None
-    def deconfigureAllWorkersForMaster(self, masterid):
-        def thd(conn):
+    def deconfigureAllWorkersForMaster(self, masterid: int) -> defer.Deferred[None]:
+        def thd(conn: sa.engine.Connection) -> None:
             # first remove the old configured buildermasterids for this master and worker
             # as sqlalchemy does not support delete with join, we need to do
             # that in 2 queries
             cfg_tbl = self.db.model.configured_workers
             bm_tbl = self.db.model.builder_masters
-            j = cfg_tbl
+            j: sa.Table | sa.sql.selectable.Join = cfg_tbl
             j = j.outerjoin(bm_tbl)
-            q = sa.select(
-                [cfg_tbl.c.buildermasterid], from_obj=[j], distinct=True)
+            q = sa.select(cfg_tbl.c.buildermasterid).select_from(j).distinct()
             q = q.where(bm_tbl.c.masterid == masterid)
             res = conn.execute(q)
-            buildermasterids = [row['buildermasterid']
-                                for row in res]
+            buildermasterids = [row.buildermasterid for row in res]
             res.close()
             self._deleteFromConfiguredWorkers_thd(conn, buildermasterids)
 
-        return self.db.pool.do(thd)
+        return self.db.pool.do_with_transaction(thd)
 
     # returns a Deferred that returns None
-    def workerConfigured(self, workerid, masterid, builderids):
-
-        def thd(conn):
-
+    def workerConfigured(
+        self, workerid: int, masterid: int, builderids: list[int]
+    ) -> defer.Deferred[None]:
+        def thd(conn: sa.engine.Connection) -> None:
             cfg_tbl = self.db.model.configured_workers
             bm_tbl = self.db.model.builder_masters
 
             # get the buildermasterids that are configured
             if builderids:
-                q = sa.select([bm_tbl.c.id], from_obj=[bm_tbl])
+                q = sa.select(bm_tbl.c.id).select_from(bm_tbl)
                 q = q.where(bm_tbl.c.masterid == masterid)
                 q = q.where(bm_tbl.c.builderid.in_(builderids))
                 res = conn.execute(q)
-                buildermasterids = {row['id'] for row in res}
+                buildermasterids = {row.id for row in res}
                 res.close()
             else:
                 buildermasterids = set([])
 
-            j = cfg_tbl
+            j: sa.Table | sa.sql.selectable.Join = cfg_tbl
             j = j.outerjoin(bm_tbl)
-            q = sa.select(
-                [cfg_tbl.c.buildermasterid], from_obj=[j], distinct=True)
+            q = sa.select(cfg_tbl.c.buildermasterid).select_from(j).distinct()
             q = q.where(bm_tbl.c.masterid == masterid)
             q = q.where(cfg_tbl.c.workerid == workerid)
             res = conn.execute(q)
-            oldbuildermasterids = {row['buildermasterid'] for row in res}
+            oldbuildermasterids = {row.buildermasterid for row in res}
             res.close()
 
             todeletebuildermasterids = oldbuildermasterids - buildermasterids
             toinsertbuildermasterids = buildermasterids - oldbuildermasterids
-            transaction = conn.begin()
             self._deleteFromConfiguredWorkers_thd(conn, todeletebuildermasterids, workerid)
 
             # and insert the new ones
             if toinsertbuildermasterids:
-                q = cfg_tbl.insert()
-                conn.execute(q,
-                             [{'workerid': workerid, 'buildermasterid': buildermasterid}
-                              for buildermasterid in toinsertbuildermasterids]).close()
+                insert_q = cfg_tbl.insert()
+                conn.execute(
+                    insert_q,
+                    [
+                        {'workerid': workerid, 'buildermasterid': buildermasterid}
+                        for buildermasterid in toinsertbuildermasterids
+                    ],
+                ).close()
 
-            transaction.commit()
-
-        return self.db.pool.do(thd)
+        return self.db.pool.do_with_transaction(thd)
 
     @defer.inlineCallbacks
-    def getWorker(self, workerid=None, name=None, masterid=None,
-                  builderid=None):
+    def getWorker(
+        self,
+        workerid: int | None = None,
+        name: str | None = None,
+        masterid: int | None = None,
+        builderid: int | None = None,
+    ) -> InlineCallbacksType[WorkerModel | None]:
         if workerid is None and name is None:
             return None
-        workers = yield self.getWorkers(_workerid=workerid,
-                                        _name=name, masterid=masterid, builderid=builderid)
+        workers = yield self.getWorkers(
+            _workerid=workerid, _name=name, masterid=masterid, builderid=builderid
+        )
         if workers:
             return workers[0]
         return None
 
-    # returns a Deferred that returns a value
-    def getWorkers(self, _workerid=None, _name=None, masterid=None,
-                   builderid=None, paused=None, graceful=None):
-        def thd(conn):
+    def getWorkers(
+        self,
+        _workerid: int | None = None,
+        _name: str | None = None,
+        masterid: int | None = None,
+        builderid: int | None = None,
+        paused: bool | None = None,
+        graceful: bool | None = None,
+    ) -> defer.Deferred[list[WorkerModel]]:
+        def thd(conn: sa.engine.Connection) -> list[WorkerModel]:
             workers_tbl = self.db.model.workers
             conn_tbl = self.db.model.connected_workers
             cfg_tbl = self.db.model.configured_workers
             bm_tbl = self.db.model.builder_masters
 
-            def selectWorker(q):
-                return q
-
             # first, get the worker itself and the configured_on info
-            j = workers_tbl
+            j: sa.Table | sa.sql.selectable.Join = workers_tbl
             j = j.outerjoin(cfg_tbl)
             j = j.outerjoin(bm_tbl)
-            q = sa.select(
-                [workers_tbl.c.id, workers_tbl.c.name, workers_tbl.c.info,
-                 workers_tbl.c.paused, workers_tbl.c.graceful,
-                 bm_tbl.c.builderid, bm_tbl.c.masterid],
-                from_obj=[j],
-                order_by=[workers_tbl.c.id])
+            q = (
+                sa
+                .select(
+                    workers_tbl.c.id,
+                    workers_tbl.c.name,
+                    workers_tbl.c.info,
+                    workers_tbl.c.paused,
+                    workers_tbl.c.pause_reason,
+                    workers_tbl.c.graceful,
+                    bm_tbl.c.builderid,
+                    bm_tbl.c.masterid,
+                )
+                .select_from(j)
+                .order_by(
+                    workers_tbl.c.id,
+                )
+            )
 
             if _workerid is not None:
                 q = q.where(workers_tbl.c.id == _workerid)
@@ -161,85 +244,108 @@ class WorkersConnectorComponent(base.DBConnectorComponent):
             if graceful is not None:
                 q = q.where(workers_tbl.c.graceful == int(graceful))
 
-            rv = {}
+            rv: dict[int, WorkerModel] = {}
             res = None
             lastId = None
-            cfgs = None
             for row in conn.execute(q):
                 if row.id != lastId:
                     lastId = row.id
-                    cfgs = []
-                    res = {
-                        'id': lastId,
-                        'name': row.name,
-                        'configured_on': cfgs,
-                        'connected_to': [],
-                        'workerinfo': row.info,
-                        'paused': bool(row.paused),
-                        'graceful': bool(row.graceful)}
+                    res = self._model_from_row(row)
                     rv[lastId] = res
                 if row.builderid and row.masterid:
-                    cfgs.append({'builderid': row.builderid,
-                                 'masterid': row.masterid})
+                    assert lastId is not None
+                    rv[lastId].configured_on.append(
+                        BuilderMasterModel(builderid=row.builderid, masterid=row.masterid)
+                    )
 
             # now go back and get the connection info for the same set of
             # workers
-            j = conn_tbl
+            j2: sa.Table | sa.sql.selectable.Join = conn_tbl
             if _name is not None:
                 # note this is not an outer join; if there are unconnected
                 # workers, they were captured in rv above
-                j = j.join(workers_tbl)
-            q = sa.select(
-                [conn_tbl.c.workerid, conn_tbl.c.masterid],
-                from_obj=[j],
-                order_by=[conn_tbl.c.workerid])
+                j2 = j2.join(workers_tbl)
+            q = (
+                sa
+                .select(
+                    conn_tbl.c.workerid,
+                    conn_tbl.c.masterid,
+                )
+                .select_from(j2)
+                .order_by(conn_tbl.c.workerid)
+                .where(conn_tbl.c.workerid.in_(rv.keys()))
+            )
 
-            if _workerid is not None:
-                q = q.where(conn_tbl.c.workerid == _workerid)
             if _name is not None:
                 q = q.where(workers_tbl.c.name == _name)
             if masterid is not None:
                 q = q.where(conn_tbl.c.masterid == masterid)
 
             for row in conn.execute(q):
-                id = row.workerid
-                if id not in rv:
+                if row.workerid not in rv:
                     continue
-                rv[row.workerid]['connected_to'].append(row.masterid)
+                rv[row.workerid].connected_to.append(row.masterid)
 
             return list(rv.values())
+
         return self.db.pool.do(thd)
 
     # returns a Deferred that returns None
-    def workerConnected(self, workerid, masterid, workerinfo):
-        def thd(conn):
+    def workerConnected(
+        self, workerid: int, masterid: int, workerinfo: dict[str, Any]
+    ) -> defer.Deferred[None]:
+        def thd(conn: sa.engine.Connection) -> None:
             conn_tbl = self.db.model.connected_workers
-            q = conn_tbl.insert()
+            insert_q = conn_tbl.insert()
             try:
-                conn.execute(q,
-                             {'workerid': workerid, 'masterid': masterid})
+                conn.execute(insert_q, {'workerid': workerid, 'masterid': masterid})
+                conn.commit()
             except (sa.exc.IntegrityError, sa.exc.ProgrammingError):
                 # if the row is already present, silently fail..
-                pass
+                conn.rollback()
 
             bs_tbl = self.db.model.workers
-            q = bs_tbl.update(whereclause=(bs_tbl.c.id == workerid))
-            conn.execute(q, info=workerinfo)
+            update_q = bs_tbl.update().where(bs_tbl.c.id == workerid)
+            conn.execute(update_q.values(info=workerinfo))
+            conn.commit()
+
         return self.db.pool.do(thd)
 
     # returns a Deferred that returns None
-    def workerDisconnected(self, workerid, masterid):
-        def thd(conn):
+    def workerDisconnected(self, workerid: int, masterid: int) -> defer.Deferred[None]:
+        def thd(conn: sa.engine.Connection) -> None:
             tbl = self.db.model.connected_workers
-            q = tbl.delete(whereclause=(tbl.c.workerid == workerid) &
-                                       (tbl.c.masterid == masterid))
+            q = tbl.delete().where(tbl.c.workerid == workerid, tbl.c.masterid == masterid)
             conn.execute(q)
-        return self.db.pool.do(thd)
+
+        return self.db.pool.do_with_transaction(thd)
 
     # returns a Deferred that returns None
-    def setWorkerState(self, workerid, paused, graceful):
-        def thd(conn):
+    def set_worker_paused(
+        self, workerid: int, paused: bool, pause_reason: str | None = None
+    ) -> defer.Deferred[None]:
+        def thd(conn: sa.engine.Connection) -> None:
             tbl = self.db.model.workers
-            q = tbl.update(whereclause=(tbl.c.id == workerid))
-            conn.execute(q, paused=int(paused), graceful=int(graceful))
-        return self.db.pool.do(thd)
+            q = tbl.update().where(tbl.c.id == workerid)
+            conn.execute(q.values(paused=int(paused), pause_reason=pause_reason))
+
+        return self.db.pool.do_with_transaction(thd)
+
+    # returns a Deferred that returns None
+    def set_worker_graceful(self, workerid: int, graceful: bool) -> defer.Deferred[None]:
+        def thd(conn: sa.engine.Connection) -> None:
+            tbl = self.db.model.workers
+            q = tbl.update().where(tbl.c.id == workerid)
+            conn.execute(q.values(graceful=int(graceful)))
+
+        return self.db.pool.do_with_transaction(thd)
+
+    def _model_from_row(self, row: Any) -> WorkerModel:
+        return WorkerModel(
+            id=row.id,
+            name=row.name,
+            workerinfo=row.info,
+            paused=bool(row.paused),
+            pause_reason=row.pause_reason,
+            graceful=bool(row.graceful),
+        )

@@ -13,7 +13,12 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
 
+from typing import TYPE_CHECKING
+from typing import Any
+
+from packaging.version import parse as parse_version
 from twisted.internet import defer
 from twisted.trial import unittest
 
@@ -24,187 +29,243 @@ from buildbot.process.properties import Properties
 from buildbot.process.properties import Property
 from buildbot.test.fake import docker
 from buildbot.test.fake import fakemaster
-from buildbot.test.util.misc import TestReactorMixin
+from buildbot.test.reactor import TestReactorMixin
+from buildbot.test.util.config import ConfigErrorsMixin
 from buildbot.worker import docker as dockerworker
 
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
 
-class TestDockerLatentWorker(unittest.TestCase, TestReactorMixin):
+
+class TestDockerLatentWorker(ConfigErrorsMixin, TestReactorMixin, unittest.TestCase):
+    _client: docker.Client
 
     @defer.inlineCallbacks
-    def setupWorker(self, *args, **kwargs):
-        self.patch(dockerworker, 'docker', docker)
+    def setupWorker(
+        self, *args: Any, **kwargs: Any
+    ) -> InlineCallbacksType[dockerworker.DockerLatentWorker]:
         worker = dockerworker.DockerLatentWorker(*args, **kwargs)
-        master = fakemaster.make_master(self, wantData=True)
-        fakemaster.master = master
+        master = yield fakemaster.make_master(self, wantData=True)
+        fakemaster.master = master  # type: ignore[attr-defined]
         worker.setServiceParent(master)
         yield master.startService()
         self.addCleanup(master.stopService)
         return worker
 
-    def setUp(self):
-        self.setUpTestReactor()
+    def _create_client(self, *args: Any, **kwargs: Any) -> docker.Client:
+        if self._client is None:
+            self._client = docker.Client(*args, **kwargs)
+        return self._client
 
-        self.build = Properties(
-            image='busybox:latest', builder='docker_worker', distro='wheezy')
-        self.build2 = Properties(
-            image='busybox:latest', builder='docker_worker2', distro='wheezy')
-        self.patch(dockerworker, 'client', docker)
+    def setUp(self) -> None:
+        self.setup_test_reactor()
+
+        self.patch(dockerworker, 'docker', docker)
+
+        # Patch factory function so that single test uses single client instance.
+        self.patch(docker, "APIClient", self._create_client)
+
+        self._client = None  # type: ignore[assignment]
+
+        self.build = Properties(image='busybox:latest', builder='docker_worker', distro='wheezy')
+        self.build2 = Properties(image='busybox:latest', builder='docker_worker2', distro='wheezy')
         docker.Client.containerCreated = False
+        docker.Client.start_exception = None
 
     @defer.inlineCallbacks
-    def test_constructor_nodocker(self):
-        self.patch(dockerworker, 'client', None)
-        with self.assertRaises(config.ConfigErrors):
-            yield self.setupWorker('bot', 'pass', 'unix://tmp.sock', 'debian:wheezy', [])
-
-    @defer.inlineCallbacks
-    def test_constructor_noimage_nodockerfile(self):
+    def test_constructor_noimage_nodockerfile(self) -> InlineCallbacksType[None]:
         with self.assertRaises(config.ConfigErrors):
             yield self.setupWorker('bot', 'pass', 'http://localhost:2375')
 
     @defer.inlineCallbacks
-    def test_constructor_noimage_dockerfile(self):
+    def test_constructor_noimage_dockerfile(self) -> InlineCallbacksType[None]:
         bs = yield self.setupWorker(
-            'bot', 'pass', 'http://localhost:2375', dockerfile="FROM ubuntu")
+            'bot', 'pass', 'http://localhost:2375', dockerfile="FROM ubuntu"
+        )
         self.assertEqual(bs.dockerfile, "FROM ubuntu")
         self.assertEqual(bs.image, None)
 
     @defer.inlineCallbacks
-    def test_constructor_image_nodockerfile(self):
-        bs = yield self.setupWorker(
-            'bot', 'pass', 'http://localhost:2375', image="myworker")
+    def test_constructor_image_nodockerfile(self) -> InlineCallbacksType[None]:
+        bs = yield self.setupWorker('bot', 'pass', 'http://localhost:2375', image="myworker")
         self.assertEqual(bs.dockerfile, None)
         self.assertEqual(bs.image, 'myworker')
 
     @defer.inlineCallbacks
-    def test_constructor_minimal(self):
+    def test_constructor_minimal(self) -> InlineCallbacksType[None]:
         # Minimal set of parameters
         bs = yield self.setupWorker('bot', 'pass', 'tcp://1234:2375', 'worker')
         self.assertEqual(bs.workername, 'bot')
         self.assertEqual(bs.password, 'pass')
-        self.assertEqual(bs.client_args, {'base_url': 'tcp://1234:2375'})
+        self.assertEqual(bs.docker_host, 'tcp://1234:2375')
+        self.assertEqual(bs.client_args, {})
         self.assertEqual(bs.image, 'worker')
         self.assertEqual(bs.command, [])
 
     @defer.inlineCallbacks
-    def test_builds_may_be_incompatible(self):
+    def test_builds_may_be_incompatible(self) -> InlineCallbacksType[None]:
         # Minimal set of parameters
         bs = yield self.setupWorker('bot', 'pass', 'tcp://1234:2375', 'worker')
         self.assertEqual(bs.builds_may_be_incompatible, True)
 
     @defer.inlineCallbacks
-    def test_contruction_minimal_docker_py(self):
-        docker.version = "1.10.6"
-        bs = yield self.setupWorker('bot', 'pass', 'tcp://1234:2375', 'worker')
-        id, name = yield bs.start_instance(self.build)
-        client = docker.APIClient.latest
-        self.assertEqual(client.called_class_name, "Client")
-        client = docker.Client.latest
-        self.assertNotEqual(client.called_class_name, "APIClient")
+    def test_contruction_too_old_docker(self) -> InlineCallbacksType[None]:
+        self.patch(dockerworker, 'docker_py_version', parse_version("3.2"))
+        with self.assertRaisesConfigError("The python module 'docker>=4.0'"):
+            yield self.setupWorker('bot', 'pass', 'tcp://1234:2375', 'worker')
 
     @defer.inlineCallbacks
-    def test_contruction_minimal_docker(self):
-        docker.version = "2.0.0"
+    def test_contruction_minimal_docker(self) -> InlineCallbacksType[None]:
         bs = yield self.setupWorker('bot', 'pass', 'tcp://1234:2375', 'worker')
-        id, name = yield bs.start_instance(self.build)
-        client = docker.Client.latest
-        self.assertEqual(client.called_class_name, "APIClient")
-        client = docker.APIClient.latest
-        self.assertNotEqual(client.called_class_name, "Client")
+        yield bs.start_instance(self.build)
+        self.assertEqual(
+            [c["Names"] for c in self._client._containers.values()], [["/buildbot-bot-87de7e"]]
+        )
 
     @defer.inlineCallbacks
-    def test_constructor_nopassword(self):
+    def test_constructor_nopassword(self) -> InlineCallbacksType[None]:
         # when no password, it is created automatically
         bs = yield self.setupWorker('bot', None, 'tcp://1234:2375', 'worker')
         self.assertEqual(bs.workername, 'bot')
         self.assertEqual(len(bs.password), 20)
 
     @defer.inlineCallbacks
-    def test_constructor_all_docker_parameters(self):
+    def test_constructor_all_docker_parameters(self) -> InlineCallbacksType[None]:
         # Volumes have their own tests
-        bs = yield self.setupWorker('bot', 'pass', 'unix:///var/run/docker.sock', 'worker_img',
-                                    ['/bin/sh'],
-                                    dockerfile="FROM ubuntu", version='1.9', tls=True,
-                                    hostconfig={'network_mode': 'fake',
-                                                'dns': ['1.1.1.1', '1.2.3.4']},
-                                    custom_context=False, buildargs=None,
-                                    encoding='gzip')
+        bs = yield self.setupWorker(
+            'bot',
+            'pass',
+            'unix:///var/run/docker.sock',
+            'worker_img',
+            ['/bin/sh'],
+            dockerfile="FROM ubuntu",
+            version='1.9',
+            tls=True,
+            hostconfig={'network_mode': 'fake', 'dns': ['1.1.1.1', '1.2.3.4']},
+            custom_context=False,
+            buildargs=None,
+            encoding='gzip',
+        )
         self.assertEqual(bs.workername, 'bot')
+        self.assertEqual(bs.docker_host, 'unix:///var/run/docker.sock')
         self.assertEqual(bs.password, 'pass')
         self.assertEqual(bs.image, 'worker_img')
         self.assertEqual(bs.command, ['/bin/sh'])
         self.assertEqual(bs.dockerfile, "FROM ubuntu")
         self.assertEqual(bs.volumes, [])
-        self.assertEqual(bs.client_args, {
-                         'base_url': 'unix:///var/run/docker.sock', 'version': '1.9', 'tls': True})
-        self.assertEqual(
-            bs.hostconfig, {'network_mode': 'fake', 'dns': ['1.1.1.1', '1.2.3.4']})
+        self.assertEqual(bs.client_args, {'version': '1.9', 'tls': True})
+        self.assertEqual(bs.hostconfig, {'network_mode': 'fake', 'dns': ['1.1.1.1', '1.2.3.4']})
         self.assertFalse(bs.custom_context)
         self.assertEqual(bs.buildargs, None)
         self.assertEqual(bs.encoding, 'gzip')
 
     @defer.inlineCallbacks
-    def test_constructor_host_config_build(self):
+    def test_constructor_host_config_build(self) -> InlineCallbacksType[None]:
         # Volumes have their own tests
-        bs = yield self.setupWorker('bot', 'pass', 'unix:///var/run/docker.sock', 'worker_img',
-                                    ['/bin/sh'],
-                                    dockerfile="FROM ubuntu",
-                                    volumes=["/tmp:/tmp:ro"],
-                                    hostconfig={'network_mode': 'fake',
-                                                'dns': ['1.1.1.1', '1.2.3.4']},
-                                    custom_context=False, buildargs=None,
-                                    encoding='gzip')
-        id, name = yield bs.start_instance(self.build)
-        client = docker.APIClient.latest
+        bs = yield self.setupWorker(
+            'bot',
+            'pass',
+            'unix:///var/run/docker.sock',
+            'worker_img',
+            ['/bin/sh'],
+            dockerfile="FROM ubuntu",
+            volumes=["/tmp:/tmp:ro"],
+            hostconfig={'network_mode': 'fake', 'dns': ['1.1.1.1', '1.2.3.4']},
+            custom_context=False,
+            buildargs=None,
+            encoding='gzip',
+        )
+        yield bs.start_instance(self.build)
         expected = {
             'network_mode': 'fake',
             'dns': ['1.1.1.1', '1.2.3.4'],
             'binds': ['/tmp:/tmp:ro'],
+            "init": True,
         }
-        if dockerworker.docker_py_version >= 2.2:
-            expected['init'] = True
-        self.assertEqual(client.call_args_create_host_config, [expected])
+        self.assertEqual(self._client.call_args_create_host_config, [expected])
 
     @defer.inlineCallbacks
-    def test_constructor_host_config_build_set_init(self):
+    def test_constructor_host_config_build_set_init(self) -> InlineCallbacksType[None]:
         # Volumes have their own tests
-        bs = yield self.setupWorker('bot', 'pass', 'unix:///var/run/docker.sock', 'worker_img',
-                                    ['/bin/sh'],
-                                    dockerfile="FROM ubuntu",
-                                    volumes=["/tmp:/tmp:ro"],
-                                    hostconfig={'network_mode': 'fake',
-                                                'dns': ['1.1.1.1', '1.2.3.4'],
-                                                'init': False},
-                                    custom_context=False, buildargs=None,
-                                    encoding='gzip')
-        id, name = yield bs.start_instance(self.build)
-        client = docker.APIClient.latest
-        self.assertEqual(client.call_args_create_host_config, [
-            {'network_mode': 'fake',
-             'dns': ['1.1.1.1', '1.2.3.4'],
-             'init': False,
-             'binds': ['/tmp:/tmp:ro'],
-             }
-        ])
+        bs = yield self.setupWorker(
+            'bot',
+            'pass',
+            'unix:///var/run/docker.sock',
+            'worker_img',
+            ['/bin/sh'],
+            dockerfile="FROM ubuntu",
+            volumes=["/tmp:/tmp:ro"],
+            hostconfig={'network_mode': 'fake', 'dns': ['1.1.1.1', '1.2.3.4'], 'init': False},
+            custom_context=False,
+            buildargs=None,
+            encoding='gzip',
+        )
+        yield bs.start_instance(self.build)
+        self.assertEqual(
+            self._client.call_args_create_host_config,
+            [
+                {
+                    'network_mode': 'fake',
+                    'dns': ['1.1.1.1', '1.2.3.4'],
+                    'init': False,
+                    'binds': ['/tmp:/tmp:ro'],
+                }
+            ],
+        )
 
     @defer.inlineCallbacks
-    def test_start_instance_volume_renderable(self):
+    def test_start_instance_docker_host_renderable(self) -> InlineCallbacksType[None]:
         bs = yield self.setupWorker(
-            'bot', 'pass', 'tcp://1234:2375', 'worker', ['bin/bash'],
-            volumes=[Interpolate('/data:/worker/%(kw:builder)s/build',
-                                 builder=Property('builder'))])
-        id, name = yield bs.start_instance(self.build)
-        client = docker.Client.latest
-        self.assertEqual(len(client.call_args_create_container), 1)
-        self.assertEqual(client.call_args_create_container[0]['volumes'],
-                         ['/worker/docker_worker/build'])
+            'bot', 'pass', docker_host=Interpolate('tcp://value-%(prop:builder)s'), image='worker'
+        )
+        yield bs.start_instance(self.build)
+        self.assertEqual(self._client.base_url, 'tcp://value-docker_worker')
 
     @defer.inlineCallbacks
-    def test_interpolate_renderables_for_new_build(self):
+    def test_start_instance_volume_renderable(self) -> InlineCallbacksType[None]:
         bs = yield self.setupWorker(
-            'bot', 'pass', 'tcp://1234:2375', 'worker', ['bin/bash'],
-            volumes=[Interpolate('/data:/worker/%(kw:builder)s/build',
-                                 builder=Property('builder'))])
+            'bot',
+            'pass',
+            'tcp://1234:2375',
+            'worker',
+            ['bin/bash'],
+            volumes=[
+                Interpolate('/data:/worker/%(kw:builder)s/build', builder=Property('builder'))
+            ],
+        )
+        yield bs.start_instance(self.build)
+        self.assertEqual(len(self._client.call_args_create_container), 1)
+        self.assertEqual(
+            self._client.call_args_create_container[0]['volumes'], ['/worker/docker_worker/build']
+        )
+
+    @defer.inlineCallbacks
+    def test_start_instance_hostconfig_renderable(self) -> InlineCallbacksType[None]:
+        bs = yield self.setupWorker(
+            'bot',
+            'pass',
+            docker_host='tcp://1234:2375',
+            image='worker',
+            hostconfig={'prop': Interpolate('value-%(kw:builder)s', builder=Property('builder'))},
+        )
+        yield bs.start_instance(self.build)
+        self.assertEqual(len(self._client.call_args_create_container), 1)
+
+        expected = {'prop': 'value-docker_worker', 'binds': [], "init": True}
+        self.assertEqual(self._client.call_args_create_host_config, [expected])
+
+    @defer.inlineCallbacks
+    def test_interpolate_renderables_for_new_build(self) -> InlineCallbacksType[None]:
+        bs = yield self.setupWorker(
+            'bot',
+            'pass',
+            'tcp://1234:2375',
+            'worker',
+            ['bin/bash'],
+            volumes=[
+                Interpolate('/data:/worker/%(kw:builder)s/build', builder=Property('builder'))
+            ],
+        )
         yield bs.start_instance(self.build)
         docker.Client.containerCreated = True
         # the worker recreates the (mock) client on every action, clearing the containers
@@ -213,214 +274,318 @@ class TestDockerLatentWorker(unittest.TestCase, TestReactorMixin):
         self.assertTrue((yield bs.isCompatibleWithBuild(self.build2)))
 
     @defer.inlineCallbacks
-    def test_reject_incompatible_build_while_running(self):
+    def test_reject_incompatible_build_while_running(self) -> InlineCallbacksType[None]:
         bs = yield self.setupWorker(
-            'bot', 'pass', 'tcp://1234:2375', 'worker', ['bin/bash'],
-            volumes=[Interpolate('/data:/worker/%(kw:builder)s/build',
-                                 builder=Property('builder'))])
+            'bot',
+            'pass',
+            'tcp://1234:2375',
+            'worker',
+            ['bin/bash'],
+            volumes=[
+                Interpolate('/data:/worker/%(kw:builder)s/build', builder=Property('builder'))
+            ],
+        )
         yield bs.start_instance(self.build)
         self.assertFalse((yield bs.isCompatibleWithBuild(self.build2)))
 
     @defer.inlineCallbacks
-    def test_volume_no_suffix(self):
-        bs = yield self.setupWorker('bot', 'pass', 'tcp://1234:2375', 'worker', ['bin/bash'],
-                                    volumes=['/src/webapp:/opt/webapp'])
-        yield bs.start_instance(self.build)
-        client = docker.Client.latest
-        self.assertEqual(len(client.call_args_create_container), 1)
-        self.assertEqual(len(client.call_args_create_host_config), 1)
-        self.assertEqual(client.call_args_create_container[0]['volumes'],
-                         ['/opt/webapp'])
-        self.assertEqual(client.call_args_create_host_config[0]['binds'],
-                         ["/src/webapp:/opt/webapp"])
-
-    @defer.inlineCallbacks
-    def test_volume_ro_rw(self):
-        bs = yield self.setupWorker('bot', 'pass', 'tcp://1234:2375', 'worker', ['bin/bash'],
-                                    volumes=['/src/webapp:/opt/webapp:ro',
-                                             '~:/backup:rw'])
-        yield bs.start_instance(self.build)
-        client = docker.Client.latest
-        self.assertEqual(len(client.call_args_create_container), 1)
-        self.assertEqual(len(client.call_args_create_host_config), 1)
-        self.assertEqual(client.call_args_create_container[0]['volumes'],
-                         ['/opt/webapp', '/backup'])
-        self.assertEqual(client.call_args_create_host_config[0]['binds'],
-                         ['/src/webapp:/opt/webapp:ro', '~:/backup:rw'])
-
-    @defer.inlineCallbacks
-    def test_volume_bad_format(self):
-        with self.assertRaises(config.ConfigErrors):
-            yield self.setupWorker('bot', 'pass', 'http://localhost:2375',
-                                   image="worker",
-                                   volumes=['abcd=efgh'])
-
-    @defer.inlineCallbacks
-    def test_volume_bad_format_renderable(self):
+    def test_volume_no_suffix(self) -> InlineCallbacksType[None]:
         bs = yield self.setupWorker(
-            'bot', 'pass', 'http://localhost:2375', image="worker",
-            volumes=[Interpolate('/data==/worker/%(kw:builder)s/build',
-                                 builder=Property('builder'))])
+            'bot',
+            'pass',
+            'tcp://1234:2375',
+            'worker',
+            ['bin/bash'],
+            volumes=['/src/webapp:/opt/webapp'],
+        )
+        yield bs.start_instance(self.build)
+        self.assertEqual(len(self._client.call_args_create_container), 1)
+        self.assertEqual(len(self._client.call_args_create_host_config), 1)
+        self.assertEqual(self._client.call_args_create_container[0]['volumes'], ['/opt/webapp'])
+        self.assertEqual(
+            self._client.call_args_create_host_config[0]['binds'], ["/src/webapp:/opt/webapp"]
+        )
+
+    @defer.inlineCallbacks
+    def test_volume_ro_rw(self) -> InlineCallbacksType[None]:
+        bs = yield self.setupWorker(
+            'bot',
+            'pass',
+            'tcp://1234:2375',
+            'worker',
+            ['bin/bash'],
+            volumes=['/src/webapp:/opt/webapp:ro', '~:/backup:rw'],
+        )
+        yield bs.start_instance(self.build)
+        self.assertEqual(len(self._client.call_args_create_container), 1)
+        self.assertEqual(len(self._client.call_args_create_host_config), 1)
+        self.assertEqual(
+            self._client.call_args_create_container[0]['volumes'], ['/opt/webapp', '/backup']
+        )
+        self.assertEqual(
+            self._client.call_args_create_host_config[0]['binds'],
+            ['/src/webapp:/opt/webapp:ro', '~:/backup:rw'],
+        )
+
+    @defer.inlineCallbacks
+    def test_volume_bad_format(self) -> InlineCallbacksType[None]:
+        with self.assertRaises(config.ConfigErrors):
+            yield self.setupWorker(
+                'bot', 'pass', 'http://localhost:2375', image="worker", volumes=['abcd=efgh']
+            )
+
+    @defer.inlineCallbacks
+    def test_volume_bad_format_renderable(self) -> InlineCallbacksType[None]:
+        bs = yield self.setupWorker(
+            'bot',
+            'pass',
+            'http://localhost:2375',
+            image="worker",
+            volumes=[
+                Interpolate('/data==/worker/%(kw:builder)s/build', builder=Property('builder'))
+            ],
+        )
         with self.assertRaises(config.ConfigErrors):
             yield bs.start_instance(self.build)
 
     @defer.inlineCallbacks
-    def test_start_instance_image_no_version(self):
-        bs = yield self.setupWorker(
-            'bot', 'pass', 'tcp://1234:2375', 'busybox', ['bin/bash'])
-        id, name = yield bs.start_instance(self.build)
+    def test_start_instance_image_no_version(self) -> InlineCallbacksType[None]:
+        bs = yield self.setupWorker('bot', 'pass', 'tcp://1234:2375', 'busybox', ['bin/bash'])
+        _, name = yield bs.start_instance(self.build)
         self.assertEqual(name, 'busybox')
 
     @defer.inlineCallbacks
-    def test_start_instance_image_right_version(self):
+    def test_start_instance_image_right_version(self) -> InlineCallbacksType[None]:
         bs = yield self.setupWorker(
-            'bot', 'pass', 'tcp://1234:2375', 'busybox:latest', ['bin/bash'])
-        id, name = yield bs.start_instance(self.build)
+            'bot', 'pass', 'tcp://1234:2375', 'busybox:latest', ['bin/bash']
+        )
+        _, name = yield bs.start_instance(self.build)
         self.assertEqual(name, 'busybox:latest')
 
     @defer.inlineCallbacks
-    def test_start_instance_image_wrong_version(self):
-        bs = yield self.setupWorker(
-            'bot', 'pass', 'tcp://1234:2375', 'busybox:123', ['bin/bash'])
+    def test_start_instance_image_wrong_version(self) -> InlineCallbacksType[None]:
+        bs = yield self.setupWorker('bot', 'pass', 'tcp://1234:2375', 'busybox:123', ['bin/bash'])
         with self.assertRaises(interfaces.LatentWorkerCannotSubstantiate):
             yield bs.start_instance(self.build)
 
     @defer.inlineCallbacks
-    def test_start_instance_image_renderable(self):
+    def test_start_instance_image_renderable(self) -> InlineCallbacksType[None]:
         bs = yield self.setupWorker(
-            'bot', 'pass', 'tcp://1234:2375', Property('image'), ['bin/bash'])
-        id, name = yield bs.start_instance(self.build)
+            'bot', 'pass', 'tcp://1234:2375', Property('image'), ['bin/bash']
+        )
+        _, name = yield bs.start_instance(self.build)
         self.assertEqual(name, 'busybox:latest')
 
     @defer.inlineCallbacks
-    def test_start_instance_noimage_nodockerfile(self):
-        bs = yield self.setupWorker(
-            'bot', 'pass', 'tcp://1234:2375', 'customworker', ['bin/bash'])
+    def test_start_instance_noimage_nodockerfile(self) -> InlineCallbacksType[None]:
+        bs = yield self.setupWorker('bot', 'pass', 'tcp://1234:2375', 'customworker', ['bin/bash'])
         with self.assertRaises(interfaces.LatentWorkerCannotSubstantiate):
             yield bs.start_instance(self.build)
 
     @defer.inlineCallbacks
-    def test_start_instance_image_and_dockefile(self):
+    def test_start_instance_image_and_dockefile(self) -> InlineCallbacksType[None]:
         bs = yield self.setupWorker(
-            'bot', 'pass', 'tcp://1234:2375', 'customworker', dockerfile='BUG')
+            'bot', 'pass', 'tcp://1234:2375', 'customworker', dockerfile='BUG'
+        )
         with self.assertRaises(interfaces.LatentWorkerCannotSubstantiate):
             yield bs.start_instance(self.build)
 
     @defer.inlineCallbacks
-    def test_start_instance_noimage_gooddockerfile(self):
+    def test_start_instance_noimage_gooddockerfile(self) -> InlineCallbacksType[None]:
         bs = yield self.setupWorker(
-            'bot', 'pass', 'tcp://1234:2375', 'customworker', dockerfile='FROM debian:wheezy')
-        id, name = yield bs.start_instance(self.build)
+            'bot', 'pass', 'tcp://1234:2375', 'customworker', dockerfile='FROM debian:wheezy'
+        )
+        _, name = yield bs.start_instance(self.build)
         self.assertEqual(name, 'customworker')
 
     @defer.inlineCallbacks
-    def test_start_instance_noimage_pull(self):
+    def test_start_instance_noimage_pull(self) -> InlineCallbacksType[None]:
         bs = yield self.setupWorker(
-            'bot', 'pass', 'tcp://1234:2375', 'alpine:latest', autopull=True)
-        id, name = yield bs.start_instance(self.build)
+            'bot', 'pass', 'tcp://1234:2375', 'alpine:latest', autopull=True
+        )
+        _, name = yield bs.start_instance(self.build)
         self.assertEqual(name, 'alpine:latest')
 
     @defer.inlineCallbacks
-    def test_start_instance_image_pull(self):
+    def test_start_instance_image_pull(self) -> InlineCallbacksType[None]:
         bs = yield self.setupWorker(
-            'bot', 'pass', 'tcp://1234:2375', 'tester:latest', autopull=True)
-        id, name = yield bs.start_instance(self.build)
+            'bot', 'pass', 'tcp://1234:2375', 'tester:latest', autopull=True
+        )
+        _, name = yield bs.start_instance(self.build)
         self.assertEqual(name, 'tester:latest')
-        client = docker.Client.latest
-        self.assertEqual(client._pullCount, 0)
+        self.assertEqual(self._client._pullCount, 0)
 
     @defer.inlineCallbacks
-    def test_start_instance_image_alwayspull(self):
+    def test_start_instance_image_alwayspull(self) -> InlineCallbacksType[None]:
         bs = yield self.setupWorker(
-            'bot', 'pass', 'tcp://1234:2375', 'tester:latest', autopull=True, alwaysPull=True)
-        id, name = yield bs.start_instance(self.build)
+            'bot', 'pass', 'tcp://1234:2375', 'tester:latest', autopull=True, alwaysPull=True
+        )
+        _, name = yield bs.start_instance(self.build)
         self.assertEqual(name, 'tester:latest')
-        client = docker.Client.latest
-        self.assertEqual(client._pullCount, 1)
+        self.assertEqual(self._client._pullCount, 1)
 
     @defer.inlineCallbacks
-    def test_start_instance_image_noauto_alwayspull(self):
+    def test_start_instance_image_noauto_alwayspull(self) -> InlineCallbacksType[None]:
         bs = yield self.setupWorker(
-            'bot', 'pass', 'tcp://1234:2375', 'tester:latest', autopull=False, alwaysPull=True)
-        id, name = yield bs.start_instance(self.build)
+            'bot', 'pass', 'tcp://1234:2375', 'tester:latest', autopull=False, alwaysPull=True
+        )
+        _, name = yield bs.start_instance(self.build)
         self.assertEqual(name, 'tester:latest')
-        client = docker.Client.latest
-        self.assertEqual(client._pullCount, 0)
+        self.assertEqual(self._client._pullCount, 0)
 
     @defer.inlineCallbacks
-    def test_start_instance_noimage_renderabledockerfile(self):
+    def test_start_instance_noimage_renderabledockerfile(self) -> InlineCallbacksType[None]:
         bs = yield self.setupWorker(
-            'bot', 'pass', 'tcp://1234:2375', 'customworker',
-            dockerfile=Interpolate('FROM debian:%(kw:distro)s',
-                                   distro=Property('distro')))
-        id, name = yield bs.start_instance(self.build)
+            'bot',
+            'pass',
+            'tcp://1234:2375',
+            'customworker',
+            dockerfile=Interpolate('FROM debian:%(kw:distro)s', distro=Property('distro')),
+        )
+        _, name = yield bs.start_instance(self.build)
         self.assertEqual(name, 'customworker')
 
     @defer.inlineCallbacks
-    def test_start_instance_custom_context_and_buildargs(self):
+    def test_start_instance_custom_context_and_buildargs(self) -> InlineCallbacksType[None]:
         bs = yield self.setupWorker(
-            'bot', 'pass', 'tcp://1234:2375', 'tester:latest',
-            dockerfile=Interpolate('FROM debian:latest'), custom_context=True,
-            buildargs={'sample_arg1': 'test_val1'})
-        id, name = yield bs.start_instance(self.build)
-        self.assertEqual(name, 'tester:latest')
-
-    @defer.inlineCallbacks
-    def test_start_instance_custom_context_no_buildargs(self):
-        bs = yield self.setupWorker(
-            'bot', 'pass', 'tcp://1234:2375', 'tester:latest',
+            'bot',
+            'pass',
+            'tcp://1234:2375',
+            'tester:latest',
             dockerfile=Interpolate('FROM debian:latest'),
-            custom_context=True)
-        id, name = yield bs.start_instance(self.build)
+            custom_context=True,
+            buildargs={'sample_arg1': 'test_val1'},
+        )
+        _, name = yield bs.start_instance(self.build)
         self.assertEqual(name, 'tester:latest')
 
     @defer.inlineCallbacks
-    def test_start_instance_buildargs_no_custom_context(self):
+    def test_start_instance_custom_context_no_buildargs(self) -> InlineCallbacksType[None]:
         bs = yield self.setupWorker(
-            'bot', 'pass', 'tcp://1234:2375', 'tester:latest',
+            'bot',
+            'pass',
+            'tcp://1234:2375',
+            'tester:latest',
             dockerfile=Interpolate('FROM debian:latest'),
-            buildargs={'sample_arg1': 'test_val1'})
-        id, name = yield bs.start_instance(self.build)
+            custom_context=True,
+        )
+        _, name = yield bs.start_instance(self.build)
         self.assertEqual(name, 'tester:latest')
 
     @defer.inlineCallbacks
-    def test_start_worker_but_already_created_with_same_name(self):
+    def test_start_instance_buildargs_no_custom_context(self) -> InlineCallbacksType[None]:
         bs = yield self.setupWorker(
-            'existing', 'pass', 'tcp://1234:2375', 'busybox:latest', ['bin/bash'])
-        id, name = yield bs.start_instance(self.build)
+            'bot',
+            'pass',
+            'tcp://1234:2375',
+            'tester:latest',
+            dockerfile=Interpolate('FROM debian:latest'),
+            buildargs={'sample_arg1': 'test_val1'},
+        )
+        _, name = yield bs.start_instance(self.build)
+        self.assertEqual(name, 'tester:latest')
+
+    @defer.inlineCallbacks
+    def test_start_worker_but_already_created_with_same_name(self) -> InlineCallbacksType[None]:
+        bs = yield self.setupWorker(
+            'existing', 'pass', 'tcp://1234:2375', 'busybox:latest', ['bin/bash']
+        )
+        _, name = yield bs.start_instance(self.build)
         self.assertEqual(name, 'busybox:latest')
 
     @defer.inlineCallbacks
-    def test_constructor_hostname(self):
+    def test_start_instance_client_start_exception(self) -> InlineCallbacksType[None]:
+        msg = 'The container operating system does not match the host operating system'
+        docker.Client.start_exception = docker.errors.APIError(msg)
+
         bs = yield self.setupWorker(
-            'bot', 'pass', 'http://localhost:2375',
-            image="myworker_image", hostname="myworker_hostname")
+            'bot', 'pass', 'tcp://1234:2375', 'busybox:latest', ['bin/bash']
+        )
+        with self.assertRaises(interfaces.LatentWorkerCannotSubstantiate):
+            yield bs.start_instance(self.build)
+
+    @defer.inlineCallbacks
+    def test_constructor_hostname(self) -> InlineCallbacksType[None]:
+        bs = yield self.setupWorker(
+            'bot',
+            'pass',
+            'http://localhost:2375',
+            image="myworker_image",
+            hostname="myworker_hostname",
+        )
         self.assertEqual(bs.hostname, 'myworker_hostname')
+
+    @defer.inlineCallbacks
+    def test_check_instance_running(self) -> InlineCallbacksType[None]:
+        bs = yield self.setupWorker('bot', 'pass', 'tcp://1234:2375', 'worker')
+        yield bs.start_instance(self.build)
+        self.assertEqual((yield bs.check_instance()), (True, ""))
+
+    @defer.inlineCallbacks
+    def test_check_instance_exited(self) -> InlineCallbacksType[None]:
+        bs = yield self.setupWorker('bot', 'pass', 'tcp://1234:2375', 'worker')
+        yield bs.start_instance(self.build)
+        for c in self._client._containers.values():
+            c["State"] = "exited"
+
+        expected_logs = (
+            "logs: \n"
+            "log for 8a61192da2b3bb2d922875585e29b74ec0dc4e0117fcbf84c962204e97564cd7\n"
+            "1\n"
+            "2\n"
+            "3\n"
+            "end\n"
+        )
+        self.assertEqual((yield bs.check_instance()), (False, expected_logs))
+
+    @defer.inlineCallbacks
+    def test_stop_instance_stop_NotFound(self) -> InlineCallbacksType[None]:
+        bs = yield self.setupWorker('bot', 'pass', 'tcp://1234:2375', 'worker')
+        yield bs.start_instance(self.build)
+
+        def stop(_: Any, params: Any) -> None:
+            raise docker.errors.NotFound
+
+        self.patch(docker.Client, "stop", stop)
+        yield bs.stop_instance(self.build)
+
+    @defer.inlineCallbacks
+    def test_stop_instance_remove_container_NotFound(self) -> InlineCallbacksType[None]:
+        bs = yield self.setupWorker('bot', 'pass', 'tcp://1234:2375', 'worker')
+        yield bs.start_instance(self.build)
+
+        def remove_container(_: Any, params: Any, v: bool = False, force: bool = False) -> None:
+            raise docker.errors.NotFound
+
+        self.patch(docker.Client, "remove_container", remove_container)
+        yield bs.stop_instance(self.build)
 
 
 class testDockerPyStreamLogs(unittest.TestCase):
+    def compare(self, result: list[str], log: str) -> None:
+        self.assertEqual(result, list(dockerworker._handle_stream_line(log)))
 
-    def compare(self, result, log):
-        self.assertEqual(result,
-                         list(dockerworker._handle_stream_line(log)))
-
-    def testEmpty(self):
+    def testEmpty(self) -> None:
         self.compare([], '{"stream":"\\n"}\r\n')
 
-    def testOneLine(self):
+    def testOneLine(self) -> None:
+        self.compare([" ---> Using cache"], '{"stream":" ---\\u003e Using cache\\n"}\r\n')
+
+    def testMultipleLines(self) -> None:
         self.compare(
-            [" ---> Using cache"], '{"stream":" ---\\u003e Using cache\\n"}\r\n')
+            ["Fetched 8298 kB in 3s (2096 kB/s)", "Reading package lists..."],
+            '{"stream": "Fetched 8298 kB in 3s (2096 kB/s)\\nReading package lists..."}\r\n',
+        )
 
-    def testMultipleLines(self):
-        self.compare(["Fetched 8298 kB in 3s (2096 kB/s)", "Reading package lists..."],
-                     '{"stream": "Fetched 8298 kB in 3s (2096 kB/s)\\nReading '
-                     'package lists..."}\r\n')
-
-    def testError(self):
-        self.compare(["ERROR: The command [/bin/sh -c apt-get update && apt-get install -y"
-                      "    python-dev    python-pip] returned a non-zero code: 127"],
-                     '{"errorDetail": {"message": "The command [/bin/sh -c apt-get update && '
-                     'apt-get install -y    python-dev    python-pip] returned a '
-                     'non-zero code: 127"},'
-                     ' "error": "The command [/bin/sh -c apt-get update && apt-get install -y'
-                     '    python-dev    python-pip] returned a non-zero code: 127"}\r\n')
+    def testError(self) -> None:
+        self.compare(
+            [
+                "ERROR: The command [/bin/sh -c apt-get update && apt-get install -y"
+                "    python-dev    python-pip] returned a non-zero code: 127"
+            ],
+            '{"errorDetail": {"message": "The command [/bin/sh -c apt-get update && '
+            'apt-get install -y    python-dev    python-pip] returned a '
+            'non-zero code: 127"},'
+            ' "error": "The command [/bin/sh -c apt-get update && apt-get install -y'
+            '    python-dev    python-pip] returned a non-zero code: 127"}\r\n',
+        )

@@ -13,10 +13,7 @@
 #
 # Copyright Buildbot Team Members
 
-from __future__ import absolute_import
-from __future__ import print_function
-
 from buildbot_worker.null import LocalWorker
 from buildbot_worker.pb import Worker
 
-__all__ = ['Worker', 'LocalWorker']
+__all__ = ['LocalWorker', 'Worker']

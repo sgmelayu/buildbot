@@ -13,381 +13,504 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from twisted.internet import defer
 from twisted.trial import unittest
 
 from buildbot.db import sourcestamps
 from buildbot.test import fakedb
-from buildbot.test.util import connector_component
-from buildbot.test.util import interfaces
-from buildbot.test.util import validation
+from buildbot.test.fake import fakemaster
+from buildbot.test.reactor import TestReactorMixin
 from buildbot.util import epoch2datetime
+
+if TYPE_CHECKING:
+    from datetime import datetime
+
+    from twisted.internet.defer import Deferred
+
+    from buildbot.db.sourcestamps import SourceStampModel
+    from buildbot.test.fakedb import FakeDBConnector
+    from buildbot.test.fakedb.row import Row
+    from buildbot.util.twisted import InlineCallbacksType
 
 CREATED_AT = 927845299
 
 
-def sourceStampKey(sourceStamp):
-    return (sourceStamp['repository'], sourceStamp['branch'],
-            sourceStamp['created_at'])
+def sourceStampKey(sourceStamp: sourcestamps.SourceStampModel) -> tuple[str, str | None, datetime]:
+    return (sourceStamp.repository, sourceStamp.branch, sourceStamp.created_at)
 
 
-class Tests(interfaces.InterfaceTests):
-
-    def test_signature_findSourceStampId(self):
-        @self.assertArgSpecMatches(self.db.sourcestamps.findSourceStampId)
-        def findSourceStampId(self, branch=None, revision=None,
-                              repository=None, project=None, codebase=None, patch_body=None,
-                              patch_level=None, patch_author=None, patch_comment=None,
-                              patch_subdir=None):
-            pass
-
-    def test_signature_getSourceStamp(self):
-        @self.assertArgSpecMatches(self.db.sourcestamps.getSourceStamp)
-        def getSourceStamp(self, key, no_cache=False):
-            pass
-
-    def test_signature_getSourceStamps(self):
-        @self.assertArgSpecMatches(self.db.sourcestamps.getSourceStamps)
-        def getSourceStamps(self):
-            pass
+class Tests(TestReactorMixin, unittest.TestCase):
+    db: FakeDBConnector
 
     @defer.inlineCallbacks
-    def test_findSourceStampId_simple(self):
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        self.setup_test_reactor()
+        self.master = yield fakemaster.make_master(self, wantDb=True)
+        self.db = self.master.db
+
+    @defer.inlineCallbacks
+    def test_findSourceStampId_simple(self) -> InlineCallbacksType[None]:
         self.reactor.advance(CREATED_AT)
         ssid = yield self.db.sourcestamps.findSourceStampId(
-            branch='production', revision='abdef',
-            repository='test://repo', codebase='cb', project='stamper')
+            branch='production',
+            revision='abdef',
+            repository='test://repo',
+            codebase='cb',
+            project='stamper',
+        )
         ssdict = yield self.db.sourcestamps.getSourceStamp(ssid)
-        validation.verifyDbDict(self, 'ssdict', ssdict)
-        self.assertEqual(ssdict, {
-            'branch': 'production',
-            'codebase': 'cb',
-            'patchid': None,
-            'patch_author': None,
-            'patch_body': None,
-            'patch_comment': None,
-            'patch_level': None,
-            'patch_subdir': None,
-            'project': 'stamper',
-            'repository': 'test://repo',
-            'revision': 'abdef',
-            'ssid': ssid,
-            'created_at': epoch2datetime(CREATED_AT),
-        })
+        self.assertEqual(
+            ssdict,
+            sourcestamps.SourceStampModel(
+                branch='production',
+                codebase='cb',
+                patch=None,
+                project='stamper',
+                repository='test://repo',
+                revision='abdef',
+                ssid=ssid,
+                created_at=epoch2datetime(CREATED_AT),
+            ),
+        )
 
     @defer.inlineCallbacks
-    def test_findSourceStampId_simple_unique(self):
+    def test_findSourceStampId_simple_unique(self) -> InlineCallbacksType[None]:
         ssid1 = yield self.db.sourcestamps.findSourceStampId(
-            branch='production', revision='abdef',
-            repository='test://repo', codebase='cb', project='stamper')
+            branch='production',
+            revision='abdef',
+            repository='test://repo',
+            codebase='cb',
+            project='stamper',
+        )
         ssid2 = yield self.db.sourcestamps.findSourceStampId(
-            branch='production', revision='xxxxx',  # different revision
-            repository='test://repo', codebase='cb', project='stamper')
+            branch='production',
+            revision='xxxxx',  # different revision
+            repository='test://repo',
+            codebase='cb',
+            project='stamper',
+        )
         ssid3 = yield self.db.sourcestamps.findSourceStampId(  # same as ssid1
-            branch='production', revision='abdef',
-            repository='test://repo', codebase='cb', project='stamper')
+            branch='production',
+            revision='abdef',
+            repository='test://repo',
+            codebase='cb',
+            project='stamper',
+        )
         self.assertEqual(ssid1, ssid3)
         self.assertNotEqual(ssid1, ssid2)
 
     @defer.inlineCallbacks
-    def test_findSourceStampId_simple_unique_patch(self):
+    def test_findSourceStampId_simple_unique_patch(self) -> InlineCallbacksType[None]:
         ssid1 = yield self.db.sourcestamps.findSourceStampId(
-            branch='production', revision='abdef',
-            repository='test://repo', codebase='cb', project='stamper',
-            patch_body=b'++ --', patch_level=1, patch_author='me',
-            patch_comment='hi', patch_subdir='.')
+            branch='production',
+            revision='abdef',
+            repository='test://repo',
+            codebase='cb',
+            project='stamper',
+            patch_body=b'++ --',  # type: ignore[arg-type]
+            patch_level=1,
+            patch_author='me',
+            patch_comment='hi',
+            patch_subdir='.',
+        )
         ssid2 = yield self.db.sourcestamps.findSourceStampId(
-            branch='production', revision='abdef',
-            repository='test://repo', codebase='cb', project='stamper',
-            patch_body=b'++ --', patch_level=1, patch_author='me',
-            patch_comment='hi', patch_subdir='.')
+            branch='production',
+            revision='abdef',
+            repository='test://repo',
+            codebase='cb',
+            project='stamper',
+            patch_body=b'++ --',  # type: ignore[arg-type]
+            patch_level=1,
+            patch_author='me',
+            patch_comment='hi',
+            patch_subdir='.',
+        )
         # even with the same patch contents, we get different ids
         self.assertNotEqual(ssid1, ssid2)
 
     @defer.inlineCallbacks
-    def test_findSourceStampId_patch(self):
+    def test_findSourceStampId_patch(self) -> InlineCallbacksType[None]:
         self.reactor.advance(CREATED_AT)
         ssid = yield self.db.sourcestamps.findSourceStampId(
-            branch='production', revision='abdef',
-            repository='test://repo', codebase='cb', project='stamper',
-            patch_body=b'my patch', patch_level=3, patch_subdir='master/',
-            patch_author='me', patch_comment="comment")
+            branch='production',
+            revision='abdef',
+            repository='test://repo',
+            codebase='cb',
+            project='stamper',
+            patch_body=b'my patch',  # type: ignore[arg-type]
+            patch_level=3,
+            patch_subdir='master/',
+            patch_author='me',
+            patch_comment="comment",
+        )
         ssdict = yield self.db.sourcestamps.getSourceStamp(ssid)
-        validation.verifyDbDict(self, 'ssdict', ssdict)
-        self.assertEqual(ssdict, {
-            'branch': 'production',
-            'codebase': 'cb',
-            'patchid': 1,
-            'patch_author': 'me',
-            'patch_body': b'my patch',
-            'patch_comment': 'comment',
-            'patch_level': 3,
-            'patch_subdir': 'master/',
-            'project': 'stamper',
-            'repository': 'test://repo',
-            'revision': 'abdef',
-            'created_at': epoch2datetime(CREATED_AT),
-            'ssid': ssid,
-        })
+        self.assertEqual(
+            ssdict,
+            sourcestamps.SourceStampModel(
+                branch='production',
+                codebase='cb',
+                project='stamper',
+                repository='test://repo',
+                revision='abdef',
+                created_at=epoch2datetime(CREATED_AT),
+                ssid=ssid,
+                patch=sourcestamps.PatchModel(
+                    patchid=1,
+                    author='me',
+                    body=b'my patch',
+                    comment='comment',
+                    level=3,
+                    subdir='master/',
+                ),
+            ),
+        )
 
     @defer.inlineCallbacks
-    def test_getSourceStamp_simple(self):
-        yield self.insertTestData([
-            fakedb.SourceStamp(id=234, branch='br', revision='rv',
-                               repository='rep', codebase='cb', project='prj',
-                               created_at=CREATED_AT),
+    def test_getSourceStamp_simple(self) -> InlineCallbacksType[None]:
+        yield self.db.insert_test_data([
+            fakedb.SourceStamp(
+                id=234,
+                branch='br',
+                revision='rv',
+                repository='rep',
+                codebase='cb',
+                project='prj',
+                created_at=CREATED_AT,
+            ),
         ])
         ssdict = yield self.db.sourcestamps.getSourceStamp(234)
 
-        validation.verifyDbDict(self, 'ssdict', ssdict)
-        self.assertEqual(ssdict, {
-            'ssid': 234,
-            'created_at': epoch2datetime(CREATED_AT),
-            'branch': 'br',
-            'revision': 'rv',
-            'repository': 'rep',
-            'codebase': 'cb',
-            'project': 'prj',
-            'patchid': None,
-            'patch_body': None,
-            'patch_level': None,
-            'patch_subdir': None,
-            'patch_author': None,
-            'patch_comment': None,
-        })
+        self.assertEqual(
+            ssdict,
+            sourcestamps.SourceStampModel(
+                ssid=234,
+                created_at=epoch2datetime(CREATED_AT),
+                branch='br',
+                revision='rv',
+                repository='rep',
+                codebase='cb',
+                project='prj',
+                patch=None,
+            ),
+        )
 
     @defer.inlineCallbacks
-    def test_getSourceStamp_simple_None(self):
+    def test_getSourceStamp_simple_None(self) -> InlineCallbacksType[None]:
         "check that NULL branch and revision are handled correctly"
-        yield self.insertTestData([
-            fakedb.SourceStamp(id=234, branch=None, revision=None,
-                               repository='rep', codebase='cb', project='prj'),
+        yield self.db.insert_test_data([
+            fakedb.SourceStamp(
+                id=234, branch=None, revision=None, repository='rep', codebase='cb', project='prj'
+            ),
         ])
         ssdict = yield self.db.sourcestamps.getSourceStamp(234)
 
-        validation.verifyDbDict(self, 'ssdict', ssdict)
-        self.assertEqual((ssdict['branch'], ssdict['revision']),
-                         (None, None))
+        self.assertIsInstance(ssdict, sourcestamps.SourceStampModel)
+        self.assertEqual((ssdict.branch, ssdict.revision), (None, None))
 
     @defer.inlineCallbacks
-    def test_getSourceStamp_patch(self):
-        yield self.insertTestData([
-            fakedb.Patch(id=99, patch_base64='aGVsbG8sIHdvcmxk',
-                         patch_author='bar', patch_comment='foo', subdir='/foo',
-                         patchlevel=3),
+    def test_getSourceStamp_patch(self) -> InlineCallbacksType[None]:
+        yield self.db.insert_test_data([
+            fakedb.Patch(
+                id=99,
+                patch_base64='aGVsbG8sIHdvcmxk',
+                patch_author='bar',
+                patch_comment='foo',
+                subdir='/foo',
+                patchlevel=3,
+            ),
             fakedb.SourceStamp(id=234, patchid=99),
         ])
-        ssdict = yield self.db.sourcestamps.getSourceStamp(234)
+        res = yield self.db.sourcestamps.getSourceStamp(234)
+        assert res is not None
+        ssdict = res
 
-        validation.verifyDbDict(self, 'ssdict', ssdict)
-        self.assertEqual(dict((k, v) for k, v in ssdict.items()
-                              if k.startswith('patch_')),
-                         dict(patch_body=b'hello, world',
-                              patch_level=3,
-                              patch_author='bar',
-                              patch_comment='foo',
-                              patch_subdir='/foo'))
+        self.assertIsInstance(ssdict, sourcestamps.SourceStampModel)
+        self.assertIsInstance(ssdict.patch, sourcestamps.PatchModel)
+        self.assertEqual(ssdict.patch.body, b'hello, world')
+        self.assertEqual(ssdict.patch.level, 3)
+        self.assertEqual(ssdict.patch.author, 'bar')
+        self.assertEqual(ssdict.patch.comment, 'foo')
+        self.assertEqual(ssdict.patch.subdir, '/foo')
 
     @defer.inlineCallbacks
-    def test_getSourceStamp_nosuch(self):
+    def test_getSourceStamp_nosuch(self) -> InlineCallbacksType[None]:
         ssdict = yield self.db.sourcestamps.getSourceStamp(234)
 
         self.assertEqual(ssdict, None)
 
     @defer.inlineCallbacks
-    def test_getSourceStamps(self):
-        yield self.insertTestData([
-            fakedb.Patch(id=99, patch_base64='aGVsbG8sIHdvcmxk',
-                         patch_author='bar', patch_comment='foo', subdir='/foo',
-                         patchlevel=3),
-            fakedb.SourceStamp(id=234, revision='r', project='p',
-                               codebase='c', repository='rep', branch='b', patchid=99,
-                               created_at=CREATED_AT),
-            fakedb.SourceStamp(id=235, revision='r2', project='p2',
-                               codebase='c2', repository='rep2', branch='b2', patchid=None,
-                               created_at=CREATED_AT + 10),
+    def test_getSourceStamps(self) -> InlineCallbacksType[None]:
+        yield self.db.insert_test_data([
+            fakedb.Patch(
+                id=99,
+                patch_base64='aGVsbG8sIHdvcmxk',
+                patch_author='bar',
+                patch_comment='foo',
+                subdir='/foo',
+                patchlevel=3,
+            ),
+            fakedb.SourceStamp(
+                id=234,
+                revision='r',
+                project='p',
+                codebase='c',
+                repository='rep',
+                branch='b',
+                patchid=99,
+                created_at=CREATED_AT,
+            ),
+            fakedb.SourceStamp(
+                id=235,
+                revision='r2',
+                project='p2',
+                codebase='c2',
+                repository='rep2',
+                branch='b2',
+                patchid=None,
+                created_at=CREATED_AT + 10,
+            ),
         ])
-        sourcestamps = yield self.db.sourcestamps.getSourceStamps()
+        db_sourcestamps = yield self.db.sourcestamps.getSourceStamps()
 
-        self.assertEqual(sorted(sourcestamps, key=sourceStampKey),
-                         sorted([{
-                                 'branch': 'b',
-                                 'codebase': 'c',
-                                 'patch_author': 'bar',
-                                 'patchid': 99,
-                                 'patch_body': b'hello, world',
-                                 'patch_comment': 'foo',
-                                 'patch_level': 3,
-                                 'patch_subdir': '/foo',
-                                 'project': 'p',
-                                 'repository': 'rep',
-                                 'revision': 'r',
-                                 'created_at': epoch2datetime(CREATED_AT),
-                                 'ssid': 234,
-                                 }, {
-                                 'branch': 'b2',
-                                 'codebase': 'c2',
-                                 'patchid': None,
-                                 'patch_author': None,
-                                 'patch_body': None,
-                                 'patch_comment': None,
-                                 'patch_level': None,
-                                 'patch_subdir': None,
-                                 'project': 'p2',
-                                 'repository': 'rep2',
-                                 'revision': 'r2',
-                                 'created_at': epoch2datetime(CREATED_AT + 10),
-                                 'ssid': 235,
-                                 }], key=sourceStampKey))
+        self.assertEqual(
+            sorted(db_sourcestamps, key=sourceStampKey),
+            sorted(
+                [
+                    sourcestamps.SourceStampModel(
+                        branch='b',
+                        codebase='c',
+                        project='p',
+                        repository='rep',
+                        revision='r',
+                        created_at=epoch2datetime(CREATED_AT),
+                        ssid=234,
+                        patch=sourcestamps.PatchModel(
+                            patchid=99,
+                            author='bar',
+                            body=b'hello, world',
+                            comment='foo',
+                            level=3,
+                            subdir='/foo',
+                        ),
+                    ),
+                    sourcestamps.SourceStampModel(
+                        branch='b2',
+                        codebase='c2',
+                        project='p2',
+                        repository='rep2',
+                        revision='r2',
+                        created_at=epoch2datetime(CREATED_AT + 10),
+                        ssid=235,
+                        patch=None,
+                    ),
+                ],
+                key=sourceStampKey,
+            ),
+        )
 
     @defer.inlineCallbacks
-    def test_getSourceStamps_empty(self):
+    def test_getSourceStamps_empty(self) -> InlineCallbacksType[None]:
         sourcestamps = yield self.db.sourcestamps.getSourceStamps()
 
         self.assertEqual(sourcestamps, [])
 
-    def test_signature_getSourceStampsForBuild(self):
-        @self.assertArgSpecMatches(self.db.sourcestamps.getSourceStampsForBuild)
-        def getSourceStampsForBuild(self, buildid):
-            pass
+    @defer.inlineCallbacks
+    def test_get_sourcestamps_for_buildset_one_codebase(self) -> InlineCallbacksType[None]:
+        yield self.db.insert_test_data([
+            fakedb.Master(id=88, name="bar"),
+            fakedb.Worker(id=13, name="one"),
+            fakedb.Builder(id=77, name="A"),
+            fakedb.SourceStamp(id=234, codebase="A", created_at=CREATED_AT, revision="aaa"),
+            fakedb.Buildset(id=30, reason="foo", submitted_at=1300305712, results=-1),
+            fakedb.BuildsetSourceStamp(sourcestampid=234, buildsetid=30),
+        ])
+
+        db_sourcestamps = yield self.db.sourcestamps.get_sourcestamps_for_buildset(30)
+
+        expected = [
+            sourcestamps.SourceStampModel(
+                branch="master",
+                codebase="A",
+                created_at=epoch2datetime(CREATED_AT),
+                patch=None,
+                project="proj",
+                repository="repo",
+                revision="aaa",
+                ssid=234,
+            )
+        ]
+
+        self.assertEqual(
+            sorted(db_sourcestamps, key=sourceStampKey), sorted(expected, key=sourceStampKey)
+        )
 
     @defer.inlineCallbacks
-    def do_test_getSourceStampsForBuild(self, rows, buildid, expected):
-        yield self.insertTestData(rows)
+    def test_get_sourcestamps_for_buildset_three_codebases(self) -> InlineCallbacksType[None]:
+        yield self.db.insert_test_data([
+            fakedb.Master(id=88, name="bar"),
+            fakedb.Worker(id=13, name="one"),
+            fakedb.Builder(id=77, name="A"),
+            fakedb.SourceStamp(id=234, codebase="A", created_at=CREATED_AT, revision="aaa"),
+            fakedb.SourceStamp(id=235, codebase="B", created_at=CREATED_AT + 10, revision="bbb"),
+            fakedb.SourceStamp(id=236, codebase="C", created_at=CREATED_AT + 20, revision="ccc"),
+            fakedb.Buildset(id=30, reason="foo", submitted_at=1300305712, results=-1),
+            fakedb.BuildsetSourceStamp(sourcestampid=234, buildsetid=30),
+            fakedb.BuildsetSourceStamp(sourcestampid=235, buildsetid=30),
+            fakedb.BuildsetSourceStamp(sourcestampid=236, buildsetid=30),
+        ])
+
+        db_sourcestamps = yield self.db.sourcestamps.get_sourcestamps_for_buildset(30)
+
+        expected = [
+            sourcestamps.SourceStampModel(
+                branch="master",
+                codebase="A",
+                created_at=epoch2datetime(CREATED_AT),
+                patch=None,
+                project="proj",
+                repository="repo",
+                revision="aaa",
+                ssid=234,
+            ),
+            sourcestamps.SourceStampModel(
+                branch="master",
+                codebase="B",
+                created_at=epoch2datetime(CREATED_AT + 10),
+                patch=None,
+                project="proj",
+                repository="repo",
+                revision="bbb",
+                ssid=235,
+            ),
+            sourcestamps.SourceStampModel(
+                branch="master",
+                codebase="C",
+                created_at=epoch2datetime(CREATED_AT + 20),
+                patch=None,
+                project="proj",
+                repository="repo",
+                revision="ccc",
+                ssid=236,
+            ),
+        ]
+
+        self.assertEqual(
+            sorted(db_sourcestamps, key=sourceStampKey), sorted(expected, key=sourceStampKey)
+        )
+
+    @defer.inlineCallbacks
+    def do_test_getSourceStampsForBuild(
+        self, rows: list[Row], buildid: int, expected: list[SourceStampModel]
+    ) -> InlineCallbacksType[None]:
+        yield self.db.insert_test_data(rows)
 
         sourcestamps = yield self.db.sourcestamps.getSourceStampsForBuild(buildid)
 
-        self.assertEqual(sorted(sourcestamps, key=sourceStampKey),
-                         sorted(expected, key=sourceStampKey))
+        self.assertEqual(
+            sorted(sourcestamps, key=sourceStampKey), sorted(expected, key=sourceStampKey)
+        )
 
-    def test_getSourceStampsForBuild_OneCodeBase(self):
-        rows = [fakedb.Master(id=88, name="bar"),
-                fakedb.Worker(id=13, name='one'),
-                fakedb.Builder(id=77, name='A'),
-                fakedb.SourceStamp(id=234, codebase='A', created_at=CREATED_AT,
-                                   revision="aaa"),
-                # fakedb.Change(changeid=14, codebase='A', sourcestampid=234),
-                fakedb.Buildset(id=30, reason='foo',
-                                submitted_at=1300305712, results=-1),
-                fakedb.BuildsetSourceStamp(sourcestampid=234, buildsetid=30),
-                fakedb.BuildRequest(id=19, buildsetid=30, builderid=77,
-                                    priority=13, submitted_at=1300305712, results=-1),
-                fakedb.Build(id=50, buildrequestid=19, number=5, masterid=88,
-                             builderid=77, state_string="test", workerid=13,
-                             started_at=1304262222), ]
+    def test_getSourceStampsForBuild_OneCodeBase(self) -> Deferred[None]:
+        rows = [
+            fakedb.Master(id=88, name="bar"),
+            fakedb.Worker(id=13, name='one'),
+            fakedb.Builder(id=77, name='A'),
+            fakedb.SourceStamp(id=234, codebase='A', created_at=CREATED_AT, revision="aaa"),
+            # fakedb.Change(changeid=14, codebase='A', sourcestampid=234),
+            fakedb.Buildset(id=30, reason='foo', submitted_at=1300305712, results=-1),
+            fakedb.BuildsetSourceStamp(sourcestampid=234, buildsetid=30),
+            fakedb.BuildRequest(
+                id=19, buildsetid=30, builderid=77, priority=13, submitted_at=1300305712, results=-1
+            ),
+            fakedb.Build(
+                id=50,
+                buildrequestid=19,
+                number=5,
+                masterid=88,
+                builderid=77,
+                state_string="test",
+                workerid=13,
+                started_at=1304262222,
+            ),
+        ]
 
-        expected = [{
-            'branch': 'master',
-            'codebase': 'A',
-            'created_at': epoch2datetime(CREATED_AT),
-            'patch_author': None,
-            'patch_body': None,
-            'patch_comment': None,
-            'patch_level': None,
-            'patch_subdir': None,
-            'patchid': None,
-            'project': 'proj',
-            'repository': 'repo',
-            'revision': 'aaa',
-            'ssid': 234}]
+        expected = [
+            sourcestamps.SourceStampModel(
+                branch='master',
+                codebase='A',
+                created_at=epoch2datetime(CREATED_AT),
+                patch=None,
+                project='proj',
+                repository='repo',
+                revision='aaa',
+                ssid=234,
+            )
+        ]
 
         return self.do_test_getSourceStampsForBuild(rows, 50, expected)
 
-    def test_getSourceStampsForBuild_3CodeBases(self):
-        rows = [fakedb.Master(id=88, name="bar"),
-                fakedb.Worker(id=13, name='one'),
-                fakedb.Builder(id=77, name='A'),
-                fakedb.SourceStamp(id=234, codebase='A', created_at=CREATED_AT,
-                                   revision="aaa"),
-                fakedb.SourceStamp(id=235, codebase='B', created_at=CREATED_AT + 10,
-                                   revision="bbb"),
-                fakedb.SourceStamp(id=236, codebase='C', created_at=CREATED_AT + 20,
-                                   revision="ccc"),
-                # fakedb.Change(changeid=14, codebase='A', sourcestampid=234),
-                fakedb.Buildset(id=30, reason='foo',
-                                submitted_at=1300305712, results=-1),
-                fakedb.BuildsetSourceStamp(sourcestampid=234, buildsetid=30),
-                fakedb.BuildsetSourceStamp(sourcestampid=235, buildsetid=30),
-                fakedb.BuildsetSourceStamp(sourcestampid=236, buildsetid=30),
-                fakedb.BuildRequest(id=19, buildsetid=30, builderid=77,
-                                    priority=13, submitted_at=1300305712, results=-1),
-                fakedb.Build(id=50, buildrequestid=19, number=5, masterid=88,
-                             builderid=77, state_string="test", workerid=13,
-                             started_at=1304262222), ]
+    def test_getSourceStampsForBuild_3CodeBases(self) -> Deferred[None]:
+        rows = [
+            fakedb.Master(id=88, name="bar"),
+            fakedb.Worker(id=13, name='one'),
+            fakedb.Builder(id=77, name='A'),
+            fakedb.SourceStamp(id=234, codebase='A', created_at=CREATED_AT, revision="aaa"),
+            fakedb.SourceStamp(id=235, codebase='B', created_at=CREATED_AT + 10, revision="bbb"),
+            fakedb.SourceStamp(id=236, codebase='C', created_at=CREATED_AT + 20, revision="ccc"),
+            # fakedb.Change(changeid=14, codebase='A', sourcestampid=234),
+            fakedb.Buildset(id=30, reason='foo', submitted_at=1300305712, results=-1),
+            fakedb.BuildsetSourceStamp(sourcestampid=234, buildsetid=30),
+            fakedb.BuildsetSourceStamp(sourcestampid=235, buildsetid=30),
+            fakedb.BuildsetSourceStamp(sourcestampid=236, buildsetid=30),
+            fakedb.BuildRequest(
+                id=19, buildsetid=30, builderid=77, priority=13, submitted_at=1300305712, results=-1
+            ),
+            fakedb.Build(
+                id=50,
+                buildrequestid=19,
+                number=5,
+                masterid=88,
+                builderid=77,
+                state_string="test",
+                workerid=13,
+                started_at=1304262222,
+            ),
+        ]
 
-        expected = [{'branch': 'master',
-                     'codebase': 'A',
-                     'created_at': epoch2datetime(CREATED_AT),
-                     'patch_author': None,
-                     'patch_body': None,
-                     'patch_comment': None,
-                     'patch_level': None,
-                     'patch_subdir': None,
-                     'patchid': None,
-                     'project': 'proj',
-                     'repository': 'repo',
-                     'revision': 'aaa',
-                     'ssid': 234},
-                    {'branch': 'master',
-                     'codebase': 'B',
-                     'created_at': epoch2datetime(CREATED_AT + 10),
-                     'patch_author': None,
-                     'patch_body': None,
-                     'patch_comment': None,
-                     'patch_level': None,
-                     'patch_subdir': None,
-                     'patchid': None,
-                     'project': 'proj',
-                     'repository': 'repo',
-                     'revision': 'bbb',
-                     'ssid': 235},
-                    {'branch': 'master',
-                     'codebase': 'C',
-                     'created_at': epoch2datetime(CREATED_AT + 20),
-                     'patch_author': None,
-                     'patch_body': None,
-                     'patch_comment': None,
-                     'patch_level': None,
-                     'patch_subdir': None,
-                     'patchid': None,
-                     'project': 'proj',
-                     'repository': 'repo',
-                     'revision': 'ccc',
-                     'ssid': 236}]
+        expected = [
+            sourcestamps.SourceStampModel(
+                branch='master',
+                codebase='A',
+                created_at=epoch2datetime(CREATED_AT),
+                patch=None,
+                project='proj',
+                repository='repo',
+                revision='aaa',
+                ssid=234,
+            ),
+            sourcestamps.SourceStampModel(
+                branch='master',
+                codebase='B',
+                created_at=epoch2datetime(CREATED_AT + 10),
+                patch=None,
+                project='proj',
+                repository='repo',
+                revision='bbb',
+                ssid=235,
+            ),
+            sourcestamps.SourceStampModel(
+                branch='master',
+                codebase='C',
+                created_at=epoch2datetime(CREATED_AT + 20),
+                patch=None,
+                project='proj',
+                repository='repo',
+                revision='ccc',
+                ssid=236,
+            ),
+        ]
         return self.do_test_getSourceStampsForBuild(rows, 50, expected)
-
-
-class RealTests(Tests):
-
-    pass
-
-
-class TestFakeDB(unittest.TestCase, connector_component.FakeConnectorComponentMixin, Tests):
-
-    @defer.inlineCallbacks
-    def setUp(self):
-        yield self.setUpConnectorComponent()
-
-
-class TestRealDB(unittest.TestCase,
-                 connector_component.ConnectorComponentMixin,
-                 RealTests):
-
-    @defer.inlineCallbacks
-    def setUp(self):
-        yield self.setUpConnectorComponent(
-            table_names=['sourcestamps',
-                         'patches',
-                         'masters',
-                         'workers',
-                         'buildsets',
-                         'builders',
-                         'buildrequests',
-                         'buildset_sourcestamps',
-                         'builds'])
-
-        self.db.sourcestamps = \
-            sourcestamps.SourceStampsConnectorComponent(self.db)
-
-    def tearDown(self):
-        return self.tearDownConnectorComponent()

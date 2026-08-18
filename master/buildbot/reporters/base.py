@@ -13,7 +13,12 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
 import abc
+from typing import TYPE_CHECKING
+from typing import Any
+from typing import ClassVar
 
 from twisted.internet import defer
 from twisted.python import log
@@ -23,21 +28,29 @@ from buildbot.reporters import utils
 from buildbot.util import service
 from buildbot.util import tuplematch
 
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from buildbot.master import BuildMaster
+    from buildbot.mq.base import QueueRef
+    from buildbot.util.twisted import InlineCallbacksType
+
 ENCODING = 'utf-8'
 
 
 class ReporterBase(service.BuildbotService):
-    name = None
+    name: str | None = None
     __meta__ = abc.ABCMeta
 
-    compare_attrs = ['generators']
+    compare_attrs: ClassVar[Sequence[str]] = ['generators']
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self.generators = None
-        self._event_consumers = []
+        self.generators: list[Any] | None = None
+        self._event_consumers: dict[tuple[str, ...], QueueRef] = {}
+        self._pending_got_event_calls: dict[tuple[str, Any], defer.Deferred[None]] = {}
 
-    def checkConfig(self, generators):
+    def checkConfig(self, generators: list[Any]) -> None:  # type: ignore[override]
         if not isinstance(generators, list):
             config.error('{}: generators argument must be a list')
 
@@ -50,54 +63,92 @@ class ReporterBase(service.BuildbotService):
                 self.name += "_" + g.generate_name()
 
     @defer.inlineCallbacks
-    def reconfigService(self, generators):
-
-        for consumer in self._event_consumers:
-            yield consumer.stopConsuming()
-        self._event_consumers = []
-
+    def reconfigService(self, generators: list[Any]) -> InlineCallbacksType[None]:  # type: ignore[override]
         self.generators = generators
 
         wanted_event_keys = set()
         for g in self.generators:
             wanted_event_keys.update(g.wanted_event_keys)
 
+        # Remove consumers for keys that are no longer wanted
+        for key in list(self._event_consumers.keys()):
+            if key not in wanted_event_keys:
+                yield self._event_consumers[key].stopConsuming()
+                del self._event_consumers[key]
+
+        # Add consumers for new keys
         for key in sorted(list(wanted_event_keys)):
-            consumer = yield self.master.mq.startConsuming(self._got_event, key)
-            self._event_consumers.append(consumer)
+            if key not in self._event_consumers:
+                self._event_consumers[key] = yield self.master.mq.startConsuming(
+                    self._got_event, key
+                )
 
     @defer.inlineCallbacks
-    def stopService(self):
-        for consumer in self._event_consumers:
+    def stopService(self) -> InlineCallbacksType[None]:
+        for consumer in self._event_consumers.values():
             yield consumer.stopConsuming()
-        self._event_consumers = []
+        self._event_consumers = {}
+
+        yield from list(self._pending_got_event_calls.values())
+        self._pending_got_event_calls = {}
+
         yield super().stopService()
 
-    def _does_generator_want_key(self, generator, key):
+    def _does_generator_want_key(self, generator: Any, key: tuple[str, ...]) -> bool:
         for filter in generator.wanted_event_keys:
             if tuplematch.matchTuple(key, filter):
                 return True
         return False
 
+    def _get_chain_key_for_event(
+        self, key: tuple[str, ...], msg: dict[str, Any]
+    ) -> tuple[str, Any] | None:
+        if key[0] in ["builds", "buildrequests"]:
+            return ("buildrequestid", msg["buildrequestid"])
+        return None
+
     @defer.inlineCallbacks
-    def _got_event(self, key, msg):
+    def _got_event(self, key: tuple[str, ...], msg: dict[str, Any]) -> InlineCallbacksType[None]:
+        chain_key = self._get_chain_key_for_event(key, msg)
+        if chain_key is not None:
+            d: defer.Deferred[None] = defer.Deferred()
+            pending_call = self._pending_got_event_calls.get(chain_key)
+            self._pending_got_event_calls[chain_key] = d
+            # Wait for previously pending call, if any, to ensure
+            # reports are sent out in the order events were queued.
+            if pending_call is not None:
+                yield pending_call
+
         try:
             reports = []
+            assert self.generators is not None
             for g in self.generators:
                 if self._does_generator_want_key(g, key):
-                    report = yield g.generate(self.master, self, key, msg)
-                    if report is not None:
-                        reports.append(report)
+                    try:
+                        report = yield g.generate(self.master, self, key, msg)
+                        if report is not None:
+                            reports.append(report)
+                    except Exception as e:
+                        log.err(
+                            e,
+                            "Got exception when handling reporter events: "
+                            f"key: {key} generator: {g}",
+                        )
 
             if reports:
                 yield self.sendMessage(reports)
         except Exception as e:
             log.err(e, 'Got exception when handling reporter events')
 
-    def getResponsibleUsersForBuild(self, master, buildid):
+        if chain_key is not None:
+            if self._pending_got_event_calls.get(chain_key) == d:
+                del self._pending_got_event_calls[chain_key]
+            d.callback(None)  # This event is now fully handled
+
+    def getResponsibleUsersForBuild(self, master: BuildMaster, buildid: int) -> Any:
         # Use library method but subclassers may want to override that
         return utils.getResponsibleUsersForBuild(master, buildid)
 
     @abc.abstractmethod
-    def sendMessage(self, reports):
+    def sendMessage(self, reports: list[Any]) -> Any:
         pass

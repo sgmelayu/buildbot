@@ -14,53 +14,52 @@
 # Copyright Buildbot Team Members
 
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from twisted.internet import defer
 from twisted.python import runtime
 
 from buildbot.process.results import SUCCESS
 from buildbot.test.util.integration import RunMasterBase
 
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
+
 # This integration test creates a master and worker environment
 # and make sure the UrlForBuild renderable is working
 
 
 class UrlForBuildMaster(RunMasterBase):
-
     proto = "null"
 
     @defer.inlineCallbacks
-    def test_url(self):
-        yield self.setupConfig(masterConfig())
+    def setup_config(self) -> InlineCallbacksType[None]:
+        c = {}
+        from buildbot.config import BuilderConfig  # noqa: PLC0415
+        from buildbot.plugins import schedulers  # noqa: PLC0415
+        from buildbot.plugins import steps  # noqa: PLC0415
+        from buildbot.plugins import util  # noqa: PLC0415
+        from buildbot.process.factory import BuildFactory  # noqa: PLC0415
+
+        c['schedulers'] = [schedulers.ForceScheduler(name="force", builderNames=["testy"])]
+
+        f = BuildFactory()
+        # do a bunch of transfer to exercise the protocol
+        f.addStep(steps.ShellCommand(command=["echo", util.URLForBuild]))
+        c['builders'] = [BuilderConfig(name="testy", workernames=["local1"], factory=f)]
+        yield self.setup_master(c)
+
+    @defer.inlineCallbacks
+    def test_url(self) -> InlineCallbacksType[None]:
+        yield self.setup_config()
 
         build = yield self.doForceBuild(wantSteps=True, wantLogs=True)
         self.assertEqual(build['results'], SUCCESS)
         if runtime.platformType == 'win32':
-            command = "echo http://localhost:8080/#builders/1/builds/1"
+            command = "echo http://localhost:8080/#/builders/1/builds/1"
         else:
-            command = "echo 'http://localhost:8080/#builders/1/builds/1'"
+            command = "echo 'http://localhost:8080/#/builders/1/builds/1'"
 
-        self.assertIn(command,
-                      build['steps'][1]['logs'][0]['contents']['content'])
-
-
-# master configuration
-def masterConfig():
-    c = {}
-    from buildbot.config import BuilderConfig
-    from buildbot.process.factory import BuildFactory
-    from buildbot.plugins import steps, schedulers, util
-
-    c['schedulers'] = [
-        schedulers.ForceScheduler(
-            name="force",
-            builderNames=["testy"])]
-
-    f = BuildFactory()
-    # do a bunch of transfer to exercise the protocol
-    f.addStep(steps.ShellCommand(command=["echo", util.URLForBuild]))
-    c['builders'] = [
-        BuilderConfig(name="testy",
-                      workernames=["local1"],
-                      factory=f)
-    ]
-    return c
+        self.assertIn(command, build['steps'][1]['logs'][0]['contents']['content'])

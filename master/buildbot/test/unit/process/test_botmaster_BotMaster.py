@@ -13,7 +13,10 @@
 #
 # Copyright Buildbot Team Members
 
-import mock
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from unittest import mock
 
 from twisted.internet import defer
 from twisted.trial import unittest
@@ -21,34 +24,37 @@ from twisted.trial import unittest
 from buildbot import config
 from buildbot.process import factory
 from buildbot.process.botmaster import BotMaster
+from buildbot.process.buildrequest import BuildRequest
 from buildbot.process.results import CANCELLED
 from buildbot.process.results import RETRY
 from buildbot.test.fake import fakemaster
-from buildbot.test.util.misc import TestReactorMixin
+from buildbot.test.reactor import TestReactorMixin
+
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
 
 
 class TestCleanShutdown(TestReactorMixin, unittest.TestCase):
-
     @defer.inlineCallbacks
-    def setUp(self):
-        self.setUpTestReactor()
-        self.master = fakemaster.make_master(self, wantData=True)
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        self.setup_test_reactor()
+        self.master = yield fakemaster.make_master(self, wantData=True)
         self.botmaster = BotMaster()
         yield self.botmaster.setServiceParent(self.master)
         self.botmaster.startService()
 
-    def assertReactorStopped(self, _=None):
+    def assertReactorStopped(self, _: None = None) -> None:
         self.assertTrue(self.reactor.stop_called)
 
-    def assertReactorNotStopped(self, _=None):
+    def assertReactorNotStopped(self, _: None = None) -> None:
         self.assertFalse(self.reactor.stop_called)
 
-    def makeFakeBuild(self, waitedFor=False):
+    def makeFakeBuild(self, waitedFor: bool = False) -> None:
         self.fake_builder = builder = mock.Mock()
-        self.build_deferred = defer.Deferred()
+        self.build_deferred = defer.Deferred()  # type: ignore[var-annotated]
 
-        request = mock.Mock()
-        request.waitedFor = waitedFor
+        request = mock.Mock(spec=BuildRequest)
+        request.waited_for = waitedFor
         build = mock.Mock()
         build.stopBuild = self.stopFakeBuild
         build.waitUntilFinished.return_value = self.build_deferred
@@ -58,23 +64,24 @@ class TestCleanShutdown(TestReactorMixin, unittest.TestCase):
         self.botmaster.builders = mock.Mock()
         self.botmaster.builders.values.return_value = [builder]
 
-    def stopFakeBuild(self, reason, results):
+    def stopFakeBuild(self, reason: str, results: int) -> defer.Deferred[None]:
         self.reason = reason
         self.results = results
         self.finishFakeBuild()
+        return defer.succeed(None)
 
-    def finishFakeBuild(self):
+    def finishFakeBuild(self) -> None:
         self.fake_builder.building = []
         self.build_deferred.callback(None)
 
     # tests
 
-    def test_shutdown_idle(self):
+    def test_shutdown_idle(self) -> None:
         """Test that the master shuts down when it's idle"""
         self.botmaster.cleanShutdown()
         self.assertReactorStopped()
 
-    def test_shutdown_busy(self):
+    def test_shutdown_busy(self) -> None:
         """Test that the master shuts down after builds finish"""
         self.makeFakeBuild()
 
@@ -92,7 +99,7 @@ class TestCleanShutdown(TestReactorMixin, unittest.TestCase):
         # And now we should be stopped
         self.assertReactorStopped()
 
-    def test_shutdown_busy_quick(self):
+    def test_shutdown_busy_quick(self) -> None:
         """Test that the master shuts down after builds finish"""
         self.makeFakeBuild()
 
@@ -102,7 +109,7 @@ class TestCleanShutdown(TestReactorMixin, unittest.TestCase):
         self.assertReactorStopped()
         self.assertEqual(self.results, RETRY)
 
-    def test_shutdown_busy_quick_cancelled(self):
+    def test_shutdown_busy_quick_cancelled(self) -> None:
         """Test that the master shuts down after builds finish"""
         self.makeFakeBuild(waitedFor=True)
 
@@ -112,13 +119,13 @@ class TestCleanShutdown(TestReactorMixin, unittest.TestCase):
         self.assertReactorStopped()
         self.assertEqual(self.results, CANCELLED)
 
-    def test_shutdown_cancel_not_shutting_down(self):
+    def test_shutdown_cancel_not_shutting_down(self) -> None:
         """Test that calling cancelCleanShutdown when none is in progress
         works"""
         # this just shouldn't fail..
         self.botmaster.cancelCleanShutdown()
 
-    def test_shutdown_cancel(self):
+    def test_shutdown_cancel(self) -> None:
         """Test that we can cancel a shutdown"""
         self.makeFakeBuild()
 
@@ -128,8 +135,11 @@ class TestCleanShutdown(TestReactorMixin, unittest.TestCase):
         # build.
         self.assertReactorNotStopped()
 
-        # but the BuildRequestDistributor should not be running
-        self.assertFalse(self.botmaster.brd.running)
+        # the BuildRequestDistributor is still running
+        # distributing child BuildRequests blocking
+        # parent Build from finishing
+        self.assertTrue(self.botmaster.brd.running)
+        self.assertTrue(self.botmaster.brd.distribute_only_waited_childs)
 
         # Cancel the shutdown
         self.botmaster.cancelCleanShutdown()
@@ -141,45 +151,53 @@ class TestCleanShutdown(TestReactorMixin, unittest.TestCase):
         self.assertReactorNotStopped()
 
         # and the BuildRequestDistributor should be, as well
+        # no longer limiting builds to those with parents
         self.assertTrue(self.botmaster.brd.running)
+        self.assertFalse(self.botmaster.brd.distribute_only_waited_childs)
 
 
 class TestBotMaster(TestReactorMixin, unittest.TestCase):
-
     @defer.inlineCallbacks
-    def setUp(self):
-        self.setUpTestReactor()
-        self.master = fakemaster.make_master(self, wantMq=True, wantData=True)
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        self.setup_test_reactor()
+        self.master = yield fakemaster.make_master(self, wantMq=True, wantData=True)
         self.master.mq = self.master.mq
         self.master.botmaster.disownServiceParent()
         self.botmaster = BotMaster()
         yield self.botmaster.setServiceParent(self.master)
         self.new_config = mock.Mock()
         self.botmaster.startService()
-
-    def tearDown(self):
-        return self.botmaster.stopService()
+        self.addCleanup(self.botmaster.stopService)
 
     @defer.inlineCallbacks
-    def test_reconfigServiceWithBuildbotConfig(self):
+    def test_reconfigServiceWithBuildbotConfig(self) -> InlineCallbacksType[None]:
         # check that reconfigServiceBuilders is called.
-        self.patch(self.botmaster, 'reconfigServiceBuilders',
-                   mock.Mock(side_effect=lambda c: defer.succeed(None)))
-        self.patch(self.botmaster, 'maybeStartBuildsForAllBuilders',
-                   mock.Mock())
+        self.patch(
+            self.botmaster, 'reconfigProjects', mock.Mock(side_effect=lambda c: defer.succeed(None))
+        )
+        self.patch(
+            self.botmaster,
+            'reconfig_codebases',
+            mock.Mock(side_effect=lambda c: defer.succeed(None)),
+        )
+        self.patch(
+            self.botmaster,
+            'reconfigServiceBuilders',
+            mock.Mock(side_effect=lambda c: defer.succeed(None)),
+        )
+        self.patch(self.botmaster, 'maybeStartBuildsForAllBuilders', mock.Mock())
 
         new_config = mock.Mock()
         yield self.botmaster.reconfigServiceWithBuildbotConfig(new_config)
 
-        self.botmaster.reconfigServiceBuilders.assert_called_with(
-            new_config)
-        self.assertTrue(
-            self.botmaster.maybeStartBuildsForAllBuilders.called)
+        self.botmaster.reconfigServiceBuilders.assert_called_with(new_config)  # type: ignore[attr-defined]
+        self.botmaster.reconfigProjects.assert_called_with(new_config)  # type: ignore[attr-defined]
+        self.botmaster.reconfig_codebases.assert_called_with(new_config)  # type: ignore[attr-defined]
+        self.assertTrue(self.botmaster.maybeStartBuildsForAllBuilders.called)  # type: ignore[attr-defined]
 
     @defer.inlineCallbacks
-    def test_reconfigServiceBuilders_add_remove(self):
-        bc = config.BuilderConfig(name='bldr', factory=factory.BuildFactory(),
-                                  workername='f')
+    def test_reconfigServiceBuilders_add_remove(self) -> InlineCallbacksType[None]:
+        bc = config.BuilderConfig(name='bldr', factory=factory.BuildFactory(), workername='f')
         self.new_config.builders = [bc]
 
         yield self.botmaster.reconfigServiceBuilders(self.new_config)
@@ -198,27 +216,27 @@ class TestBotMaster(TestReactorMixin, unittest.TestCase):
         self.assertEqual(self.botmaster.builders, {})
         self.assertEqual(self.botmaster.builderNames, [])
 
-    def test_maybeStartBuildsForBuilder(self):
+    def test_maybeStartBuildsForBuilder(self) -> None:
         brd = self.botmaster.brd = mock.Mock()
 
         self.botmaster.maybeStartBuildsForBuilder('frank')
 
         brd.maybeStartBuildsOn.assert_called_once_with(['frank'])
 
-    def test_maybeStartBuildsForWorker(self):
+    def test_maybeStartBuildsForWorker(self) -> None:
         brd = self.botmaster.brd = mock.Mock()
         b1 = mock.Mock(name='frank')
         b1.name = 'frank'
         b2 = mock.Mock(name='larry')
         b2.name = 'larry'
-        self.botmaster.getBuildersForWorker = mock.Mock(return_value=[b1, b2])
+        self.botmaster.getBuildersForWorker = mock.Mock(return_value=[b1, b2])  # type: ignore[method-assign]
 
         self.botmaster.maybeStartBuildsForWorker('centos')
 
         self.botmaster.getBuildersForWorker.assert_called_once_with('centos')
         brd.maybeStartBuildsOn.assert_called_once_with(['frank', 'larry'])
 
-    def test_maybeStartBuildsForAll(self):
+    def test_maybeStartBuildsForAll(self) -> None:
         brd = self.botmaster.brd = mock.Mock()
         self.botmaster.builderNames = ['frank', 'larry']
 

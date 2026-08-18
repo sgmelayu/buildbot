@@ -13,32 +13,36 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
 from twisted.trial.unittest import TestCase
 
+from buildbot.process.builder import Builder
 from buildbot.process.workerforbuilder import AbstractWorkerForBuilder
 from buildbot.worker.base import AbstractWorker
 
 
 class TestAbstractWorkerForBuilder(TestCase):
-
     """
     Tests for ``AbstractWorkerForBuilder``.
     """
 
-    def test_buildStarted_called(self):
+    def test_buildStarted_called(self) -> None:
         """
         If the worker associated to worker builder has a ``buildStarted`` method,
         calling ``buildStarted`` on the worker builder calls the method on the
         worker with the workerforbuilder as an argument.
         """
+
         class ConcreteWorker(AbstractWorker):
             _buildStartedCalls = []
 
-            def buildStarted(self, workerforbuilder):
+            def buildStarted(self, workerforbuilder: AbstractWorkerForBuilder) -> None:
                 self._buildStartedCalls.append(workerforbuilder)
 
+        fake_builder = Builder("fake_builder")
         worker = ConcreteWorker("worker", "pass")
-        workerforbuilder = AbstractWorkerForBuilder()
+        workerforbuilder = AbstractWorkerForBuilder(fake_builder)
         # FIXME: This should call attached, instead of setting the attribute
         # directly
         workerforbuilder.worker = worker
@@ -46,17 +50,19 @@ class TestAbstractWorkerForBuilder(TestCase):
 
         self.assertEqual(ConcreteWorker._buildStartedCalls, [workerforbuilder])
 
-    def test_buildStarted_missing(self):
+    def test_buildStarted_missing(self) -> None:
         """
         If the worker associated to worker builder doesn't not have a
         ``buildStarted`` method, calling ``buildStarted`` on the worker builder
         doesn't raise an exception.
         """
+
         class ConcreteWorker(AbstractWorker):
             pass
 
+        fake_builder = Builder("fake_builder")
         worker = ConcreteWorker("worker", "pass")
-        workerforbuilder = AbstractWorkerForBuilder()
+        workerforbuilder = AbstractWorkerForBuilder(fake_builder)
         # FIXME: This should call attached, instead of setting the attribute
         # directly
         workerforbuilder.worker = worker

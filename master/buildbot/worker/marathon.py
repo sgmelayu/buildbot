@@ -12,51 +12,59 @@
 # Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
 # Copyright Buildbot Team Members
+from __future__ import annotations
 
+from typing import TYPE_CHECKING
+from typing import Any
 
 from twisted.internet import defer
+from twisted.logger import Logger
 
 from buildbot import util
 from buildbot.interfaces import LatentWorkerFailedToSubstantiate
-from buildbot.util.httpclientservice import HTTPClientService
+from buildbot.util.httpclientservice import HTTPSession
 from buildbot.util.latent import CompatibleLatentWorkerMixin
-from buildbot.util.logger import Logger
 from buildbot.worker.docker import DockerBaseWorker
+
+if TYPE_CHECKING:
+    from buildbot.process.build import Build
+    from buildbot.util.twisted import InlineCallbacksType
 
 log = Logger()
 
 
-class MarathonLatentWorker(CompatibleLatentWorkerMixin,
-                           DockerBaseWorker):
+class MarathonLatentWorker(CompatibleLatentWorkerMixin, DockerBaseWorker):
     """Marathon is a distributed docker container launcher for Mesos"""
+
     instance = None
     image = None
     _http = None
 
-    def checkConfig(self,
-                    name,
-                    marathon_url,
-                    image,
-                    marathon_auth=None,
-                    marathon_extra_config=None,
-                    marathon_app_prefix="buildbot-worker/",
-                    masterFQDN=None,
-                    **kwargs):
-
+    def checkConfig(  # type: ignore[override]
+        self,
+        name: str,
+        marathon_url: str,
+        image: str,
+        marathon_auth: tuple[str, str] | None = None,
+        marathon_extra_config: dict[str, Any] | None = None,
+        marathon_app_prefix: str = "buildbot-worker/",
+        masterFQDN: str | None = None,
+        **kwargs: Any,
+    ) -> None:
         super().checkConfig(name, image=image, masterFQDN=masterFQDN, **kwargs)
-        HTTPClientService.checkAvailable(self.__class__.__name__)
 
     @defer.inlineCallbacks
-    def reconfigService(self,
-                        name,
-                        marathon_url,
-                        image,
-                        marathon_auth=None,
-                        marathon_extra_config=None,
-                        marathon_app_prefix="buildbot-worker/",
-                        masterFQDN=None,
-                        **kwargs):
-
+    def reconfigService(  # type: ignore[override]
+        self,
+        name: str,
+        marathon_url: str,
+        image: str,
+        marathon_auth: tuple[str, str] | None = None,
+        marathon_extra_config: dict[str, Any] | None = None,
+        marathon_app_prefix: str = "buildbot-worker/",
+        masterFQDN: str | None = None,
+        **kwargs: Any,
+    ) -> InlineCallbacksType[None]:
         # Set build_wait_timeout to 0s if not explicitly set: Starting a
         # container is almost immediate, we can afford doing so for each build.
 
@@ -64,25 +72,23 @@ class MarathonLatentWorker(CompatibleLatentWorkerMixin,
             kwargs['build_wait_timeout'] = 0
         yield super().reconfigService(name, image=image, masterFQDN=masterFQDN, **kwargs)
 
-        self._http = yield HTTPClientService.getService(
-            self.master, marathon_url, auth=marathon_auth)
+        self._http = HTTPSession(self.master.httpservice, marathon_url, auth=marathon_auth)
         if marathon_extra_config is None:
             marathon_extra_config = {}
         self.marathon_extra_config = marathon_extra_config
         self.marathon_app_prefix = marathon_app_prefix
 
-    def getApplicationId(self):
+    def getApplicationId(self) -> str:
         return self.marathon_app_prefix + self.getContainerName()
 
-    def renderWorkerProps(self, build):
+    def renderWorkerProps(self, build: Build) -> defer.Deferred[Any]:  # type: ignore[override]
         return build.render((self.image, self.marathon_extra_config))
 
     @defer.inlineCallbacks
-    def start_instance(self, build):
+    def start_instance(self, build: Build) -> InlineCallbacksType[bool]:
         yield self.stop_instance(reportFailure=False)
 
-        image, marathon_extra_config = \
-            yield self.renderWorkerPropsOnStart(build)
+        image, marathon_extra_config = yield self.renderWorkerPropsOnStart(build)  # type: ignore[arg-type]
 
         marathon_config = {
             "container": {
@@ -90,27 +96,28 @@ class MarathonLatentWorker(CompatibleLatentWorkerMixin,
                     "image": image,
                     "network": "BRIDGE",
                 },
-                "type": "DOCKER"
+                "type": "DOCKER",
             },
             "id": self.getApplicationId(),
             "instances": 1,
-            "env": self.createEnvironment()
+            "env": self.createEnvironment(),
         }
         util.dictionary_merge(marathon_config, marathon_extra_config)
-        res = yield self._http.post("/v2/apps", json=marathon_config)
+        res = yield self._http.post("/v2/apps", json=marathon_config)  # type: ignore[union-attr]
         res_json = yield res.json()
         if res.code != 201:
             raise LatentWorkerFailedToSubstantiate(
-                "Unable to create Marathon app: {} {}: {} {}".format(
-                    self.getApplicationId(), res.code, res_json['message'],
-                    res_json))
+                f"Unable to create Marathon app: {self.getApplicationId()} "
+                f"{res.code}: {res_json['message']} {res_json}"
+            )
         self.instance = res_json
         return True
 
     @defer.inlineCallbacks
-    def stop_instance(self, fast=False, reportFailure=True):
-        res = yield self._http.delete("/v2/apps/{}".format(
-            self.getApplicationId()))
+    def stop_instance(  # type: ignore[override]
+        self, fast: bool = False, reportFailure: bool = True
+    ) -> InlineCallbacksType[None]:
+        res = yield self._http.delete(f"/v2/apps/{self.getApplicationId()}")  # type: ignore[union-attr]
         self.instance = None
         self.resetWorkerPropsOnStop()
 
@@ -122,4 +129,5 @@ class MarathonLatentWorker(CompatibleLatentWorkerMixin,
                 id=self.getApplicationId(),
                 code=res.code,
                 message=res_json.get('message'),
-                details=res_json)
+                details=res_json,
+            )

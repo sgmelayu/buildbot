@@ -12,8 +12,11 @@
 # Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
 # Copyright Buildbot Team Members
+from __future__ import annotations
 
-from mock import Mock
+from typing import TYPE_CHECKING
+from typing import Any
+from unittest.mock import Mock
 
 from twisted.internet import defer
 from twisted.internet import reactor
@@ -30,52 +33,57 @@ from buildbot.process.results import FAILURE
 from buildbot.process.results import SUCCESS
 from buildbot.steps import trigger
 from buildbot.test import fakedb
-from buildbot.test.util import steps
+from buildbot.test.reactor import TestReactorMixin
+from buildbot.test.steps import TestBuildStepMixin
 from buildbot.test.util.interfaces import InterfaceTests
-from buildbot.test.util.misc import TestReactorMixin
+
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
 
 
 @implementer(interfaces.ITriggerableScheduler)
 class FakeTriggerable:
-
     triggered_with = None
     result = SUCCESS
     bsid = 1
-    brids = {}
+    brids: dict[int, int] = {}
     exception = False
     never_finish = False
 
-    def __init__(self, name):
+    def __init__(self, name: str) -> None:
         self.name = name
 
-    def trigger(self, waited_for, sourcestamps=None, set_props=None,
-                parent_buildid=None, parent_relationship=None):
+    def trigger(
+        self,
+        waited_for: Any,
+        sourcestamps: Any = None,
+        set_props: Any = None,
+        parent_buildid: Any = None,
+        parent_relationship: Any = None,
+        priority: Any = None,
+    ) -> Any:
         self.triggered_with = (waited_for, sourcestamps, set_props.properties)
-        idsDeferred = defer.Deferred()
+        idsDeferred = defer.Deferred()  # type: ignore[var-annotated]
         idsDeferred.callback((self.bsid, self.brids))
-        resultsDeferred = defer.Deferred()
+        resultsDeferred = defer.Deferred()  # type: ignore[var-annotated]
         if not self.never_finish:
             if self.exception:
-                reactor.callLater(
-                    0, resultsDeferred.errback, RuntimeError('oh noes'))
+                reactor.callLater(0, resultsDeferred.errback, RuntimeError('oh noes'))  # type: ignore[attr-defined]
             else:
-                reactor.callLater(
-                    0, resultsDeferred.callback, (self.result, self.brids))
+                reactor.callLater(0, resultsDeferred.callback, (self.result, self.brids))  # type: ignore[attr-defined]
         return (idsDeferred, resultsDeferred)
 
 
-class TriggerableInterfaceTest(unittest.TestCase, InterfaceTests):
-
-    def test_interface(self):
+class TriggerableInterfaceTest(InterfaceTests, unittest.TestCase):
+    def test_interface(self) -> None:
         self.assertInterfacesImplemented(FakeTriggerable)
 
 
 class FakeSourceStamp:
-
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
         self.__dict__.update(kwargs)
 
-    def asDict(self, includePatch=True):
+    def asDict(self, includePatch: bool = True) -> dict[str, Any]:
         return self.__dict__.copy()
 
 
@@ -84,65 +92,70 @@ class FakeSchedulerManager:
 
 
 # Magic numbers that relate brid to other build settings
-def BRID_TO_BSID(brid):
+def BRID_TO_BSID(brid: int) -> int:
     return brid + 2000
 
 
-def BRID_TO_BID(brid):
+def BRID_TO_BID(brid: int) -> int:
     return brid + 3000
 
 
-def BRID_TO_BUILD_NUMBER(brid):
+def BRID_TO_BUILD_NUMBER(brid: int) -> int:
     return brid + 4000
 
 
-class TestTrigger(steps.BuildStepMixin, TestReactorMixin, unittest.TestCase):
-
-    def setUp(self):
-        self.setUpTestReactor()
-        return self.setUpBuildStep()
-
-    def tearDown(self):
-        return self.tearDownBuildStep()
+class TestTrigger(TestBuildStepMixin, TestReactorMixin, unittest.TestCase):
+    def setUp(self) -> defer.Deferred[None]:  # type: ignore[override]
+        self.setup_test_reactor()
+        return self.setup_test_build_step()
 
     @defer.inlineCallbacks
-    def setupStep(self, step, sourcestampsInBuild=None, gotRevisionsInBuild=None, *args, **kwargs):
+    def setup_step(  # type: ignore[override]
+        self,
+        step: Any,
+        sourcestampsInBuild: Any = None,
+        gotRevisionsInBuild: Any = None,
+        *args: Any,
+        **kwargs: Any,
+    ) -> InlineCallbacksType[None]:
         sourcestamps = sourcestampsInBuild or []
         got_revisions = gotRevisionsInBuild or {}
 
-        yield super().setupStep(step, *args, **kwargs)
+        yield super().setup_step(step, *args, **kwargs)
 
         # This step reaches deeply into a number of parts of Buildbot.  That
         # should be fixed!
 
         # set up a buildmaster that knows about two fake schedulers, a and b
         m = self.master
-        m.db.checkForeignKeys = True
         self.build.builder.botmaster = m.botmaster
-        self.build.conn = object()
+        self.build.conn = object()  # type: ignore[attr-defined]
         m.config.buildbotURL = "baseurl/"
         m.scheduler_manager = FakeSchedulerManager()
 
         self.scheduler_a = a = FakeTriggerable(name='a')
         self.scheduler_b = b = FakeTriggerable(name='b')
         self.scheduler_c = c = FakeTriggerable(name='c')
-        m.scheduler_manager.namedServices = dict(a=a, b=b, c=c)
+        m.scheduler_manager.namedServices = {"a": a, "b": b, "c": c}
 
         a.brids = {77: 11}
         b.brids = {78: 22}
         c.brids = {79: 33, 80: 44}
 
-        def make_fake_br(brid, builderid):
-            return fakedb.BuildRequest(
-                id=brid, buildsetid=BRID_TO_BSID(brid), builderid=builderid)
+        def make_fake_br(brid: int, builderid: int) -> fakedb.BuildRequest:
+            return fakedb.BuildRequest(id=brid, buildsetid=BRID_TO_BSID(brid), builderid=builderid)
 
-        def make_fake_build(brid, builderid):
+        def make_fake_build(brid: int, builderid: int) -> fakedb.Build:
             return fakedb.Build(
-                buildrequestid=brid, id=BRID_TO_BID(brid),
-                number=BRID_TO_BUILD_NUMBER(brid), masterid=9,
-                workerid=13, builderid=builderid)
+                buildrequestid=brid,
+                id=BRID_TO_BID(brid),
+                number=BRID_TO_BUILD_NUMBER(brid),
+                masterid=9,
+                workerid=13,
+                builderid=builderid,
+            )
 
-        m.db.insertTestData([
+        yield m.db.insert_test_data([
             fakedb.Builder(id=77, name='A'),
             fakedb.Builder(id=78, name='B'),
             fakedb.Builder(id=79, name='C1'),
@@ -164,61 +177,59 @@ class TestTrigger(steps.BuildStepMixin, TestReactorMixin, unittest.TestCase):
             make_fake_build(44, builderid=79),
         ])
 
-        def getAllSourceStamps():
+        def getAllSourceStamps() -> Any:
             return sourcestamps
-        self.build.getAllSourceStamps = getAllSourceStamps
 
-        def getAllGotRevisions():
+        self.build.getAllSourceStamps = getAllSourceStamps  # type: ignore[method-assign]
+
+        def getAllGotRevisions() -> Any:
             return got_revisions
-        self.step.getAllGotRevisions = getAllGotRevisions
+
+        self.get_nth_step(0).getAllGotRevisions = getAllGotRevisions  # type: ignore[attr-defined]
 
         self.exp_add_sourcestamp = None
         self.exp_a_trigger = None
         self.exp_b_trigger = None
         self.exp_c_trigger = None
-        self.exp_added_urls = []
+        self.exp_added_urls = []  # type: ignore[var-annotated]
 
     @defer.inlineCallbacks
-    def runStep(self, results_dict=None):
+    def run_step(self, results_dict: dict[int, int] | None = None) -> InlineCallbacksType[None]:
         if results_dict is None:
             results_dict = {}
-        if self.step.waitForFinish:
+        if self.get_nth_step(0).waitForFinish:  # type: ignore[attr-defined]
             for i in [11, 22, 33, 44]:
-                yield self.master.db.builds.finishBuild(BRID_TO_BID(i),
-                                                        results_dict.get(i, SUCCESS))
-        d = super().runStep()
+                yield self.master.db.builds.finishBuild(
+                    BRID_TO_BID(i), results_dict.get(i, SUCCESS)
+                )
+        d = super().run_step()
         # the build doesn't finish until after a callLater, so this has the
         # effect of checking whether the deferred has been fired already;
-        if self.step.waitForFinish:
+        if self.get_nth_step(0).waitForFinish:  # type: ignore[attr-defined]
             self.assertFalse(d.called)
         else:
             self.assertTrue(d.called)
 
         yield d
-        self.assertEqual(self.scheduler_a.triggered_with,
-                         self.exp_a_trigger)
-        self.assertEqual(self.scheduler_b.triggered_with,
-                         self.exp_b_trigger)
+        self.assertEqual(self.scheduler_a.triggered_with, self.exp_a_trigger)
+        self.assertEqual(self.scheduler_b.triggered_with, self.exp_b_trigger)
 
         # check the URLs
-        stepUrls = self.master.data.updates.stepUrls
-        if stepUrls:
-            got_added_urls = stepUrls[list(stepUrls)[0]]
-        else:
-            got_added_urls = []
-        self.assertEqual(sorted(got_added_urls),
-                         sorted(self.exp_added_urls))
+        step_data = yield self.master.data.get(('steps', self.get_nth_step(0).stepid))
+        step_urls = [(url['name'], url['url']) for url in step_data['urls']]
+        self.assertEqual(step_urls, sorted(self.exp_added_urls))
 
         if self.exp_add_sourcestamp:
-            self.assertEqual(self.addSourceStamp_kwargs,
-                             self.exp_add_sourcestamp)
+            self.assertEqual(self.addSourceStamp_kwargs, self.exp_add_sourcestamp)
 
-        # pause runStep's completion until after any other callLater's are done
+        # pause run_step's completion until after any other callLater's are done
         d = defer.Deferred()
-        reactor.callLater(0, d.callback, None)
+        reactor.callLater(0, d.callback, None)  # type: ignore[attr-defined]
         yield d
 
-    def expectTriggeredWith(self, a=None, b=None, c=None, d=None):
+    def expectTriggeredWith(
+        self, a: Any = None, b: Any = None, c: Any = None, d: Any = None
+    ) -> None:
         self.exp_a_trigger = a
         if a is not None:
             self.expectTriggeredLinks('a_br')
@@ -229,448 +240,412 @@ class TestTrigger(steps.BuildStepMixin, TestReactorMixin, unittest.TestCase):
         if c is not None:
             self.expectTriggeredLinks('c_br')
 
-    def expectAddedSourceStamp(self, **kwargs):
-        self.exp_add_sourcestamp = kwargs
+    def expectAddedSourceStamp(self, **kwargs: Any) -> None:
+        self.exp_add_sourcestamp = kwargs  # type: ignore[assignment]
 
-    def expectTriggeredLinks(self, *args):
+    def expectTriggeredLinks(self, *args: Any) -> None:
         if 'a_br' in args:
-            self.exp_added_urls.append(
-                ('a #11', 'baseurl/#buildrequests/11'))
+            self.exp_added_urls.append(('a #11', 'baseurl/#/buildrequests/11'))
         if 'b_br' in args:
-            self.exp_added_urls.append(
-                ('b #22', 'baseurl/#buildrequests/22'))
+            self.exp_added_urls.append(('b #22', 'baseurl/#/buildrequests/22'))
         if 'c_br' in args:
-            self.exp_added_urls.append(
-                ('c #33', 'baseurl/#buildrequests/33'))
-            self.exp_added_urls.append(
-                ('c #44', 'baseurl/#buildrequests/44'))
+            self.exp_added_urls.append(('c #33', 'baseurl/#/buildrequests/33'))
+            self.exp_added_urls.append(('c #44', 'baseurl/#/buildrequests/44'))
         if 'a' in args:
-            self.exp_added_urls.append(
-                ('success: A #4011', 'baseurl/#builders/77/builds/4011'))
+            self.exp_added_urls.append(('success: A #4011', 'baseurl/#/builders/77/builds/4011'))
         if 'b' in args:
-            self.exp_added_urls.append(
-                ('success: B #4022', 'baseurl/#builders/78/builds/4022'))
+            self.exp_added_urls.append(('success: B #4022', 'baseurl/#/builders/78/builds/4022'))
         if 'afailed' in args:
-            self.exp_added_urls.append(
-                ('failure: A #4011', 'baseurl/#builders/77/builds/4011'))
+            self.exp_added_urls.append(('failure: A #4011', 'baseurl/#/builders/77/builds/4011'))
         if 'c' in args:
-            self.exp_added_urls.append(
-                ('success: C1 #4033', 'baseurl/#builders/79/builds/4033'))
-            self.exp_added_urls.append(
-                ('success: C1 #4044', 'baseurl/#builders/79/builds/4044'))
+            self.exp_added_urls.append(('success: C1 #4033', 'baseurl/#/builders/79/builds/4033'))
+            self.exp_added_urls.append(('success: C1 #4044', 'baseurl/#/builders/79/builds/4044'))
 
     # tests
-    def test_no_schedulerNames(self):
+    def test_no_schedulerNames(self) -> None:
         with self.assertRaises(config.ConfigErrors):
             trigger.Trigger()
 
-    def test_unimportantSchedulerNames_not_in_schedulerNames(self):
+    def test_unimportantSchedulerNames_not_in_schedulerNames(self) -> None:
         with self.assertRaises(config.ConfigErrors):
-            trigger.Trigger(schedulerNames=['a'],
-                            unimportantSchedulerNames=['b'])
+            trigger.Trigger(schedulerNames=['a'], unimportantSchedulerNames=['b'])
 
-    def test_unimportantSchedulerNames_not_in_schedulerNames_but_rendered(self):
+    def test_unimportantSchedulerNames_not_in_schedulerNames_but_rendered(self) -> None:
         # should not raise
-        trigger.Trigger(schedulerNames=[properties.Interpolate('a')],
-                        unimportantSchedulerNames=['b'])
+        trigger.Trigger(
+            schedulerNames=[properties.Interpolate('a')],  # type: ignore[list-item]
+            unimportantSchedulerNames=['b'],
+        )
 
-    def test_sourceStamp_and_updateSourceStamp(self):
+    def test_sourceStamp_and_updateSourceStamp(self) -> None:
         with self.assertRaises(config.ConfigErrors):
-            trigger.Trigger(schedulerNames=['c'], sourceStamp=dict(x=1),
-                            updateSourceStamp=True)
+            trigger.Trigger(schedulerNames=['c'], sourceStamp={"x": 1}, updateSourceStamp=True)
 
-    def test_sourceStamps_and_updateSourceStamp(self):
+    def test_sourceStamps_and_updateSourceStamp(self) -> None:
         with self.assertRaises(config.ConfigErrors):
-            trigger.Trigger(schedulerNames=['c'], sourceStamps=[dict(x=1),
-                            dict(x=2)], updateSourceStamp=True)
+            trigger.Trigger(
+                schedulerNames=['c'], sourceStamps=[{"x": 1}, {"x": 2}], updateSourceStamp=True
+            )
 
-    def test_updateSourceStamp_and_alwaysUseLatest(self):
+    def test_updateSourceStamp_and_alwaysUseLatest(self) -> None:
         with self.assertRaises(config.ConfigErrors):
-            trigger.Trigger(schedulerNames=['c'], updateSourceStamp=True,
-                            alwaysUseLatest=True)
+            trigger.Trigger(schedulerNames=['c'], updateSourceStamp=True, alwaysUseLatest=True)
 
-    def test_sourceStamp_and_alwaysUseLatest(self):
+    def test_sourceStamp_and_alwaysUseLatest(self) -> None:
         with self.assertRaises(config.ConfigErrors):
-            trigger.Trigger(schedulerNames=['c'], sourceStamp=dict(x=1),
-                            alwaysUseLatest=True)
+            trigger.Trigger(schedulerNames=['c'], sourceStamp={"x": 1}, alwaysUseLatest=True)
 
-    def test_sourceStamps_and_alwaysUseLatest(self):
+    def test_sourceStamps_and_alwaysUseLatest(self) -> None:
         with self.assertRaises(config.ConfigErrors):
-            trigger.Trigger(schedulerNames=['c'], sourceStamps=[dict(x=1),
-                            dict(x=2)], alwaysUseLatest=True)
+            trigger.Trigger(
+                schedulerNames=['c'], sourceStamps=[{"x": 1}, {"x": 2}], alwaysUseLatest=True
+            )
 
     @defer.inlineCallbacks
-    def test_simple(self):
-        yield self.setupStep(trigger.Trigger(schedulerNames=['a'], sourceStamps={}))
-        self.expectOutcome(result=SUCCESS, state_string='triggered a')
+    def test_simple(self) -> InlineCallbacksType[None]:
+        yield self.setup_step(trigger.Trigger(schedulerNames=['a'], sourceStamps={}))
+        self.expect_outcome(result=SUCCESS, state_string='triggered a')
         self.expectTriggeredWith(a=(False, [], {}))
-        yield self.runStep()
+        yield self.run_step()
 
     @defer.inlineCallbacks
-    def test_simple_failure(self):
-        yield self.setupStep(trigger.Trigger(schedulerNames=['a']))
+    def test_simple_failure(self) -> InlineCallbacksType[None]:
+        yield self.setup_step(trigger.Trigger(schedulerNames=['a']))
         self.scheduler_a.result = FAILURE
         # not waitForFinish, so trigger step succeeds even though the build
         # didn't fail
-        self.expectOutcome(result=SUCCESS, state_string='triggered a')
+        self.expect_outcome(result=SUCCESS, state_string='triggered a')
         self.expectTriggeredWith(a=(False, [], {}))
-        yield self.runStep()
+        yield self.run_step()
 
     @defer.inlineCallbacks
-    def test_simple_exception(self):
-        yield self.setupStep(trigger.Trigger(schedulerNames=['a']))
+    def test_simple_exception(self) -> InlineCallbacksType[None]:
+        yield self.setup_step(trigger.Trigger(schedulerNames=['a']))
         self.scheduler_a.exception = True
-        self.expectOutcome(result=SUCCESS, state_string='triggered a')
+        self.expect_outcome(result=SUCCESS, state_string='triggered a')
         self.expectTriggeredWith(a=(False, [], {}))
-        yield self.runStep()
+        yield self.run_step()
 
         self.assertEqual(len(self.flushLoggedErrors(RuntimeError)), 1)
 
     @defer.inlineCallbacks
-    def test_bogus_scheduler(self):
-        yield self.setupStep(trigger.Trigger(schedulerNames=['a', 'x']))
+    def test_bogus_scheduler(self) -> InlineCallbacksType[None]:
+        yield self.setup_step(trigger.Trigger(schedulerNames=['a', 'x']))
         # bogus scheduler is an exception, not a failure (don't blame the patch)
-        self.expectOutcome(result=EXCEPTION)
+        self.expect_outcome(result=EXCEPTION)
         self.expectTriggeredWith(a=None)  # a is not triggered!
-        yield self.runStep()
+        yield self.run_step()
         self.flushLoggedErrors(ValueError)
 
     @defer.inlineCallbacks
-    def test_updateSourceStamp(self):
-        yield self.setupStep(trigger.Trigger(schedulerNames=['a'], updateSourceStamp=True),
-                             sourcestampsInBuild=[FakeSourceStamp(codebase='',
-                                                                  repository='x',
-                                                                  revision=11111)
-                                                  ],
-                             gotRevisionsInBuild={'': 23456},
-                             )
-        self.expectOutcome(result=SUCCESS, state_string='triggered a')
+    def test_updateSourceStamp(self) -> InlineCallbacksType[None]:
+        yield self.setup_step(
+            trigger.Trigger(schedulerNames=['a'], updateSourceStamp=True),
+            sourcestampsInBuild=[FakeSourceStamp(codebase='', repository='x', revision=11111)],
+            gotRevisionsInBuild={'': 23456},
+        )
+        self.expect_outcome(result=SUCCESS, state_string='triggered a')
         self.expectTriggeredWith(
-            a=(False, [{'codebase': '', 'repository': 'x', 'revision': 23456}], {}))
-        yield self.runStep()
+            a=(False, [{'codebase': '', 'repository': 'x', 'revision': 23456}], {})
+        )
+        yield self.run_step()
 
     @defer.inlineCallbacks
-    def test_updateSourceStamp_no_got_revision(self):
-        yield self.setupStep(trigger.Trigger(schedulerNames=['a'], updateSourceStamp=True),
-                             sourcestampsInBuild=[FakeSourceStamp(codebase='',
-                                                                  repository='x',
-                                                                  revision=11111)
-                                                  ])
-        self.expectOutcome(result=SUCCESS)
+    def test_updateSourceStamp_no_got_revision(self) -> InlineCallbacksType[None]:
+        yield self.setup_step(
+            trigger.Trigger(schedulerNames=['a'], updateSourceStamp=True),
+            sourcestampsInBuild=[FakeSourceStamp(codebase='', repository='x', revision=11111)],
+        )
+        self.expect_outcome(result=SUCCESS)
         self.expectTriggeredWith(
-            a=(False,
-               # uses old revision
-               [{'codebase': '', 'repository': 'x', 'revision': 11111}],
-               {}))
-        yield self.runStep()
-
-    @defer.inlineCallbacks
-    def test_not_updateSourceStamp(self):
-        yield self.setupStep(trigger.Trigger(schedulerNames=['a'], updateSourceStamp=False),
-                             sourcestampsInBuild=[FakeSourceStamp(codebase='',
-                                                                  repository='x',
-                                                                  revision=11111)
-                                                  ],
-                             gotRevisionsInBuild={'': 23456},
-                             )
-        self.expectOutcome(result=SUCCESS)
-        self.expectTriggeredWith(
-            a=(False,
-               [{'codebase': '', 'repository': 'x', 'revision': 11111}],
-               {}))
-        yield self.runStep()
-
-    @defer.inlineCallbacks
-    def test_updateSourceStamp_multiple_repositories(self):
-        yield self.setupStep(trigger.Trigger(schedulerNames=['a'], updateSourceStamp=True),
-                             sourcestampsInBuild=[
-                                 FakeSourceStamp(codebase='cb1',
-                                                 revision='12345'),
-                                 FakeSourceStamp(codebase='cb2',
-                                                 revision='12345')
-                             ],
-                             gotRevisionsInBuild={'cb1': 23456, 'cb2': 34567},
-                             )
-        self.expectOutcome(result=SUCCESS)
-        self.expectTriggeredWith(
-            a=(False,
-               [{'codebase': 'cb1', 'revision': 23456},
-                {'codebase': 'cb2', 'revision': 34567}],
-               {}))
-        yield self.runStep()
-
-    @defer.inlineCallbacks
-    def test_updateSourceStamp_prop_false(self):
-        yield self.setupStep(trigger.Trigger(schedulerNames=['a'],
-                                             updateSourceStamp=properties.Property('usess')),
-                             sourcestampsInBuild=[FakeSourceStamp(codebase='',
-                                                                  repository='x',
-                                                                  revision=11111)
-                                                  ],
-                             gotRevisionsInBuild={'': 23456},
-                             )
-        self.properties.setProperty('usess', False, 'me')
-        self.expectOutcome(result=SUCCESS)
-        # didn't use got_revision
-        self.expectTriggeredWith(
-            a=(False,
+            a=(
+                False,
+                # uses old revision
                 [{'codebase': '', 'repository': 'x', 'revision': 11111}],
-                {}))
-        yield self.runStep()
+                {},
+            )
+        )
+        yield self.run_step()
 
     @defer.inlineCallbacks
-    def test_updateSourceStamp_prop_true(self):
-        yield self.setupStep(trigger.Trigger(schedulerNames=['a'],
-                                             updateSourceStamp=properties.Property('usess')),
-                             sourcestampsInBuild=[FakeSourceStamp(codebase='',
-                                                                  repository='x',
-                                                                  revision=11111)
-                                                  ],
-                             gotRevisionsInBuild={'': 23456},
-                             )
-        self.properties.setProperty('usess', True, 'me')
-        self.expectOutcome(result=SUCCESS)
+    def test_not_updateSourceStamp(self) -> InlineCallbacksType[None]:
+        yield self.setup_step(
+            trigger.Trigger(schedulerNames=['a'], updateSourceStamp=False),
+            sourcestampsInBuild=[FakeSourceStamp(codebase='', repository='x', revision=11111)],
+            gotRevisionsInBuild={'': 23456},
+        )
+        self.expect_outcome(result=SUCCESS)
+        self.expectTriggeredWith(
+            a=(False, [{'codebase': '', 'repository': 'x', 'revision': 11111}], {})
+        )
+        yield self.run_step()
+
+    @defer.inlineCallbacks
+    def test_updateSourceStamp_multiple_repositories(self) -> InlineCallbacksType[None]:
+        yield self.setup_step(
+            trigger.Trigger(schedulerNames=['a'], updateSourceStamp=True),
+            sourcestampsInBuild=[
+                FakeSourceStamp(codebase='cb1', revision='12345'),
+                FakeSourceStamp(codebase='cb2', revision='12345'),
+            ],
+            gotRevisionsInBuild={'cb1': 23456, 'cb2': 34567},
+        )
+        self.expect_outcome(result=SUCCESS)
+        self.expectTriggeredWith(
+            a=(
+                False,
+                [{'codebase': 'cb1', 'revision': 23456}, {'codebase': 'cb2', 'revision': 34567}],
+                {},
+            )
+        )
+        yield self.run_step()
+
+    @defer.inlineCallbacks
+    def test_updateSourceStamp_prop_false(self) -> InlineCallbacksType[None]:
+        yield self.setup_step(
+            trigger.Trigger(schedulerNames=['a'], updateSourceStamp=properties.Property('usess')),
+            sourcestampsInBuild=[FakeSourceStamp(codebase='', repository='x', revision=11111)],
+            gotRevisionsInBuild={'': 23456},
+        )
+        self.build.setProperty('usess', False, 'me')
+        self.expect_outcome(result=SUCCESS)
         # didn't use got_revision
         self.expectTriggeredWith(
-            a=(False,
-                [{'codebase': '', 'repository': 'x', 'revision': 23456}],
-                {}))
-        yield self.runStep()
+            a=(False, [{'codebase': '', 'repository': 'x', 'revision': 11111}], {})
+        )
+        yield self.run_step()
 
     @defer.inlineCallbacks
-    def test_alwaysUseLatest(self):
-        yield self.setupStep(trigger.Trigger(schedulerNames=['b'], alwaysUseLatest=True),
-                             sourcestampsInBuild=[FakeSourceStamp(codebase='',
-                                                                  repository='x',
-                                                                  revision=11111)
-                                                  ])
-        self.expectOutcome(result=SUCCESS)
+    def test_updateSourceStamp_prop_true(self) -> InlineCallbacksType[None]:
+        yield self.setup_step(
+            trigger.Trigger(schedulerNames=['a'], updateSourceStamp=properties.Property('usess')),
+            sourcestampsInBuild=[FakeSourceStamp(codebase='', repository='x', revision=11111)],
+            gotRevisionsInBuild={'': 23456},
+        )
+        self.build.setProperty('usess', True, 'me')
+        self.expect_outcome(result=SUCCESS)
+        # didn't use got_revision
+        self.expectTriggeredWith(
+            a=(False, [{'codebase': '', 'repository': 'x', 'revision': 23456}], {})
+        )
+        yield self.run_step()
+
+    @defer.inlineCallbacks
+    def test_alwaysUseLatest(self) -> InlineCallbacksType[None]:
+        yield self.setup_step(
+            trigger.Trigger(schedulerNames=['b'], alwaysUseLatest=True),
+            sourcestampsInBuild=[FakeSourceStamp(codebase='', repository='x', revision=11111)],
+        )
+        self.expect_outcome(result=SUCCESS)
         # Do not pass setid
         self.expectTriggeredWith(b=(False, [], {}))
-        yield self.runStep()
+        yield self.run_step()
 
     @defer.inlineCallbacks
-    def test_alwaysUseLatest_prop_false(self):
-        yield self.setupStep(trigger.Trigger(schedulerNames=['b'],
-                                             alwaysUseLatest=properties.Property('aul')),
-                             sourcestampsInBuild=[FakeSourceStamp(codebase='',
-                                                                  repository='x',
-                                                                  revision=11111)
-                                                  ])
-        self.properties.setProperty('aul', False, 'me')
-        self.expectOutcome(result=SUCCESS)
+    def test_alwaysUseLatest_prop_false(self) -> InlineCallbacksType[None]:
+        yield self.setup_step(
+            trigger.Trigger(schedulerNames=['b'], alwaysUseLatest=properties.Property('aul')),
+            sourcestampsInBuild=[FakeSourceStamp(codebase='', repository='x', revision=11111)],
+        )
+        self.build.setProperty('aul', False, 'me')
+        self.expect_outcome(result=SUCCESS)
         # didn't use latest
         self.expectTriggeredWith(
-            b=(False, [{'codebase': '', 'repository': 'x', 'revision': 11111}], {}))
-        yield self.runStep()
+            b=(False, [{'codebase': '', 'repository': 'x', 'revision': 11111}], {})
+        )
+        yield self.run_step()
 
     @defer.inlineCallbacks
-    def test_alwaysUseLatest_prop_true(self):
-        yield self.setupStep(trigger.Trigger(schedulerNames=['b'],
-                                             alwaysUseLatest=properties.Property('aul')),
-                             sourcestampsInBuild=[FakeSourceStamp(codebase='',
-                                                                  repository='x',
-                                                                  revision=11111)
-                                                  ])
-        self.properties.setProperty('aul', True, 'me')
-        self.expectOutcome(result=SUCCESS)
+    def test_alwaysUseLatest_prop_true(self) -> InlineCallbacksType[None]:
+        yield self.setup_step(
+            trigger.Trigger(schedulerNames=['b'], alwaysUseLatest=properties.Property('aul')),
+            sourcestampsInBuild=[FakeSourceStamp(codebase='', repository='x', revision=11111)],
+        )
+        self.build.setProperty('aul', True, 'me')
+        self.expect_outcome(result=SUCCESS)
         # didn't use latest
         self.expectTriggeredWith(b=(False, [], {}))
-        yield self.runStep()
+        yield self.run_step()
 
     @defer.inlineCallbacks
-    def test_sourceStamp(self):
-        ss = dict(revision=9876, branch='dev')
-        yield self.setupStep(trigger.Trigger(schedulerNames=['b'], sourceStamp=ss))
-        self.expectOutcome(result=SUCCESS)
+    def test_sourceStamp(self) -> InlineCallbacksType[None]:
+        ss = {"revision": 9876, "branch": 'dev'}
+        yield self.setup_step(trigger.Trigger(schedulerNames=['b'], sourceStamp=ss))
+        self.expect_outcome(result=SUCCESS)
         self.expectTriggeredWith(b=(False, [ss], {}))
-        yield self.runStep()
+        yield self.run_step()
 
     @defer.inlineCallbacks
-    def test_set_of_sourceStamps(self):
-        ss1 = dict(
-            codebase='cb1', repository='r1', revision=9876, branch='dev')
-        ss2 = dict(
-            codebase='cb2', repository='r2', revision=5432, branch='dev')
-        yield self.setupStep(trigger.Trigger(schedulerNames=['b'],
-                                             sourceStamps=[ss1, ss2]))
-        self.expectOutcome(result=SUCCESS)
+    def test_set_of_sourceStamps(self) -> InlineCallbacksType[None]:
+        ss1 = {"codebase": 'cb1', "repository": 'r1', "revision": 9876, "branch": 'dev'}
+        ss2 = {"codebase": 'cb2', "repository": 'r2', "revision": 5432, "branch": 'dev'}
+        yield self.setup_step(trigger.Trigger(schedulerNames=['b'], sourceStamps=[ss1, ss2]))
+        self.expect_outcome(result=SUCCESS)
         self.expectTriggeredWith(b=(False, [ss1, ss2], {}))
-        yield self.runStep()
+        yield self.run_step()
 
     @defer.inlineCallbacks
-    def test_set_of_sourceStamps_override_build(self):
-        ss1 = dict(
-            codebase='cb1', repository='r1', revision=9876, branch='dev')
-        ss2 = dict(
-            codebase='cb2', repository='r2', revision=5432, branch='dev')
-        ss3 = FakeSourceStamp(
-            codebase='cb3', repository='r3', revision=1234, branch='dev')
-        ss4 = FakeSourceStamp(
-            codebase='cb4', repository='r4', revision=2345, branch='dev')
-        yield self.setupStep(trigger.Trigger(schedulerNames=['b'],
-                                             sourceStamps=[ss1, ss2]),
-                             sourcestampsInBuild=[ss3, ss4])
-        self.expectOutcome(result=SUCCESS)
+    def test_set_of_sourceStamps_override_build(self) -> InlineCallbacksType[None]:
+        ss1 = {"codebase": 'cb1', "repository": 'r1', "revision": 9876, "branch": 'dev'}
+        ss2 = {"codebase": 'cb2', "repository": 'r2', "revision": 5432, "branch": 'dev'}
+        ss3 = FakeSourceStamp(codebase='cb3', repository='r3', revision=1234, branch='dev')
+        ss4 = FakeSourceStamp(codebase='cb4', repository='r4', revision=2345, branch='dev')
+        yield self.setup_step(
+            trigger.Trigger(schedulerNames=['b'], sourceStamps=[ss1, ss2]),
+            sourcestampsInBuild=[ss3, ss4],
+        )
+        self.expect_outcome(result=SUCCESS)
         self.expectTriggeredWith(b=(False, [ss1, ss2], {}))
-        yield self.runStep()
+        yield self.run_step()
 
     @defer.inlineCallbacks
-    def test_sourceStamp_prop(self):
-        ss = dict(revision=properties.Property('rev'), branch='dev')
-        yield self.setupStep(trigger.Trigger(schedulerNames=['b'], sourceStamp=ss))
-        self.properties.setProperty('rev', 602, 'me')
-        expected_ss = dict(revision=602, branch='dev')
-        self.expectOutcome(result=SUCCESS)
+    def test_sourceStamp_prop(self) -> InlineCallbacksType[None]:
+        ss = {"revision": properties.Property('rev'), "branch": 'dev'}
+        yield self.setup_step(trigger.Trigger(schedulerNames=['b'], sourceStamp=ss))
+        self.build.setProperty('rev', 602, 'me')
+        expected_ss = {"revision": 602, "branch": 'dev'}
+        self.expect_outcome(result=SUCCESS)
         self.expectTriggeredWith(b=(False, [expected_ss], {}))
-        yield self.runStep()
+        yield self.run_step()
 
     @defer.inlineCallbacks
-    def test_waitForFinish(self):
-        yield self.setupStep(trigger.Trigger(schedulerNames=['a', 'b'], waitForFinish=True))
-        self.expectOutcome(result=SUCCESS, state_string='triggered a, b')
-        self.expectTriggeredWith(
-            a=(True, [], {}),
-            b=(True, [], {}))
+    def test_waitForFinish(self) -> InlineCallbacksType[None]:
+        yield self.setup_step(trigger.Trigger(schedulerNames=['a', 'b'], waitForFinish=True))
+        self.expect_outcome(result=SUCCESS, state_string='triggered a, b')
+        self.expectTriggeredWith(a=(True, [], {}), b=(True, [], {}))
         self.expectTriggeredLinks('a', 'b')
-        yield self.runStep()
+        yield self.run_step()
 
     @defer.inlineCallbacks
-    def test_waitForFinish_failure(self):
-        yield self.setupStep(trigger.Trigger(schedulerNames=['a'], waitForFinish=True))
+    def test_waitForFinish_failure(self) -> InlineCallbacksType[None]:
+        yield self.setup_step(trigger.Trigger(schedulerNames=['a'], waitForFinish=True))
         self.scheduler_a.result = FAILURE
-        self.expectOutcome(result=FAILURE)
+        self.expect_outcome(result=FAILURE)
         self.expectTriggeredWith(a=(True, [], {}))
         self.expectTriggeredLinks('afailed')
-        yield self.runStep(results_dict={11: FAILURE})
+        yield self.run_step(results_dict={11: FAILURE})
 
     @defer.inlineCallbacks
-    def test_waitForFinish_split_failure(self):
-        yield self.setupStep(trigger.Trigger(schedulerNames=['a', 'b'], waitForFinish=True))
+    def test_waitForFinish_split_failure(self) -> InlineCallbacksType[None]:
+        yield self.setup_step(trigger.Trigger(schedulerNames=['a', 'b'], waitForFinish=True))
         self.scheduler_a.result = FAILURE
         self.scheduler_b.result = SUCCESS
-        self.expectOutcome(result=FAILURE, state_string='triggered a, b')
-        self.expectTriggeredWith(
-            a=(True, [], {}),
-            b=(True, [], {}))
+        self.expect_outcome(result=FAILURE, state_string='triggered a, b')
+        self.expectTriggeredWith(a=(True, [], {}), b=(True, [], {}))
         self.expectTriggeredLinks('afailed', 'b')
-        yield self.runStep(results_dict={11: FAILURE})
+        yield self.run_step(results_dict={11: FAILURE})
 
     @defer.inlineCallbacks
-    def test_waitForFinish_exception(self):
-        yield self.setupStep(trigger.Trigger(schedulerNames=['a', 'b'], waitForFinish=True))
-        self.step.addCompleteLog = Mock()
+    def test_waitForFinish_exception(self) -> InlineCallbacksType[None]:
+        yield self.setup_step(trigger.Trigger(schedulerNames=['a', 'b'], waitForFinish=True))
+        self.get_nth_step(0).addCompleteLog = Mock()  # type: ignore[method-assign]
         self.scheduler_b.exception = True
-        self.expectOutcome(result=EXCEPTION,
-                           state_string='triggered a, b')
-        self.expectTriggeredWith(
-            a=(True, [], {}),
-            b=(True, [], {}))
+        self.expect_outcome(result=EXCEPTION, state_string='triggered a, b')
+        self.expectTriggeredWith(a=(True, [], {}), b=(True, [], {}))
         self.expectTriggeredLinks('a')  # b doesn't return a brid
-        yield self.runStep()
-        self.assertEqual(len(self.step.addCompleteLog.call_args_list), 1)
+        yield self.run_step()
+        self.assertEqual(len(self.get_nth_step(0).addCompleteLog.call_args_list), 1)  # type: ignore[attr-defined]
 
     @defer.inlineCallbacks
-    def test_virtual_builder(self):
-        yield self.setupStep(trigger.Trigger(schedulerNames=['c'], waitForFinish=True))
-        self.expectOutcome(result=SUCCESS, state_string='triggered c')
-        self.expectTriggeredWith(
-            c=(True, [], {}))
+    def test_virtual_builder(self) -> InlineCallbacksType[None]:
+        yield self.setup_step(trigger.Trigger(schedulerNames=['c'], waitForFinish=True))
+        self.expect_outcome(result=SUCCESS, state_string='triggered c')
+        self.expectTriggeredWith(c=(True, [], {}))
         self.expectTriggeredLinks('c')
-        yield self.runStep()
+        yield self.run_step()
 
     @defer.inlineCallbacks
-    def test_set_properties(self):
-        yield self.setupStep(trigger.Trigger(schedulerNames=['a'],
-                                       set_properties=dict(x=1, y=2)))
-        self.expectOutcome(result=SUCCESS)
-        self.expectTriggeredWith(a=(False, [],
-                                    dict(x=(1, 'Trigger'), y=(2, 'Trigger'))))
-        yield self.runStep()
+    def test_set_properties(self) -> InlineCallbacksType[None]:
+        yield self.setup_step(
+            trigger.Trigger(schedulerNames=['a'], set_properties={"x": 1, "y": 2})
+        )
+        self.expect_outcome(result=SUCCESS)
+        self.expectTriggeredWith(a=(False, [], {"x": (1, 'Trigger'), "y": (2, 'Trigger')}))
+        yield self.run_step()
 
     @defer.inlineCallbacks
-    def test_set_properties_prop(self):
-        yield self.setupStep(trigger.Trigger(schedulerNames=['a'],
-                                             set_properties=dict(x=properties.Property('X'), y=2)))
-        self.properties.setProperty('X', 'xxx', 'here')
-        self.expectOutcome(result=SUCCESS)
-        self.expectTriggeredWith(a=(False, [],
-                                    dict(x=('xxx', 'Trigger'), y=(2, 'Trigger'))))
-        yield self.runStep()
+    def test_set_properties_prop(self) -> InlineCallbacksType[None]:
+        yield self.setup_step(
+            trigger.Trigger(
+                schedulerNames=['a'], set_properties={"x": properties.Property('X'), "y": 2}
+            )
+        )
+        self.build.setProperty('X', 'xxx', 'here')
+        self.expect_outcome(result=SUCCESS)
+        self.expectTriggeredWith(a=(False, [], {"x": ('xxx', 'Trigger'), "y": (2, 'Trigger')}))
+        yield self.run_step()
 
     @defer.inlineCallbacks
-    def test_copy_properties(self):
-        yield self.setupStep(trigger.Trigger(schedulerNames=['a'],
-                                             copy_properties=['a', 'b']))
-        self.properties.setProperty('a', 'A', 'AA')
-        self.properties.setProperty('b', 'B', 'BB')
-        self.properties.setProperty('c', 'C', 'CC')
-        self.expectOutcome(result=SUCCESS)
-        self.expectTriggeredWith(a=(False, [],
-                                    dict(a=('A', 'Trigger'),
-                                         b=('B', 'Trigger'))))
-        yield self.runStep()
+    def test_copy_properties(self) -> InlineCallbacksType[None]:
+        yield self.setup_step(trigger.Trigger(schedulerNames=['a'], copy_properties=['a', 'b']))
+        self.build.setProperty('a', 'A', 'AA')
+        self.build.setProperty('b', 'B', 'BB')
+        self.build.setProperty('c', 'C', 'CC')
+        self.expect_outcome(result=SUCCESS)
+        self.expectTriggeredWith(a=(False, [], {"a": ('A', 'Trigger'), "b": ('B', 'Trigger')}))
+        yield self.run_step()
 
     @defer.inlineCallbacks
-    def test_waitForFinish_interrupt(self):
-        yield self.setupStep(trigger.Trigger(schedulerNames=['a'], waitForFinish=True))
+    def test_waitForFinish_interrupt(self) -> InlineCallbacksType[None]:
+        yield self.setup_step(trigger.Trigger(schedulerNames=['a'], waitForFinish=True))
 
-        self.expectOutcome(result=CANCELLED, state_string='interrupted')
+        self.expect_outcome(result=CANCELLED, state_string='interrupted')
         self.expectTriggeredWith(a=(True, [], {}))
-        d = self.runStep()
+        d = self.run_step()
 
         # interrupt before the callLater representing the Triggerable
         # schedulers completes
-        self.step.interrupt(failure.Failure(RuntimeError('oh noes')))
+        self.get_nth_step(0).interrupt(failure.Failure(RuntimeError('oh noes')))
 
         yield d
 
     @defer.inlineCallbacks
-    def test_waitForFinish_interrupt_no_connection(self):
-        yield self.setupStep(trigger.Trigger(schedulerNames=['a'], waitForFinish=True))
+    def test_waitForFinish_interrupt_no_connection(self) -> InlineCallbacksType[None]:
+        yield self.setup_step(trigger.Trigger(schedulerNames=['a'], waitForFinish=True))
 
-        self.expectOutcome(result=CANCELLED, state_string='interrupted')
+        self.expect_outcome(result=CANCELLED, state_string='interrupted')
         self.expectTriggeredWith(a=(True, [], {}))
         self.scheduler_a.never_finish = True
-        d = self.runStep()
+        d = self.run_step()
 
         # interrupt before the callLater representing the Triggerable
         # schedulers completes
-        self.build.conn = None
-        self.step.interrupt(failure.Failure(RuntimeError('oh noes')))
+        self.build.conn = None  # type: ignore[attr-defined]
+        self.get_nth_step(0).interrupt(failure.Failure(RuntimeError('oh noes')))
 
         yield d
 
     @defer.inlineCallbacks
-    def test_getSchedulersAndProperties_back_comp(self):
+    def test_getSchedulersAndProperties_back_comp(self) -> InlineCallbacksType[None]:
         class DynamicTrigger(trigger.Trigger):
-
-            def getSchedulersAndProperties(self):
+            def getSchedulersAndProperties(self) -> Any:
                 return [("a", {}, False), ("b", {}, True)]
 
-        yield self.setupStep(DynamicTrigger(schedulerNames=['a', 'b']))
+        yield self.setup_step(DynamicTrigger(schedulerNames=['a', 'b']))
         self.scheduler_a.result = SUCCESS
         self.scheduler_b.result = FAILURE
-        self.expectOutcome(result=SUCCESS, state_string='triggered a, b')
+        self.expect_outcome(result=SUCCESS, state_string='triggered a, b')
         self.expectTriggeredWith(a=(False, [], {}), b=(False, [], {}))
-        yield self.runStep()
+        yield self.run_step()
 
     @defer.inlineCallbacks
-    def test_unimportantSchedulerNames(self):
-        yield self.setupStep(trigger.Trigger(schedulerNames=['a', 'b'],
-                                             unimportantSchedulerNames=['b']))
+    def test_unimportantSchedulerNames(self) -> InlineCallbacksType[None]:
+        yield self.setup_step(
+            trigger.Trigger(schedulerNames=['a', 'b'], unimportantSchedulerNames=['b'])
+        )
         self.scheduler_a.result = SUCCESS
         self.scheduler_b.result = FAILURE
-        self.expectOutcome(result=SUCCESS, state_string='triggered a, b')
+        self.expect_outcome(result=SUCCESS, state_string='triggered a, b')
         self.expectTriggeredWith(a=(False, [], {}), b=(False, [], {}))
-        yield self.runStep()
+        yield self.run_step()
 
     @defer.inlineCallbacks
-    def test_unimportantSchedulerNames_with_more_brids_for_bsid(self):
-        yield self.setupStep(trigger.Trigger(schedulerNames=['a', 'c'],
-                                             unimportantSchedulerNames=['c']))
+    def test_unimportantSchedulerNames_with_more_brids_for_bsid(self) -> InlineCallbacksType[None]:
+        yield self.setup_step(
+            trigger.Trigger(schedulerNames=['a', 'c'], unimportantSchedulerNames=['c'])
+        )
         self.scheduler_a.result = SUCCESS
         self.scheduler_c.result = FAILURE
-        self.expectOutcome(result=SUCCESS, state_string='triggered a, c')
+        self.expect_outcome(result=SUCCESS, state_string='triggered a, c')
         self.expectTriggeredWith(a=(False, [], {}), c=(False, [], {}))
-        yield self.runStep()
+        yield self.run_step()

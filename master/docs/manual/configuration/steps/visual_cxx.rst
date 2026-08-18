@@ -16,11 +16,16 @@
 .. bb:step:: VS2013
 .. bb:step:: VS2015
 .. bb:step:: VS2017
+.. bb:step:: VS2019
+.. bb:step:: VS2022
 .. bb:step:: VCExpress9
 .. bb:step:: MsBuild4
 .. bb:step:: MsBuild12
 .. bb:step:: MsBuild14
 .. bb:step:: MsBuild141
+.. bb:step:: MsBuild15
+.. bb:step:: MsBuild16
+.. bb:step:: MsBuild17
 
 .. _Step-VisualCxx:
 
@@ -52,11 +57,16 @@ The available classes are:
 * ``VS2013``
 * ``VS2015``
 * ``VS2017``
+* ``VS2019``
+* ``VS2022``
 * ``VCExpress9``
 * ``MsBuild4``
 * ``MsBuild12``
 * ``MsBuild14``
 * ``MsBuild141``
+* ``MsBuild15``
+* ``MsBuild16``
+* ``MsBuild17``
 
 The available constructor arguments are
 
@@ -104,6 +114,15 @@ The available constructor arguments are
 ``platform``
     This is a mandatory argument for ``MsBuild4`` and ``MsBuild12`` specifying the target platform such as 'Win32', 'x64' or 'Vista Debug'.
     The last one is an example of driver targets that appear once Windows Driver Kit 8 is installed.
+    
+``defines``
+    That one is only available with the MsBuild family of classes.
+    It allows to define pre-processor constants used by the compiler.
+
+``properties``
+    That one is only available with the MsBuild family of classes.
+    It allows to define custom build properties (Visual Studio user macros).
+    It is a dict, mapping the properties names to theirs values. Values can be strings, or callables taking the build object as a parameter and returning strings.
 
 Here is an example on how to drive compilation with Visual Studio 2013:
 
@@ -133,3 +152,21 @@ Here is a similar example using "MsBuild12":
     f.addStep(
         steps.MsBuild12(projectfile="trunk.sln", config='Debug', platform='x64',
                 workdir="trunk"))
+
+Here is an example of usage of the ``properties`` param in "MsBuild141":
+
+.. code-block:: python
+
+    from buildbot.plugins import steps
+
+    def get_property2_value(build):
+        return f'ValuePath\\{build.getProperty('got_revision')}'
+    
+    # Build one project in Release/Win32, while defining or overriding 
+    f.addStep(
+        steps.MsBuild141(projectfile="trunk.sln", config="Release", platform="Win32",
+                workdir="trunk",
+                project="tools\\protoc",
+                properties= { "CustomProperty1" : "Value", "CustomProperty2" : get_property2_value }
+                ))
+

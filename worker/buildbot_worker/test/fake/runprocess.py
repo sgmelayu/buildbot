@@ -12,16 +12,22 @@
 # Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
 # Copyright Buildbot Team Members
+from __future__ import annotations
 
-from __future__ import absolute_import
-from __future__ import print_function
+from typing import TYPE_CHECKING
 
 from twisted.internet import defer
-from twisted.python import failure
+
+if TYPE_CHECKING:
+    from typing import Any
+    from typing import Callable
+    from typing import ClassVar
+    from typing import Literal
+
+    from typing_extensions import Self
 
 
-class Expect(object):
-
+class Expect:
     """
     An expected instantiation of RunProcess.  Usually used within a RunProcess
     expect invocation:
@@ -40,35 +46,39 @@ class Expect(object):
     are not omitted.
     """
 
-    def __init__(self, command, workdir, **kwargs):
-        self.kwargs = dict(command=command, workdir=workdir)
+    def __init__(self, command: str | list[str], workdir: str, **kwargs: Any) -> None:
+        self.kwargs: dict[str, Any] = {"command": command, "workdir": workdir}
         self.kwargs.update(kwargs)
 
-        self.result = None
-        self.status_updates = []
+        self.result: tuple[Literal['c'], int] | tuple[Literal['e'], BaseException] | None = None
+        self.status_updates: list[list[tuple[str, Any]]] = []
 
-    def __add__(self, other):
-        if isinstance(other, dict):
-            self.status_updates.append(other)
-        elif isinstance(other, int):
-            self.result = ('c', other)
-        elif isinstance(other, failure.Failure):
-            self.result = ('e', other)
-        else:
-            raise ValueError("invalid expectation '{0!r}'".format(other))
-        return self
-
-    def __str__(self):
+    def __str__(self) -> str:
         other_kwargs = self.kwargs.copy()
         del other_kwargs['command']
         del other_kwargs['workdir']
-        return "Command: {0}\n  workdir: {1}\n  kwargs: {2}\n  result: {3}\n".format(
-            self.kwargs['command'], self.kwargs['workdir'],
-            other_kwargs, self.result)
+        return "Command: {}\n  workdir: {}\n  kwargs: {}\n  result: {}\n".format(
+            self.kwargs['command'], self.kwargs['workdir'], other_kwargs, self.result
+        )
+
+    def update(self, key: str, value: Any) -> Self:
+        self.status_updates.append([(key, value)])
+        return self
+
+    def updates(self, updates: list[tuple[str, Any]]) -> Self:
+        self.status_updates.append(updates)
+        return self
+
+    def exit(self, rc_code: int) -> Self:
+        self.result = ('c', rc_code)
+        return self
+
+    def exception(self, error: BaseException) -> Self:
+        self.result = ('e', error)
+        return self
 
 
-class FakeRunProcess(object):
-
+class FakeRunProcess:
     """
     A fake version of L{buildbot_worker.runprocess.RunProcess} which will
     simulate running external processes without actually running them (which is
@@ -81,8 +91,10 @@ class FakeRunProcess(object):
     Note that this handles sendStderr/sendStdout and keepStderr/keepStdout properly.
     """
 
+    _expectations: ClassVar[list[Expect]]
+
     @classmethod
-    def expect(cls, *expectations):
+    def expect(cls, *expectations: Expect) -> None:
         """
         Set the expectations for this test run
         """
@@ -91,30 +103,48 @@ class FakeRunProcess(object):
         cls._expectations.reverse()
 
     @classmethod
-    def test_done(cls):
+    def test_done(cls) -> None:
         """
         Indicate that this test is finished; if any expected instantiations
         have not taken place, this will raise the appropriate AssertionError.
         """
         if cls._expectations:
-            raise AssertionError(("{0} expected instances not created"
-                                  ).format(len(cls._expectations)))
+            raise AssertionError(f"{len(cls._expectations)} expected instances not created")
         del cls._expectations
 
-    def __init__(self, builder, command, workdir, **kwargs):
+    def __init__(
+        self,
+        command_id: int,
+        command: list[str | bytes] | str | bytes,
+        workdir: str,
+        unicode_encoding: str,
+        send_update: Callable[[list[tuple[str, Any]]], None],
+        **kwargs: Any,
+    ) -> None:
         kwargs['command'] = command
         kwargs['workdir'] = workdir
 
         # the default values for the constructor kwargs; if we got a default
         # value in **kwargs and didn't expect anything, well count that as OK
-        default_values = dict(environ=None,
-                              sendStdout=True, sendStderr=True, sendRC=True,
-                              timeout=None, maxTime=None, sigtermTime=None, initialStdin=None,
-                              keepStdout=False, keepStderr=False,
-                              logEnviron=True, logfiles={}, usePTY=False)
+        default_values: dict[str, Any] = {
+            "environ": None,
+            "sendStdout": True,
+            "sendStderr": True,
+            "sendRC": True,
+            "timeout": None,
+            "maxTime": None,
+            "max_lines": None,
+            "sigtermTime": None,
+            "initialStdin": None,
+            "keepStdout": False,
+            "keepStderr": False,
+            "logEnviron": True,
+            "logfiles": {},
+            "usePTY": False,
+        }
 
         if not self._expectations:
-            raise AssertionError("unexpected instantiation: {0}".format(kwargs))
+            raise AssertionError(f"unexpected instantiation: {kwargs}")
         exp = self._exp = self._expectations.pop()
         if exp.kwargs != kwargs:
             msg = []
@@ -124,29 +154,32 @@ class FakeRunProcess(object):
                     if key in default_values:
                         if default_values[key] == kwargs[key]:
                             continue  # default values are expected
-                        msg.append('{0}: expected default ({1!r}),\n  got {2!r}'.format(
-                                   key, default_values[key], kwargs[key]))
+                        msg.append(
+                            f'{key}: expected default ({default_values[key]!r}),\n  got {kwargs[key]!r}'
+                        )
                     else:
-                        msg.append('{0}: unexpected arg, value = {1!r}'.format(key, kwargs[key]))
+                        msg.append(f'{key}: unexpected arg, value = {kwargs[key]!r}')
                 elif key not in kwargs:
-                    msg.append('{0}: did not get expected arg'.format(key))
+                    msg.append(f'{key}: did not get expected arg')
                 elif exp.kwargs[key] != kwargs[key]:
-                    msg.append('{0}: expected {1!r},\n  got {2!r}'.format(key, exp.kwargs[key],
-                                                                          kwargs[key]))
+                    msg.append(f'{key}: expected {exp.kwargs[key]!r},\n  got {kwargs[key]!r}')
             if msg:
                 msg.insert(
                     0,
-                    'did not get expected __init__ arguments for\n {0}'.format(
-                        " ".join(map(repr, kwargs.get('command',
-                                                      ['unknown command'])))))
+                    'did not get expected __init__ arguments for\n {}'.format(
+                        " ".join(map(repr, kwargs.get('command', ['unknown command'])))
+                    ),
+                )
                 self._expectations[:] = []  # don't expect any more instances, since we're failing
                 raise AssertionError("\n".join(msg))
 
-        self._builder = builder
+        self.send_update = send_update
         self.stdout = ''
         self.stderr = ''
 
-    def start(self):
+        self.run_deferred: defer.Deferred[int] | None = None
+
+    def start(self) -> defer.Deferred[int]:
         # figure out the stdio-related parameters
         keepStdout = self._exp.kwargs.get('keepStdout', False)
         keepStderr = self._exp.kwargs.get('keepStderr', False)
@@ -158,24 +191,24 @@ class FakeRunProcess(object):
             self.stderr = ''
         finish_immediately = True
 
-        # send the updates, accounting for the stdio parameters
-        for upd in self._exp.status_updates:
-            if 'stdout' in upd:
-                if keepStdout:
-                    self.stdout += upd['stdout']
-                if not sendStdout:
-                    del upd['stdout']
-            if 'stderr' in upd:
-                if keepStderr:
-                    self.stderr += upd['stderr']
-                if not sendStderr:
-                    del upd['stderr']
-            if 'wait' in upd:
-                finish_immediately = False
-                continue  # don't send this update
-            if not upd:
-                continue
-            self._builder.sendUpdate(upd)
+        for update in self._exp.status_updates:
+            data = []
+            for key, value in update:
+                if key == 'stdout':
+                    if keepStdout:
+                        self.stdout += value
+                    if not sendStdout:
+                        continue  # don't send this update
+                if key == 'stderr':
+                    if keepStderr:
+                        self.stderr += value
+                    if not sendStderr:
+                        continue
+                if key == 'wait':
+                    finish_immediately = False
+                    continue
+                data.append((key, value))
+            self.send_update(data)
 
         d = self.run_deferred = defer.Deferred()
 
@@ -184,13 +217,16 @@ class FakeRunProcess(object):
 
         return d
 
-    def _finished(self):
+    def _finished(self) -> None:
+        assert self._exp.result and self._exp.result[0] is not None
+        assert self.run_deferred is not None
         if self._exp.result[0] == 'e':
             self.run_deferred.errback(self._exp.result[1])
         else:
             self.run_deferred.callback(self._exp.result[1])
 
-    def kill(self, reason):
-        self._builder.sendUpdate({'hdr': 'killing'})
-        self._builder.sendUpdate({'rc': -1})
+    def kill(self, reason: str) -> None:
+        self.send_update([('header', 'killing')])
+        self.send_update([('rc', -1)])
+        assert self.run_deferred is not None
         self.run_deferred.callback(-1)

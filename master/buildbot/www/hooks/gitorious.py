@@ -16,41 +16,53 @@
 # note: this file is based on github.py
 
 
+from __future__ import annotations
+
 import json
 import re
+from typing import TYPE_CHECKING
+from typing import Any
 
 from dateutil.parser import parse as dateparse
-
+from twisted.internet import defer
 from twisted.python import log
 
 from buildbot.util import bytes2unicode
 from buildbot.www.hooks.base import BaseHookHandler
 
+if TYPE_CHECKING:
+    from twisted.web.server import Request
+
 
 class GitoriousHandler(BaseHookHandler):
-
-    def getChanges(self, request):
-        payload = json.loads(bytes2unicode(request.args[b'payload'][0]))
+    def getChanges(
+        self, request: Request
+    ) -> defer.Deferred[tuple[list[dict[str, Any]], str | None]]:
+        args: dict[bytes, list[bytes]] = request.args or {}
+        payload_bytes = args.get(b'payload', [b'{}'])[0]
+        payload = json.loads(bytes2unicode(payload_bytes))
         user = payload['repository']['owner']['name']
         repo = payload['repository']['name']
         repo_url = payload['repository']['url']
         project = payload['project']['name']
 
         changes = self.process_change(payload, user, repo, repo_url, project)
-        log.msg("Received {} changes from gitorious".format(len(changes)))
-        return (changes, 'git')
+        log.msg(f"Received {len(changes)} changes from gitorious")
+        return defer.succeed((changes, 'git'))
 
-    def process_change(self, payload, user, repo, repo_url, project):
+    def process_change(
+        self, payload: dict[str, Any], user: str, repo: str, repo_url: str, project: str
+    ) -> list[dict[str, Any]]:
         changes = []
         newrev = payload['after']
 
         branch = payload['ref']
         if re.match(r"^0*$", newrev):
-            log.msg("Branch `{}' deleted, ignoring".format(branch))
+            log.msg(f"Branch `{branch}' deleted, ignoring")
             return []
         else:
             for commit in payload['commits']:
-                files = []
+                files: list[str] = []
                 # Gitorious doesn't send these, maybe later
                 # if 'added' in commit:
                 #     files.extend(commit['added'])
@@ -60,9 +72,9 @@ class GitoriousHandler(BaseHookHandler):
                 #     files.extend(commit['removed'])
                 when_timestamp = dateparse(commit['timestamp'])
 
-                log.msg("New revision: {}".format(commit['id'][:8]))
+                log.msg(f"New revision: {commit['id'][:8]}")
                 changes.append({
-                    'author': '{} <{}>'.format(commit['author']['name'], commit['author']['email']),
+                    'author': f"{commit['author']['name']} <{commit['author']['email']}>",
                     'files': files,
                     'comments': commit['message'],
                     'revision': commit['id'],
@@ -70,7 +82,7 @@ class GitoriousHandler(BaseHookHandler):
                     'branch': branch,
                     'revlink': commit['url'],
                     'repository': repo_url,
-                    'project': project
+                    'project': project,
                 })
 
         return changes

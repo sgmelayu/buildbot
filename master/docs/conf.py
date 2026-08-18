@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 #
 # Buildbot documentation build configuration file, created by
 # sphinx-quickstart on Tue Aug 10 15:13:31 2010.
@@ -12,8 +11,8 @@
 # serve to show the default.
 
 
+import importlib.metadata
 import os
-import pkg_resources
 import sys
 import textwrap
 
@@ -23,31 +22,24 @@ import textwrap
 sys.path.insert(1, os.path.dirname(os.path.abspath(__file__)))
 
 try:
-    from buildbot.util.raml import RamlSpec
     from buildbot.reporters.telegram import TelegramContact
+    from buildbot.util.raml import RamlSpec
 except ImportError:
-    sys.path.insert(2, os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                    os.pardir))
-    from buildbot.util.raml import RamlSpec
+    sys.path.insert(2, os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir))
     from buildbot.reporters.telegram import TelegramContact
+    from buildbot.util.raml import RamlSpec
 
 # -- General configuration -----------------------------------------------
 try:
-    import sphinxcontrib.blockdiag
-    assert sphinxcontrib.blockdiag
-except ImportError as e:
-    raise RuntimeError("sphinxcontrib.blockdiag is not installed. "
-                       "Please install documentation dependencies with "
-                       "`pip install buildbot[docs]`") from e
-
-try:
-    pkg_resources.require('docutils>=0.8')
-except pkg_resources.ResolutionError as e:
-    raise RuntimeError("docutils is not installed or has incompatible version. "
-                       "Please install documentation dependencies with `pip "
-                       "install buildbot[docs]`") from e
+    importlib.metadata.distribution('docutils')
+except importlib.metadata.PackageNotFoundError as e:
+    raise RuntimeError(
+        "docutils is not installed. "
+        "Please install documentation dependencies with `pip "
+        "install buildbot[docs]`"
+    ) from e
 # If your documentation needs a minimal Sphinx version, state it here.
-needs_sphinx = '1.0'
+needs_sphinx = '4.0'
 
 # Add any Sphinx extension module names here, as strings. They can be extensions
 # coming with Sphinx (named 'sphinx.ext.*') or your custom ones.
@@ -57,8 +49,7 @@ extensions = [
     'sphinx.ext.extlinks',
     'bbdocs.ext',
     'bbdocs.api_index',
-    'sphinxcontrib.blockdiag',
-    'sphinxcontrib.jinja',
+    'sphinx_jinja',
     'sphinx_rtd_theme',
 ]
 todo_include_todos = True
@@ -76,8 +67,8 @@ source_suffix = '.rst'
 master_doc = 'index'
 
 # General information about the project.
-project = u'Buildbot'
-copyright = u'Buildbot Team Members'
+project = 'Buildbot'
+copyright = 'Buildbot Team Members'
 
 # The version info for the project you're documenting, acts as replacement for
 # |version| and |release|, also used in various other places throughout the
@@ -90,27 +81,20 @@ if 'VERSION' in os.environ:
 else:
     gl = {'__file__': '../buildbot/__init__.py'}
     with open('../buildbot/__init__.py') as f:
-        exec(f.read(), gl)
+        exec(f.read(), gl)  # pylint: disable=exec-used
     version = gl['version']
 
 # The full version, including alpha/beta/rc tags.
 release = version
 
-# blocksiag/seqdiag
-blockdiag_html_image_format = 'svg'
-blocdiag_transparency = True
-
-# add a loud note about python 2
-rst_prolog = textwrap.dedent("""\
-.. caution:: Buildbot no longer supports Python 2.7 on the Buildbot master.
-""")
+rst_prolog = ""
 
 # add a loud note for anyone looking at the latest docs
 if release == 'latest':
     rst_prolog += textwrap.dedent("""\
     .. caution:: This page documents the latest, unreleased version of
         Buildbot.  For documentation for released versions, see
-        http://docs.buildbot.net/current/.
+        https://docs.buildbot.net/current/.
 
     """)
 
@@ -154,10 +138,10 @@ intersphinx_mapping = {
 }
 
 extlinks = {
-    'pull': ('https://github.com/buildbot/buildbot/pull/%s', 'pull request '),
-    'issue': ('https://github.com/buildbot/buildbot/issues/%s', 'issue # '),
+    'pull': ('https://github.com/buildbot/buildbot/pull/%s', 'pull request %s'),
+    'issue': ('https://github.com/buildbot/buildbot/issues/%s', 'issue #%s'),
     # deprecated. Use issue instead, and point to Github
-    'bug': ('http://trac.buildbot.net/ticket/%s', 'bug #'),
+    'bug': ('http://trac.buildbot.net/ticket/%s', 'bug #%s'),
     # Renders as link with whole url, e.g.
     #   :src-link:`master`
     # renders as
@@ -167,8 +151,7 @@ extlinks = {
     'src-link': ('https://github.com/buildbot/buildbot/tree/master/%s', None),
     # "pretty" reference that looks like relative path in Buildbot source tree
     # by default.
-    'src': ('https://github.com/buildbot/buildbot/tree/master/%s', ''),
-    'contrib-src': ('https://github.com/buildbot/buildbot-contrib/tree/master/%s', ''),
+    'src': ('https://github.com/buildbot/buildbot/tree/master/%s', '%s'),
 }
 
 # Sphinx' link checker.
@@ -205,9 +188,7 @@ html_theme = 'sphinx_rtd_theme'
 # html_theme_options = {'stickysidebar': 'true'}
 
 # Add any paths that contain custom themes here, relative to this directory.
-html_theme_path = [
-    '_themes'
-]
+html_theme_path = ['_themes']
 
 # The name for this set of Sphinx documents.  If None, it defaults to
 # "<project> v<release> documentation".
@@ -238,9 +219,7 @@ html_css_files = ['buildbot_rtd.css']
 # html_last_updated_fmt = '%b %d, %Y'
 
 # Custom sidebar templates, maps document names to template names.
-html_sidebars = {
-    '**': ['searchbox.html', 'localtoc.html', 'relations.html', 'sourcelink.html']
-}
+html_sidebars = {'**': ['searchbox.html', 'localtoc.html', 'relations.html', 'sourcelink.html']}
 
 # Additional templates that should be rendered to pages, maps page names to
 # template names.
@@ -288,8 +267,7 @@ latex_elements['papersize'] = 'a4'
 # Grouping the document tree into LaTeX files. List of tuples
 # (source start file, target name, title, author, documentclass [howto/manual]).
 latex_documents = [
-    ('index', 'Buildbot.tex', u'Buildbot Documentation',
-     u'Brian Warner', 'manual'),
+    ('index', 'Buildbot.tex', 'Buildbot Documentation', 'Brian Warner', 'manual'),
 ]
 
 # The name of an image file (relative to this directory) to place at the top of
@@ -323,10 +301,7 @@ latex_show_urls = 'inline'
 
 # One entry per manual page. List of tuples
 # (source start file, name, description, authors, manual section).
-man_pages = [
-    ('index', 'buildbot', u'Buildbot Documentation',
-     [u'Brian Warner'], 1)
-]
+man_pages = [('index', 'buildbot', 'Buildbot Documentation', ['Brian Warner'], 1)]
 
 jinja_contexts = {
     "data_api": {'raml': RamlSpec()},
@@ -341,18 +316,15 @@ for raml_typename, raml_type in sorted(raml_spec.types.items()):
         'type': raml_type,
     }
 
-    doc_path = 'developer/raml/{}.rst'.format(raml_typename)
+    doc_path = f'developer/raml/{raml_typename}.rst'
     if not os.path.exists(doc_path):
-        raise Exception('File {} for RAML type {} does not exist'.format(doc_path, raml_typename))
+        raise RuntimeError(f'File {doc_path} for RAML type {raml_typename} does not exist')
 
 # Spell checker.
 try:
-    import enchant  # noqa # pylint: disable=unused-import
+    import enchant  # noqa: F401
 except ImportError as ex:
-    print("enchant module import failed:\n"
-          "{0}\n"
-          "Spell checking disabled.".format(ex),
-          file=sys.stderr)
+    print(f"enchant module import failed:\n{ex}\nSpell checking disabled.", file=sys.stderr)
 
 else:
     extensions.append('sphinxcontrib.spelling')

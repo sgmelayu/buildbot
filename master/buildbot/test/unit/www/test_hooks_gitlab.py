@@ -13,7 +13,12 @@
 #
 # Copyright Buildbot Team Members
 
-import mock
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from typing import Any
+from unittest import mock
 
 from twisted.internet import defer
 from twisted.trial import unittest
@@ -23,12 +28,15 @@ from buildbot.secrets.manager import SecretManager
 from buildbot.test.fake.secrets import FakeSecretStorage
 from buildbot.test.fake.web import FakeRequest
 from buildbot.test.fake.web import fakeMasterForHooks
-from buildbot.test.util.misc import TestReactorMixin
+from buildbot.test.reactor import TestReactorMixin
 from buildbot.www import change_hook
 from buildbot.www.hooks.gitlab import _HEADER_EVENT
 from buildbot.www.hooks.gitlab import _HEADER_GITLAB_TOKEN
 
-# Sample GITLAB commit payload from https://docs.gitlab.com/ce/user/project/integrations/webhooks.html  # noqa pylint: disable=line-too-long
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
+
+# Sample GITLAB commit payload from https://docs.gitlab.com/ce/user/project/integrations/webhooks.html
 # Added "modified" and "removed", and change email
 gitJsonPayload = b"""
 {
@@ -227,7 +235,7 @@ gitJsonPayloadMR_open = b"""
       "username" : "mmusterman"
    }
 }
-"""  # noqa pylint: disable=line-too-long
+"""
 gitJsonPayloadMR_editdesc = b"""
 {
    "event_type" : "merge_request",
@@ -337,7 +345,7 @@ gitJsonPayloadMR_editdesc = b"""
       "username" : "mmusterman"
    }
 }
-"""  # noqa pylint: disable=line-too-long
+"""
 gitJsonPayloadMR_addcommit = b"""
 {
    "event_type" : "merge_request",
@@ -448,7 +456,7 @@ gitJsonPayloadMR_addcommit = b"""
       "username" : "mmusterman"
    }
 }
-"""  # noqa pylint: disable=line-too-long
+"""
 gitJsonPayloadMR_close = b"""
 {
    "event_type" : "merge_request",
@@ -558,7 +566,7 @@ gitJsonPayloadMR_close = b"""
       "username" : "mmusterman"
    }
 }
-"""  # noqa pylint: disable=line-too-long
+"""
 gitJsonPayloadMR_reopen = b"""
 {
    "event_type" : "merge_request",
@@ -668,7 +676,7 @@ gitJsonPayloadMR_reopen = b"""
       "username" : "mmusterman"
    }
 }
-"""  # noqa pylint: disable=line-too-long
+"""
 
 # == Merge requests from a fork of the project
 # (Captured more accurately than above test data)
@@ -794,94 +802,330 @@ gitJsonPayloadMR_open_forked = b"""
       "username" : "mmusterman"
    }
 }
-"""  # noqa pylint: disable=line-too-long
+"""
+
+# == Merge requests from a fork of the project
+# (Captured more accurately than above test data) captured from gitlab/v4 rest api
+gitJsonPayloadMR_commented = b"""
+{
+  "object_kind": "note",
+  "event_type": "note",
+  "user": {
+    "id": 343,
+    "name": "Name Surname",
+    "username": "rollo",
+    "avatar_url": "null",
+    "email": "[REDACTED]"
+  },
+  "project_id": 926,
+  "project": {
+    "id": 926,
+    "name": "awesome_project",
+    "description": "",
+    "web_url": "https://gitlab.example.com/mmusterman/awesome_project",
+    "avatar_url": null,
+    "git_ssh_url": "git@gitlab.example.com:mmusterman/awesome_project.git",
+    "git_http_url": "https://gitlab.example.com/mmusterman/awesome_project.git",
+    "namespace" : "mmusterman",
+    "visibility_level": 0,
+    "path_with_namespace": "awesome_project",
+    "default_branch": "master",
+    "ci_config_path": null,
+    "homepage": "https://gitlab.example.com/mmusterman/awesome_project",
+    "url": "git@gitlab.example.com:mmusterman/awesome_project.git",
+    "ssh_url": "git@gitlab.example.com:mmusterman/awesome_project.git",
+    "http_url": "https://gitlab.example.com/mmusterman/awesome_project.git"
+  },
+  "object_attributes": {
+    "attachment": null,
+    "author_id": 343,
+    "change_position": {
+      "base_sha": null,
+      "start_sha": null,
+      "head_sha": null,
+      "old_path": null,
+      "new_path": null,
+      "position_type": "text",
+      "old_line": null,
+      "new_line": null,
+      "line_range": null
+    },
+    "commit_id": null,
+    "created_at": "2022-02-04 09:13:56 UTC",
+    "discussion_id": "0a307b85835ac7c3e2c1b4e6283d7baf42df0f8e",
+    "id": 83474,
+    "line_code": "762ab21851f67780cfb68832884fa1f859ccd00e_761_762",
+    "note": "036 #BB",
+    "noteable_id": 4085,
+    "noteable_type": "MergeRequest",
+    "original_position": {
+      "base_sha": "7e2c01527d87c36cf4f9e78dd9fc6aa4f602c365",
+      "start_sha": "7e2c01527d87c36cf4f9e78dd9fc6aa4f602c365",
+      "head_sha": "b91a85e84404932476f76ccbf0f42c963005501b",
+      "old_path": "run/exp.fun_R2B4",
+      "new_path": "run/exp.fun_R2B4",
+      "position_type": "text",
+      "old_line": null,
+      "new_line": 762,
+      "line_range": {
+        "start": {
+          "line_code": "762abg1851f67780cfb68832884fa1f859ccd00e_761_762",
+          "type": "new",
+          "old_line": null,
+          "new_line": 762
+        },
+        "end": {
+          "line_code": "762abg1851f67780cfb68832884fa1f859ccd00e_761_762",
+          "type": "new",
+          "old_line": null,
+          "new_line": 762
+        }
+      }
+    },
+    "position": {
+      "base_sha": "7e2c01527d87c36cf4f9e78dd9fc6aa4f602c365",
+      "start_sha": "7e2c01527d87c36cf4f9e78dd9fc6aa4f602c365",
+      "head_sha": "d1ce5517d3745dbd68e1eeb45f42380d76d0c490",
+      "old_path": "run/exp.esm_R2B4",
+      "new_path": "run/exp.esm_R2B4",
+      "position_type": "text",
+      "old_line": null,
+      "new_line": 762,
+      "line_range": {
+        "start": {
+          "line_code": "762ab21851f67780cfb68832884fa1f859ccd00e_761_762",
+          "type": "new",
+          "old_line": null,
+          "new_line": 762
+        },
+        "end": {
+          "line_code": "762ab21851f67780cfb68832884fa1f859ccd00e_761_762",
+          "type": "new",
+          "old_line": null,
+          "new_line": 762
+        }
+      }
+    },
+    "project_id": 926,
+    "resolved_at": null,
+    "resolved_by_id": null,
+    "resolved_by_push": null,
+    "st_diff": null,
+    "system": false,
+    "type": "DiffNote",
+    "updated_at": "2022-02-04 09:13:56 UTC",
+    "updated_by_id": null,
+    "description": "036 #BB",
+    "url": "https://gitlab.example.com/mmusterman/awesome_project_id/-/merge_requests/7#note_83474"
+  },
+  "repository": {
+    "name": "awesome_project",
+    "url": "git@gitlab.example.com:mmusterman/awesome_project.git",
+    "description": "",
+    "homepage": "https://gitlab.example.com/mmusterman/awesome_project"
+  },
+  "merge_request": {
+    "assignee_id": 343,
+    "author_id": 343,
+    "created_at": "2022-01-28 09:17:41 UTC",
+    "description": "Some tests got disabled in the last merge. I will try to re-activate all infrastructure-related tests",
+    "head_pipeline_id": 14675,
+    "id": 4085,
+    "iid": 7,
+    "last_edited_at": "2022-02-01 15:10:38 UTC",
+    "last_edited_by_id": 343,
+    "merge_commit_sha": null,
+    "merge_error": null,
+    "merge_params": {
+      "force_remove_source_branch": "1"
+    },
+    "merge_status": "can_be_merged",
+    "merge_user_id": null,
+    "merge_when_pipeline_succeeds": false,
+    "milestone_id": null,
+    "source_branch": "fix-missing-tests",
+    "source_project_id": 926,
+    "state_id": 1,
+    "target_branch": "master",
+    "target_project_id": 926,
+    "time_estimate": 0,
+    "title": "Draft: Fix missing tests: pio",
+    "updated_at": "2022-02-04 09:13:17 UTC",
+    "updated_by_id": 343,
+    "url": "https://gitlab.example.com/mmusterman/awesome_project/-/merge_requests/7",
+    "source": {
+      "id": 926,
+      "name": "awesome_project",
+      "description": "",
+      "web_url": "https://gitlab.example.com/mmusterman/awesome_project",
+      "avatar_url": null,
+      "git_ssh_url": "git@gitlab.example.com:mmusterman/awesome_project.git",
+      "git_http_url": "https://gitlab.example.com/mmusterman/awesome_project.git",
+      "namespace": "mmusterman",
+      "visibility_level": 0,
+      "path_with_namespace": "awesome_project",
+      "default_branch": "master",
+      "ci_config_path": null,
+      "homepage": "https://gitlab.example.com/mmusterman/awesome_project",
+      "url": "git@gitlab.example.com:mmusterman/awesome_project.git",
+      "ssh_url": "git@gitlab.example.com:mmusterman/awesome_project.git",
+      "http_url": "https://gitlab.example.com/mmusterman/awesome_project.git"
+    },
+    "target": {
+      "id": 926,
+      "name": "awesome_project",
+      "description": "",
+      "web_url": "https://gitlab.example.com/mmusterman/awesome_project",
+      "avatar_url": null,
+      "git_ssh_url": "git@gitlab.example.com:mmusterman/awesome_project.git",
+      "git_http_url": "https://gitlab.example.com/mmusterman/awesome_project.git",
+      "namespace": "mmusterman",
+      "visibility_level": 0,
+      "path_with_namespace": "awesome_project",
+      "default_branch": "master",
+      "ci_config_path": null,
+      "homepage": "https://gitlab.example.com/mmusterman/awesome_project",
+      "url": "git@gitlab.example.com:mmusterman/awesome_project.git",
+      "ssh_url": "git@gitlab.example.com:mmusterman/awesome_project.git",
+      "http_url": "https://gitlab.example.com/mmusterman/awesome_project.git"
+    },
+    "last_commit": {
+      "id": "d1ce5517d3745dbd68e1eeb45f42380d76d0c490",
+      "message": "adopt radiation changes for ruby0 runs in bb",
+      "title": "adopt radiation changes for ruby0 runs in bb",
+      "timestamp": "2022-01-28T10:13:12+01:00",
+      "url": "https://gitlab.example.com/mmusterman/awesome_project/-/commit/d1ce5517d3745dbd68e1eeb45f42380d76d0c490",
+      "author": {
+        "name": "Name Surname",
+        "email": "surname@example.com"
+      }
+    },
+    "work_in_progress": true,
+    "total_time_spent": 0,
+    "time_change": 0,
+    "human_total_time_spent": null,
+    "human_time_change": null,
+    "human_time_estimate": null,
+    "assignee_ids": [
+      343
+    ],
+    "state": "opened"
+  }
+}
+"""
 
 
-def FakeRequestMR(content):
+def FakeRequestMR(content: bytes) -> FakeRequest:
     request = FakeRequest(content=content)
     request.uri = b"/change_hook/gitlab"
     request.args = {b'codebase': [b'MyCodebase']}
-    request.received_headers[_HEADER_EVENT] = b"Merge Request Hook"
+    request.received_headers[_HEADER_EVENT] = b"Merge Request Hook"  # type: ignore[index,assignment]
     request.method = b"POST"
     return request
 
 
-class TestChangeHookConfiguredWithGitChange(unittest.TestCase,
-                                            TestReactorMixin):
+class TestChangeHookConfiguredWithGitChange(TestReactorMixin, unittest.TestCase):
+    @defer.inlineCallbacks
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        self.setup_test_reactor()
+        master = yield fakeMasterForHooks(self)
+        self.changeHook = change_hook.ChangeHookResource(dialects={'gitlab': True}, master=master)
 
-    def setUp(self):
-        self.setUpTestReactor()
-        self.changeHook = change_hook.ChangeHookResource(
-            dialects={'gitlab': True}, master=fakeMasterForHooks(self))
-
-    def check_changes_tag_event(self, r, project='', codebase=None):
+    def check_changes_tag_event(
+        self, r: Any, project: str = '', codebase: str | None = None
+    ) -> None:
         self.assertEqual(len(self.changeHook.master.data.updates.changesAdded), 2)
         change = self.changeHook.master.data.updates.changesAdded[0]
 
         self.assertEqual(change["repository"], "git@localhost:diaspora.git")
-        self.assertEqual(
-            change["when_timestamp"],
-            1323692851
-        )
+        self.assertEqual(change["when_timestamp"], 1323692851)
         self.assertEqual(change["branch"], "v1.0.0")
 
-    def check_changes_mr_event(self, r, project='awesome_project', codebase=None,
-                               timestamp=1526309644, source_repo=None):
+    def check_changes_mr_event(
+        self,
+        r: Any,
+        project: str = 'awesome_project',
+        codebase: str | None = None,
+        timestamp: int = 1526309644,
+        source_repo: str | None = None,
+    ) -> None:
         self.assertEqual(len(self.changeHook.master.data.updates.changesAdded), 1)
         change = self.changeHook.master.data.updates.changesAdded[0]
 
-        self.assertEqual(change["repository"],
-                         "https://gitlab.example.com/mmusterman/awesome_project.git")
+        self.assertEqual(
+            change["repository"], "https://gitlab.example.com/mmusterman/awesome_project.git"
+        )
         if source_repo is None:
             source_repo = "https://gitlab.example.com/mmusterman/awesome_project.git"
-        self.assertEqual(change['properties']["source_repository"],
-                         source_repo)
-        self.assertEqual(change['properties']["target_repository"],
-                         "https://gitlab.example.com/mmusterman/awesome_project.git")
+        self.assertEqual(change['properties']["source_repository"], source_repo)
         self.assertEqual(
-            change["when_timestamp"],
-            timestamp
+            change['properties']["target_repository"],
+            "https://gitlab.example.com/mmusterman/awesome_project.git",
         )
+        self.assertEqual(change["when_timestamp"], timestamp)
         self.assertEqual(change["branch"], "master")
         self.assertEqual(change['properties']["source_branch"], 'ms-viewport')
         self.assertEqual(change['properties']["target_branch"], 'master')
         self.assertEqual(change["category"], "merge_request")
         self.assertEqual(change.get("project"), project)
 
-    def check_changes_push_event(self, r, project='diaspora', codebase=None):
+    def check_changes_mr_event_by_comment(
+        self,
+        r: Any,
+        project: str = 'awesome_project',
+        codebase: str | None = None,
+        timestamp: int = 1526309644,
+        source_repo: str | None = None,
+        repo: str = 'https://gitlab.example.com/mmusterman/awesome_project.git',
+        source_branch: str = 'ms-viewport',
+        target_branch: str = 'master',
+    ) -> None:
+        self.maxDiff = None
+        self.assertEqual(len(self.changeHook.master.data.updates.changesAdded), 1)
+        change = self.changeHook.master.data.updates.changesAdded[0]
+
+        self.assertEqual(change["repository"], repo)
+        if source_repo is None:
+            source_repo = repo
+
+        self.assertEqual(change['properties']["source_repository"], source_repo)
+        self.assertEqual(change['properties']["target_repository"], repo)
+        self.assertEqual(change["when_timestamp"], timestamp)
+        self.assertEqual(change["branch"], target_branch)
+        self.assertEqual(change['properties']["source_branch"], source_branch)
+        self.assertEqual(change['properties']["target_branch"], target_branch)
+        self.assertEqual(change["category"], "note")
+        self.assertEqual(change.get("project"), project)
+
+    def check_changes_push_event(
+        self, r: Any, project: str = 'diaspora', codebase: str | None = None
+    ) -> None:
         self.assertEqual(len(self.changeHook.master.data.updates.changesAdded), 2)
         change = self.changeHook.master.data.updates.changesAdded[0]
 
         self.assertEqual(change["repository"], "git@localhost:diaspora.git")
-        self.assertEqual(
-            change["when_timestamp"],
-            1323692851
-        )
-        self.assertEqual(
-            change["author"], "Jordi Mallach <jordi@softcatala.org>")
-        self.assertEqual(
-            change["revision"], 'b6568db1bc1dcd7f8b4d5a946b0b91f9dacd7327')
-        self.assertEqual(
-            change["comments"], "Update Catalan translation to e38cb41.")
+        self.assertEqual(change["when_timestamp"], 1323692851)
+        self.assertEqual(change["author"], "Jordi Mallach <jordi@softcatala.org>")
+        self.assertEqual(change["revision"], 'b6568db1bc1dcd7f8b4d5a946b0b91f9dacd7327')
+        self.assertEqual(change["comments"], "Update Catalan translation to e38cb41.")
         self.assertEqual(change["branch"], "master")
-        self.assertEqual(change["revlink"],
-            "http://localhost/diaspora/commits/b6568db1bc1dcd7f8b4d5a946b0b91f9dacd7327")
+        self.assertEqual(
+            change["revlink"],
+            "http://localhost/diaspora/commits/b6568db1bc1dcd7f8b4d5a946b0b91f9dacd7327",
+        )
 
         change = self.changeHook.master.data.updates.changesAdded[1]
         self.assertEqual(change["repository"], "git@localhost:diaspora.git")
-        self.assertEqual(
-            change["when_timestamp"],
-            1325626589
-        )
-        self.assertEqual(
-            change["author"], "GitLab dev user <gitlabdev@dv6700.(none)>")
+        self.assertEqual(change["when_timestamp"], 1325626589)
+        self.assertEqual(change["author"], "GitLab dev user <gitlabdev@dv6700.(none)>")
         self.assertEqual(change["src"], "git")
-        self.assertEqual(
-            change["revision"], 'da1560886d4f094c3e6c9ef40349f7d38b5d27d7')
+        self.assertEqual(change["revision"], 'da1560886d4f094c3e6c9ef40349f7d38b5d27d7')
         self.assertEqual(change["comments"], "fixed readme")
         self.assertEqual(change["branch"], "master")
-        self.assertEqual(change["revlink"],
-            "http://localhost/diaspora/commits/da1560886d4f094c3e6c9ef40349f7d38b5d27d7")
+        self.assertEqual(
+            change["revlink"],
+            "http://localhost/diaspora/commits/da1560886d4f094c3e6c9ef40349f7d38b5d27d7",
+        )
 
         # FIXME: should we convert project name to canonical case?
         # Or should change filter be case insensitive?
@@ -891,50 +1135,50 @@ class TestChangeHookConfiguredWithGitChange(unittest.TestCase,
     # Test 'base' hook with attributes. We should get a json string representing
     # a Change object as a dictionary. All values show be set.
     @defer.inlineCallbacks
-    def testGitWithChange(self):
+    def testGitWithChange(self) -> InlineCallbacksType[None]:
         self.request = FakeRequest(content=gitJsonPayload)
         self.request.uri = b"/change_hook/gitlab"
         self.request.method = b"POST"
-        self.request.received_headers[_HEADER_EVENT] = b"Push Hook"
+        self.request.received_headers[_HEADER_EVENT] = b"Push Hook"  # type: ignore[index,assignment]
         res = yield self.request.test_render(self.changeHook)
         self.check_changes_push_event(res)
 
     @defer.inlineCallbacks
-    def testGitWithChange_WithProjectToo(self):
+    def testGitWithChange_WithProjectToo(self) -> InlineCallbacksType[None]:
         self.request = FakeRequest(content=gitJsonPayload)
         self.request.uri = b"/change_hook/gitlab"
         self.request.args = {b'project': [b'Diaspora']}
-        self.request.received_headers[_HEADER_EVENT] = b"Push Hook"
+        self.request.received_headers[_HEADER_EVENT] = b"Push Hook"  # type: ignore[index,assignment]
         self.request.method = b"POST"
         res = yield self.request.test_render(self.changeHook)
         self.check_changes_push_event(res, project="Diaspora")
 
     @defer.inlineCallbacks
-    def testGitWithChange_WithCodebaseToo(self):
+    def testGitWithChange_WithCodebaseToo(self) -> InlineCallbacksType[None]:
         self.request = FakeRequest(content=gitJsonPayload)
         self.request.uri = b"/change_hook/gitlab"
         self.request.args = {b'codebase': [b'MyCodebase']}
-        self.request.received_headers[_HEADER_EVENT] = b"Push Hook"
+        self.request.received_headers[_HEADER_EVENT] = b"Push Hook"  # type: ignore[index,assignment]
         self.request.method = b"POST"
         res = yield self.request.test_render(self.changeHook)
         self.check_changes_push_event(res, codebase="MyCodebase")
 
     @defer.inlineCallbacks
-    def testGitWithChange_WithPushTag(self):
+    def testGitWithChange_WithPushTag(self) -> InlineCallbacksType[None]:
         self.request = FakeRequest(content=gitJsonPayloadTag)
         self.request.uri = b"/change_hook/gitlab"
         self.request.args = {b'codebase': [b'MyCodebase']}
-        self.request.received_headers[_HEADER_EVENT] = b"Push Hook"
+        self.request.received_headers[_HEADER_EVENT] = b"Push Hook"  # type: ignore[index,assignment]
         self.request.method = b"POST"
         res = yield self.request.test_render(self.changeHook)
         self.check_changes_tag_event(res, codebase="MyCodebase")
 
     @defer.inlineCallbacks
-    def testGitWithNoJson(self):
+    def testGitWithNoJson(self) -> InlineCallbacksType[None]:
         self.request = FakeRequest()
         self.request.uri = b"/change_hook/gitlab"
         self.request.method = b"POST"
-        self.request.received_headers[_HEADER_EVENT] = b"Push Hook"
+        self.request.received_headers[_HEADER_EVENT] = b"Push Hook"  # type: ignore[index,assignment]
         yield self.request.test_render(self.changeHook)
 
         self.assertEqual(len(self.changeHook.master.data.updates.changesAdded), 0)
@@ -942,9 +1186,9 @@ class TestChangeHookConfiguredWithGitChange(unittest.TestCase,
         self.request.setResponseCode.assert_called_with(400, mock.ANY)
 
     @defer.inlineCallbacks
-    def test_event_property(self):
+    def test_event_property(self) -> InlineCallbacksType[None]:
         self.request = FakeRequest(content=gitJsonPayload)
-        self.request.received_headers[_HEADER_EVENT] = b"Push Hook"
+        self.request.received_headers[_HEADER_EVENT] = b"Push Hook"  # type: ignore[index,assignment]
         self.request.uri = b"/change_hook/gitlab"
         self.request.method = b"POST"
         yield self.request.test_render(self.changeHook)
@@ -954,7 +1198,7 @@ class TestChangeHookConfiguredWithGitChange(unittest.TestCase,
         self.assertEqual(change["category"], "Push Hook")
 
     @defer.inlineCallbacks
-    def testGitWithChange_WithMR_open(self):
+    def testGitWithChange_WithMR_open(self) -> InlineCallbacksType[None]:
         self.request = FakeRequestMR(content=gitJsonPayloadMR_open)
         res = yield self.request.test_render(self.changeHook)
         self.check_changes_mr_event(res, codebase="MyCodebase")
@@ -962,13 +1206,13 @@ class TestChangeHookConfiguredWithGitChange(unittest.TestCase,
         self.assertEqual(change["category"], "merge_request")
 
     @defer.inlineCallbacks
-    def testGitWithChange_WithMR_editdesc(self):
+    def testGitWithChange_WithMR_editdesc(self) -> InlineCallbacksType[None]:
         self.request = FakeRequestMR(content=gitJsonPayloadMR_editdesc)
         yield self.request.test_render(self.changeHook)
         self.assertEqual(len(self.changeHook.master.data.updates.changesAdded), 0)
 
     @defer.inlineCallbacks
-    def testGitWithChange_WithMR_addcommit(self):
+    def testGitWithChange_WithMR_addcommit(self) -> InlineCallbacksType[None]:
         self.request = FakeRequestMR(content=gitJsonPayloadMR_addcommit)
         res = yield self.request.test_render(self.changeHook)
         self.check_changes_mr_event(res, codebase="MyCodebase", timestamp=1526395871)
@@ -976,13 +1220,13 @@ class TestChangeHookConfiguredWithGitChange(unittest.TestCase,
         self.assertEqual(change["category"], "merge_request")
 
     @defer.inlineCallbacks
-    def testGitWithChange_WithMR_close(self):
+    def testGitWithChange_WithMR_close(self) -> InlineCallbacksType[None]:
         self.request = FakeRequestMR(content=gitJsonPayloadMR_close)
         yield self.request.test_render(self.changeHook)
         self.assertEqual(len(self.changeHook.master.data.updates.changesAdded), 0)
 
     @defer.inlineCallbacks
-    def testGitWithChange_WithMR_reopen(self):
+    def testGitWithChange_WithMR_reopen(self) -> InlineCallbacksType[None]:
         self.request = FakeRequestMR(content=gitJsonPayloadMR_reopen)
         res = yield self.request.test_render(self.changeHook)
         self.check_changes_mr_event(res, codebase="MyCodebase", timestamp=1526395871)
@@ -990,23 +1234,39 @@ class TestChangeHookConfiguredWithGitChange(unittest.TestCase,
         self.assertEqual(change["category"], "merge_request")
 
     @defer.inlineCallbacks
-    def testGitWithChange_WithMR_open_forked(self):
+    def testGitWithChange_WithMR_open_forked(self) -> InlineCallbacksType[None]:
         self.request = FakeRequestMR(content=gitJsonPayloadMR_open_forked)
         res = yield self.request.test_render(self.changeHook)
         self.check_changes_mr_event(
-                res, codebase="MyCodebase", timestamp=1526736926,
-                source_repo="https://gitlab.example.com/build/awesome_project.git")
+            res,
+            codebase="MyCodebase",
+            timestamp=1526736926,
+            source_repo="https://gitlab.example.com/build/awesome_project.git",
+        )
         change = self.changeHook.master.data.updates.changesAdded[0]
         self.assertEqual(change["category"], "merge_request")
 
+    @defer.inlineCallbacks
+    def testGitWithChange_WithMR_commented(self) -> InlineCallbacksType[None]:
+        self.request = FakeRequestMR(content=gitJsonPayloadMR_commented)
+        res = yield self.request.test_render(self.changeHook)
+        self.check_changes_mr_event_by_comment(
+            res,
+            codebase="MyCodebase",
+            timestamp=1643361192,
+            project="awesome_project",
+            source_repo="https://gitlab.example.com/mmusterman/awesome_project.git",
+            source_branch="fix-missing-tests",
+        )
 
-class TestChangeHookConfiguredWithSecret(unittest.TestCase, TestReactorMixin):
 
+class TestChangeHookConfiguredWithSecret(TestReactorMixin, unittest.TestCase):
     _SECRET = 'thesecret'
 
-    def setUp(self):
-        self.setUpTestReactor()
-        self.master = fakeMasterForHooks(self)
+    @defer.inlineCallbacks
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        self.setup_test_reactor()
+        self.master = yield fakeMasterForHooks(self)
 
         fakeStorageService = FakeSecretStorage()
         fakeStorageService.reconfigService(secretdict={"secret_key": self._SECRET})
@@ -1016,26 +1276,26 @@ class TestChangeHookConfiguredWithSecret(unittest.TestCase, TestReactorMixin):
         self.master.addService(self.secretService)
 
         self.changeHook = change_hook.ChangeHookResource(
-            dialects={'gitlab': {'secret': util.Secret("secret_key")}},
-            master=self.master)
+            dialects={'gitlab': {'secret': util.Secret("secret_key")}}, master=self.master
+        )
 
     @defer.inlineCallbacks
-    def test_missing_secret(self):
+    def test_missing_secret(self) -> InlineCallbacksType[None]:
         self.request = FakeRequest(content=gitJsonPayloadTag)
         self.request.uri = b"/change_hook/gitlab"
         self.request.args = {b'codebase': [b'MyCodebase']}
         self.request.method = b"POST"
-        self.request.received_headers[_HEADER_EVENT] = b"Push Hook"
+        self.request.received_headers[_HEADER_EVENT] = b"Push Hook"  # type: ignore[index,assignment]
         yield self.request.test_render(self.changeHook)
         expected = b'Invalid secret'
         self.assertEqual(self.request.written, expected)
         self.assertEqual(len(self.changeHook.master.data.updates.changesAdded), 0)
 
     @defer.inlineCallbacks
-    def test_valid_secret(self):
+    def test_valid_secret(self) -> InlineCallbacksType[None]:
         self.request = FakeRequest(content=gitJsonPayload)
-        self.request.received_headers[_HEADER_GITLAB_TOKEN] = self._SECRET
-        self.request.received_headers[_HEADER_EVENT] = b"Push Hook"
+        self.request.received_headers[_HEADER_GITLAB_TOKEN] = self._SECRET  # type: ignore[index]
+        self.request.received_headers[_HEADER_EVENT] = b"Push Hook"  # type: ignore[index,assignment]
         self.request.uri = b"/change_hook/gitlab"
         self.request.method = b"POST"
         yield self.request.test_render(self.changeHook)

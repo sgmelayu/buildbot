@@ -1,0 +1,55 @@
+@use 'buildbot-ui/colors.scss';
+
+.bb-buildsticker {
+  width: 100%;
+  margin: 0 2px 2px 0;
+
+  .bb-buildsticker-left {
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    overflow: hidden;
+    margin-left: 0;
+    margin-right: 0;
+
+    > .bb-badge-status,
+    > .bb-buildsticker-time {
+      float: right;
+    }
+  }
+
+  &.results_SUCCESS {
+    border-color: colors.$bb-color-border-results-success;
+  }
+
+  &.results_WARNINGS {
+    border-color: colors.$bb-color-border-results-warnings;
+  }
+
+  &.results_FAILURE {
+    border-color: colors.$bb-color-border-results-failure;
+  }
+
+  &.results_SKIPPED {
+    border-color: colors.$bb-color-border-results-skipped;
+  }
+
+  &.results_EXCEPTION {
+    border-color: colors.$bb-color-border-results-exception;
+  }
+
+  &.results_RETRY {
+    border-color: colors.$bb-color-border-results-retry;
+  }
+
+  &.results_CANCELLED {
+    border-color: colors.$bb-color-border-results-cancelled;
+  }
+
+  &.results_PENDING {
+    border-color: colors.$bb-color-border-results-pending;
+  }
+
+  &.results_UNKNOWN {
+    border-color: colors.$bb-color-border-results-unknown;
+  }
+}

@@ -16,14 +16,13 @@
 # N.B.: don't import anything that might pull in a reactor yet. Some of our
 # subcommands want to load modules that need the gtk reactor.
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
+from __future__ import annotations
 
 import os
 import re
 import sys
 import textwrap
+from typing import NoReturn
 
 from twisted.python import log
 from twisted.python import reflect
@@ -37,7 +36,7 @@ from twisted.python import usage
 
 
 class MakerBase(usage.Options):
-    optFlags = [
+    optFlags: list[list[str | None]] = [
         ['help', 'h', "Display this message"],
         ["quiet", "q", "Do not emit the commands being run"],
     ]
@@ -52,11 +51,12 @@ class MakerBase(usage.Options):
         # only set completion suggestion if running with
         # twisted version (>=11.1.0) that supports it
         compData = usage.Completions(
-            extraActions=[usage.CompleteDirs(descr="worker base directory")])
+            extraActions=[usage.CompleteDirs(descr="worker base directory")]
+        )
 
     opt_h = usage.Options.opt_help
 
-    def parseArgs(self, *args):
+    def parseArgs(self, *args: str) -> None:
         if args:
             self['basedir'] = args[0]
         else:
@@ -65,7 +65,7 @@ class MakerBase(usage.Options):
         if len(args) > 1:
             raise usage.UsageError("I wasn't expecting so many arguments")
 
-    def postOptions(self):
+    def postOptions(self) -> None:
         self['basedir'] = os.path.abspath(self['basedir'])
 
 
@@ -76,14 +76,14 @@ class StartOptions(MakerBase):
         ['nodaemon', None, "Don't daemonize (stay in foreground)"],
     ]
 
-    def getSynopsis(self):
+    def getSynopsis(self) -> str:
         return "Usage:    buildbot-worker start [<basedir>]"
 
 
 class StopOptions(MakerBase):
     subcommandFunction = "buildbot_worker.scripts.stop.stop"
 
-    def getSynopsis(self):
+    def getSynopsis(self) -> str:
         return "Usage:    buildbot-worker stop [<basedir>]"
 
 
@@ -94,7 +94,7 @@ class RestartOptions(MakerBase):
         ['nodaemon', None, "Don't daemonize (stay in foreground)"],
     ]
 
-    def getSynopsis(self):
+    def getSynopsis(self) -> str:
         return "Usage:    buildbot-worker restart [<basedir>]"
 
 
@@ -102,35 +102,47 @@ class CreateWorkerOptions(MakerBase):
     subcommandFunction = "buildbot_worker.scripts.create_worker.createWorker"
     optFlags = [
         ["force", "f", "Re-use an existing directory"],
-        ["relocatable", "r",
-         "Create a relocatable buildbot.tac"],
-        ["no-logrotate", "n",
-         "Do not permit buildmaster rotate logs by itself"],
-        ['use-tls', None,
-         "Uses TLS to connect to master"],
-        ['delete-leftover-dirs', None,
-         'Delete folders that are not required by the master on connection'],
+        ["relocatable", "r", "Create a relocatable buildbot.tac"],
+        ["no-logrotate", "n", "Do not permit buildmaster rotate logs by itself"],
+        ['use-tls', None, "Uses TLS to connect to master"],
+        [
+            'delete-leftover-dirs',
+            None,
+            'Delete folders that are not required by the master on connection',
+        ],
     ]
     optParameters = [
-        ["keepalive", "k", 600,
-         "Interval at which keepalives should be sent (in seconds)"],
-        ["umask", None, "None",
-         "controls permissions of generated files. "
-         "Use --umask=0o22 to be world-readable"],
-        ["maxdelay", None, 300,
-         "Maximum time between connection attempts"],
-        ["maxretries", None, 'None',
-         "Maximum number of retries before worker shutdown"],
-        ["numcpus", None, "None",
-         "Number of available cpus to use on a build. "],
-        ["log-size", "s", "10000000",
-         "size at which to rotate twisted log files"],
-        ["log-count", "l", "10",
-         "limit the number of kept old twisted log files "
-         "(None for unlimited)"],
-        ["allow-shutdown", "a", None,
-         "Allows the worker to initiate a graceful shutdown. One of "
-         "'signal' or 'file'"]
+        ["keepalive", "k", 600, "Interval at which keepalives should be sent (in seconds)"],
+        [
+            "umask",
+            None,
+            "None",
+            "controls permissions of generated files. Use --umask=0o22 to be world-readable",
+        ],
+        ["maxdelay", None, 300, "Maximum time between connection attempts"],
+        ["maxretries", None, 'None', "Maximum number of retries before worker shutdown"],
+        ["numcpus", None, "None", "Number of available cpus to use on a build. "],
+        ["log-size", "s", "10000000", "size at which to rotate twisted log files"],
+        [
+            "log-count",
+            "l",
+            "10",
+            "limit the number of kept old twisted log files (None for unlimited)",
+        ],
+        [
+            "allow-shutdown",
+            "a",
+            None,
+            "Allows the worker to initiate a graceful shutdown. One of 'signal' or 'file'",
+        ],
+        ["protocol", None, "pb", "Protocol to be used when creating master-worker connection"],
+        [
+            "connection-string",
+            None,
+            None,
+            "Twisted endpoint connection string (this will override master host[:port])",
+        ],
+        ["proxy-connection-string", None, None, "Address of HTTP proxy to tunnel through"],
     ]
 
     longdesc = textwrap.dedent("""
@@ -146,7 +158,7 @@ class CreateWorkerOptions(MakerBase):
     yourself.
     """)
 
-    def validateMasterArgument(self, master_arg):
+    def validateMasterArgument(self, master_arg: str) -> tuple[str, int]:
         """
         Parse the <master> argument.
 
@@ -158,6 +170,7 @@ class CreateWorkerOptions(MakerBase):
         if master_arg[:5] == "http:":
             raise usage.UsageError("<master> is not a URL - do not use URL")
 
+        port: str | int
         if master_arg.startswith("[") and "]" in master_arg:
             # detect ipv6 address with format [2001:1:2:3:4::1]:4321
             master, port_tmp = master_arg.split("]")
@@ -173,27 +186,25 @@ class CreateWorkerOptions(MakerBase):
         else:
             try:
                 master, port = master_arg.split(":")
-            except ValueError:
-                raise usage.UsageError(("invalid <master> argument '{}', "
-                                        "if it is an ipv6 address, it must be enclosed by []"
-                                        ).format(master_arg))
+            except ValueError as e:
+                raise usage.UsageError(
+                    f"invalid <master> argument '{master_arg}', "
+                    "if it is an ipv6 address, it must be enclosed by []"
+                ) from e
 
         if not master:
-            raise usage.UsageError("invalid <master> argument '{}'".format(
-                                   master_arg))
+            raise usage.UsageError(f"invalid <master> argument '{master_arg}'")
         try:
-            port = int(port)
-        except ValueError:
-            raise usage.UsageError("invalid master port '{}', "
-                                   "needs to be a number".format(port))
+            return master, int(port)
+        except ValueError as e:
+            raise usage.UsageError(f"invalid master port '{port}', needs to be a number") from e
 
-        return master, port
+    def getSynopsis(self) -> str:
+        return (
+            "Usage:    buildbot-worker create-worker [options] <basedir> <master> <name> <passwd>"
+        )
 
-    def getSynopsis(self):
-        return "Usage:    buildbot-worker create-worker " \
-            "[options] <basedir> <master> <name> <passwd>"
-
-    def parseArgs(self, *args):
+    def parseArgs(self, *args: str) -> None:
         if len(args) != 4:
             raise usage.UsageError("incorrect number of arguments")
         basedir, master, name, passwd = args
@@ -202,26 +213,22 @@ class CreateWorkerOptions(MakerBase):
         self['name'] = name
         self['passwd'] = passwd
 
-    def postOptions(self):
+    def postOptions(self) -> None:
         MakerBase.postOptions(self)
 
         # check and convert numeric parameters
         for argument in ["keepalive", "maxdelay", "log-size"]:
             try:
                 self[argument] = int(self[argument])
-            except ValueError:
-                raise usage.UsageError("{} parameter needs to be a number".format(
-                                       argument))
+            except ValueError as e:
+                raise usage.UsageError(f"{argument} parameter needs to be a number") from e
 
         for argument in ["log-count", "maxretries", "umask", "numcpus"]:
-            if not re.match(r'^(0o)?\d+$', self[argument]) and \
-                    self[argument] != 'None':
-                raise usage.UsageError("{} parameter needs to be a number"
-                                    " or None".format(argument))
+            if not re.match(r'^((0o)\d+|0|[1-9]\d*)$', self[argument]) and self[argument] != 'None':
+                raise usage.UsageError(f"{argument} parameter needs to be a number or None")
 
         if self['allow-shutdown'] not in [None, 'signal', 'file']:
-            raise usage.UsageError("allow-shutdown needs to be one of"
-                                   " 'signal' or 'file'")
+            raise usage.UsageError("allow-shutdown needs to be one of 'signal' or 'file'")
 
 
 class Options(usage.Options):
@@ -229,33 +236,37 @@ class Options(usage.Options):
 
     subCommands = [
         # the following are all admin commands
-        ['create-worker', None, CreateWorkerOptions,
-         "Create and populate a directory for a new worker"],
+        [
+            'create-worker',
+            None,
+            CreateWorkerOptions,
+            "Create and populate a directory for a new worker",
+        ],
         ['start', None, StartOptions, "Start a worker"],
         ['stop', None, StopOptions, "Stop a worker"],
-        ['restart', None, RestartOptions,
-         "Restart a worker"],
+        ['restart', None, RestartOptions, "Restart a worker"],
     ]
 
-    def opt_version(self):
-        import buildbot_worker  # pylint: disable=import-outside-toplevel
-        print("worker version: {}".format(buildbot_worker.version))
+    def opt_version(self) -> NoReturn:  # type: ignore[misc]
+        import buildbot_worker  # noqa: PLC0415
+
+        print(f"worker version: {buildbot_worker.version}")
         usage.Options.opt_version(self)
 
-    def opt_verbose(self):
+    def opt_verbose(self) -> None:
         log.startLogging(sys.stderr)
 
-    def postOptions(self):
+    def postOptions(self) -> None:
         if not hasattr(self, 'subOptions'):
             raise usage.UsageError("must specify a command")
 
 
-def run():
+def run() -> NoReturn:
     config = Options()
     try:
         config.parseOptions()
     except usage.error as e:
-        print("{}:  {}".format(sys.argv[0], e))
+        print(f"{sys.argv[0]}:  {e}")
         print()
         c = getattr(config, 'subOptions', config)
         print(str(c))

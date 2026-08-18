@@ -60,7 +60,7 @@ If your SMTP host requires authentication before it allows you to send emails, t
 
 .. note::
 
-   If for some reasons you are not able to send a notification with TLS enabled and specified user name and password, you might want to use :contrib-src:`master/contrib/check_smtp.py` to see if it works at all.
+   If for some reasons you are not able to send a notification with TLS enabled and specified user name and password, you might want to use :src:`master/contrib/check_smtp.py` to see if it works at all.
 
 If you want to require Transport Layer Security (TLS), then you can also set ``useTls``:
 
@@ -114,7 +114,7 @@ Another example of a function delivering a customized HTML email is given below:
         mode=('failing',),
         message_formatter=reporters.MessageFormatter(
             template=template, template_type='html',
-            wantProperties=True, wantSteps=True))
+            want_properties=True, want_steps=True))
 
     mn = reporters.MailNotifier(fromaddr="buildbot@example.org",
                                 sendToInterestedUsers=False,

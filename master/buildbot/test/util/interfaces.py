@@ -12,21 +12,28 @@
 # Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
 # Copyright Buildbot Team Members
-
+from __future__ import annotations
 
 import inspect
-import pkg_resources
+from collections import OrderedDict
+from typing import TYPE_CHECKING
+from typing import Any
 
 import zope.interface.interface
-from twisted.trial import unittest
 from zope.interface.interface import Attribute
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
-class InterfaceTests:
+    from twisted.trial import unittest
 
-    # assertions
+    _InterfaceTestsBase = unittest.TestCase
+else:
+    _InterfaceTestsBase = object
 
-    def assertArgSpecMatches(self, actualMethod, *fakeMethods):
+
+class InterfaceTests(_InterfaceTestsBase):
+    def assertArgSpecMatches(self, actualMethod: Any, *fakeMethods: Any) -> Callable[..., Any]:
         """Usage::
 
             @self.assertArgSpecMatches(obj.methodUnderTest)
@@ -37,39 +44,44 @@ class InterfaceTests:
 
             self.assertArgSpecMatches(obj.methodUnderTest, self.fakeMethod)
         """
-        def filter(spec):
-            # the tricky thing here is to align args and defaults, since the
-            # defaults correspond to the *last* n elements of args.  To make
-            # things easier, we go in reverse, and keep a separate counter for
-            # the defaults
-            args = spec[0]
-            defaults = list(spec[3] if spec[3] is not None else [])
-            di = -1
-            for ai in range(len(args) - 1, -1, -1):
-                arg = args[ai]
-                if arg.startswith('_') or (arg == 'self' and ai == 0):
-                    del args[ai]
-                    if -di <= len(defaults):
-                        del defaults[di]
-                        di += 1
-                di -= 1
 
-            return (args, spec[1], spec[2], defaults or None)
+        def filter(signature: inspect.Signature) -> inspect.Signature:
+            parameters = OrderedDict(signature.parameters)
+            for name in parameters:
+                if name == 'self':
+                    parameters.pop('self')
+                break
 
-        def remove_decorators(func):
+            delete_names = []
+            for name in parameters:
+                if name.startswith('_'):
+                    delete_names.append(name)
+            for name in delete_names:
+                parameters.pop(name)
+
+            # Remove all type annotations
+            # as they can be stored as str when quoted or when `__future__.annotations`
+            # is imported, we can't check whether the types are compatible.
+            # Type checking should be left to a static type checker
+            signature = signature.replace(return_annotation=inspect.Signature.empty)
+            for name, param in parameters.items():
+                parameters[name] = param.replace(annotation=inspect.Parameter.empty)
+
+            signature = signature.replace(parameters=list(parameters.values()))
+            return signature
+
+        def remove_decorators(func: Any) -> Any:
             try:
                 return func.__wrapped__
             except AttributeError:
                 return func
 
-        def filter_argspec(func):
-            return filter(
-                inspect.getfullargspec(remove_decorators(func)))
+        def filter_argspec(func: Any) -> inspect.Signature:
+            return filter(inspect.signature(remove_decorators(func)))
 
-        def assert_same_argspec(expected, actual):
+        def assert_same_argspec(expected: inspect.Signature, actual: inspect.Signature) -> None:
             if expected != actual:
-                msg = "Expected: {}; got: {}".format(inspect.formatargspec(*expected),
-                                                     inspect.formatargspec(*actual))
+                msg = f"Expected: {expected}; got: {actual}"
                 self.fail(msg)
 
         actual_argspec = filter_argspec(actualMethod)
@@ -78,28 +90,21 @@ class InterfaceTests:
             fake_argspec = filter_argspec(fakeMethod)
             assert_same_argspec(actual_argspec, fake_argspec)
 
-        def assert_same_argspec_decorator(decorated):
+        def assert_same_argspec_decorator(decorated: Any) -> Any:
             expected_argspec = filter_argspec(decorated)
             assert_same_argspec(expected_argspec, actual_argspec)
             # The decorated function works as usual.
             return decorated
+
         return assert_same_argspec_decorator
 
-    def assertInterfacesImplemented(self, cls):
+    def assertInterfacesImplemented(self, cls: type) -> None:
         "Given a class, assert that the zope.interface.Interfaces are implemented to specification."
-
-        # see if this version of zope.interface is too old to run these tests
-        zi_vers = pkg_resources.working_set.find(
-            pkg_resources.Requirement.parse('zope.interface')).version
-        if pkg_resources.parse_version(zi_vers) < pkg_resources.parse_version('4.1.1'):
-            raise unittest.SkipTest(
-                "zope.interfaces is too old to run this test")
 
         for interface in zope.interface.implementedBy(cls):
             for attr, template_argspec in interface.namesAndDescriptions():
                 if not hasattr(cls, attr):
-                    msg = ("Expected: {}; to implement: {} as specified in {}"
-                           ).format(repr(cls), attr, repr(interface))
+                    msg = f"Expected: {cls!r}; to implement: {attr} as specified in {interface!r}"
                     self.fail(msg)
                 actual_argspec = getattr(cls, attr)
                 if isinstance(template_argspec, Attribute):
@@ -107,11 +112,11 @@ class InterfaceTests:
                 # else check method signatures
                 while hasattr(actual_argspec, '__wrapped__'):
                     actual_argspec = actual_argspec.__wrapped__
-                actual_argspec = zope.interface.interface.fromMethod(
-                    actual_argspec)
+                actual_argspec = zope.interface.interface.fromMethod(actual_argspec)
 
                 if actual_argspec.getSignatureInfo() != template_argspec.getSignatureInfo():
-                    msg = ("{}: expected: {}; got: {}"
-                           ).format(attr, template_argspec.getSignatureString(),
-                                    actual_argspec.getSignatureString())
+                    msg = (
+                        f"{attr}: expected: {template_argspec.getSignatureString()}; got: "
+                        f"{actual_argspec.getSignatureString()}"
+                    )
                     self.fail(msg)

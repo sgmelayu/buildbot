@@ -11,7 +11,7 @@ Logs connector
     Build steps can have zero or more logs.
     Logs are uniquely identified by name within a step.
 
-    Information about a log, apart from its contents, is represented as a dictionary with the following keys, referred to as a *logdict*:
+    Information about a log, apart from its contents, is represented as a :class:`LogModel` dataclass with the following fields:
 
     * ``id`` (log ID, globally unique)
     * ``stepid`` (step ID, indicating the containing step)
@@ -24,18 +24,18 @@ Logs connector
     Each log has a type that describes how to interpret its contents.
     See the :bb:rtype:`logchunk` resource type for details.
 
-    A log is contains a sequence of newline-separated lines of unicode.
+    A log contains a sequence of newline-separated lines of unicode.
     Log line numbering is zero-based.
 
     Each line must be less than 64k when encoded in UTF-8.
-    Longer lines will be truncated, and a warning logged.
+    Longer lines will be truncated, and a warning will be logged.
 
     Lines are stored internally in "chunks", and optionally compressed, but the implementation hides these details from callers.
 
     .. py:method:: getLog(logid)
 
         :param integer logid: ID of the requested log
-        :returns: logdict via Deferred
+        :returns: :class:`LogModel` or ``None``, via Deferred
 
         Get a log, identified by logid.
 
@@ -44,16 +44,27 @@ Logs connector
         :param integer stepid: ID of the step containing this log
         :param slug: slug of the logfile to retrieve
         :type name: 50-character identifier
-        :returns: logdict via Deferred
+        :returns: :class:`LogModel` or ``None``, via Deferred
 
         Get a log, identified by name within the given step.
 
     .. py:method:: getLogs(stepid)
 
         :param integer stepid: ID of the step containing the desired logs
-        :returns: list of logdicts via Deferred
+        :returns: list of :class:`LogModel` via Deferred
 
         Get all logs within the given step.
+
+    .. py:method:: iter_log_lines(logid, first_line, last_line)
+
+        :param integer logid: ID of the log
+        :param first_line: first line to return
+        :param last_line: last line to return
+        :returns: an AsyncGenerator of the chunks content (as str)
+
+        Get a subset of lines for a logfile.
+
+        yield lines (including line-ending).
 
     .. py:method:: getLogLines(logid, first_line, last_line)
 
@@ -108,7 +119,7 @@ Logs connector
         :returns: Deferred
 
         Compress the given log.
-        This method performs internal optimizations of a log's chunks to reduce the space used and make read operations more efficient.
+        This method performs internal optimizations on a log's chunks to reduce the space used and make read operations more efficient.
         It should only be called for finished logs.
         This method may take some time to complete.
 

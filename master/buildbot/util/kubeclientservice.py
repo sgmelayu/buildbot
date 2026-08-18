@@ -12,34 +12,36 @@
 # Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
 # Copyright Buildbot Team Members
+from __future__ import annotations
 
 import abc
 import base64
 import os
-import time
+from typing import TYPE_CHECKING
+from typing import Any
 
 from twisted.internet import defer
 from twisted.internet import reactor
 from twisted.internet.error import ProcessExitedAlready
+from twisted.logger import Logger
 from twisted.python.failure import Failure
 
 from buildbot import config
-from buildbot.util import asyncSleep
-from buildbot.util.httpclientservice import HTTPClientService
-from buildbot.util.logger import Logger
+from buildbot.util import service
 from buildbot.util.protocol import LineProcessProtocol
-from buildbot.util.service import BuildbotService
 
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
 log = Logger()
 
 
 # this is a BuildbotService, so that it can be started and destroyed.
 # this is needed to implement kubectl proxy lifecycle
-class KubeConfigLoaderBase(BuildbotService):
+class KubeConfigLoaderBase(service.BuildbotService):
     name = "KubeConfig"
 
     @abc.abstractmethod
-    def getConfig(self):
+    def getConfig(self) -> dict[str, Any]:
         """
         @return dictionary with optional params
         {
@@ -54,29 +56,40 @@ class KubeConfigLoaderBase(BuildbotService):
         }
         """
 
-    def getAuthorization(self):
+    def get_master_url(self) -> str:
+        # This function may be called before reconfigService() is called.
+        # The function must be overridden in case getConfig() is not fully setup in such situation.
+        return self.getConfig()["master_url"]
+
+    def getAuthorization(self) -> Any:
         return None
 
-    def __str__(self):
+    def __str__(self) -> str:
         """return unique str for SharedService"""
         # hash is implemented from ComparableMixin
-        return "{}({})".format(self.__class__.__name__, hash(self))
+        return f"{self.__class__.__name__}({hash(self)})"
 
 
 class KubeHardcodedConfig(KubeConfigLoaderBase):
-    def reconfigService(self,
-                        master_url=None,
-                        bearerToken=None,
-                        basicAuth=None,
-                        headers=None,
-                        cert=None,
-                        verify=None,
-                        namespace="default"):
-        self.config = {'master_url': master_url, 'namespace': namespace, 'headers': {}}
+    def reconfigService(  # type: ignore[override]
+        self,
+        master_url: str | None = None,
+        bearerToken: Any = None,
+        basicAuth: Any = None,
+        headers: dict[str, str] | None = None,
+        cert: Any = None,
+        verify: Any = None,
+        namespace: str = "default",
+    ) -> None:
+        self.config: dict[str, Any] = {
+            'master_url': master_url,
+            'namespace': namespace,
+            'headers': {},
+        }
         if headers is not None:
             self.config['headers'] = headers
         if basicAuth and bearerToken:
-            raise Exception("set one of basicAuth and bearerToken, not both")
+            raise RuntimeError("set one of basicAuth and bearerToken, not both")
         self.basicAuth = basicAuth
         self.bearerToken = bearerToken
         if cert is not None:
@@ -84,60 +97,63 @@ class KubeHardcodedConfig(KubeConfigLoaderBase):
         if verify is not None:
             self.config['verify'] = verify
 
-    checkConfig = reconfigService
+    checkConfig = reconfigService  # type: ignore[assignment]
 
     @defer.inlineCallbacks
-    def getAuthorization(self):
+    def getAuthorization(self) -> InlineCallbacksType[str | None]:
         if self.basicAuth is not None:
             basicAuth = yield self.renderSecrets(self.basicAuth)
-            authstring = "{user}:{password}".format(**basicAuth).encode('utf-8')
+            authstring = f"{basicAuth['user']}:{basicAuth['password']}".encode()
             encoded = base64.b64encode(authstring)
-            return defer.returnValue("Basic {0}".format(encoded))
+            return f"Basic {encoded}"  # type: ignore[str-bytes-safe]
 
         if self.bearerToken is not None:
             bearerToken = yield self.renderSecrets(self.bearerToken)
-            return defer.returnValue("Bearer {0}".format(bearerToken))
+            return f"Bearer {bearerToken}"
 
-        return defer.returnValue(None)
+        return None
 
-    def getConfig(self):
+    def getConfig(self) -> dict[str, Any]:
         return self.config
 
 
 class KubeCtlProxyConfigLoader(KubeConfigLoaderBase):
-    """ We use kubectl proxy to connect to kube master.
+    """We use kubectl proxy to connect to kube master.
     Parsing the config and setting up SSL is complex.
     So for now, we use kubectl proxy to load the config and connect to master.
     This will run the kube proxy as a subprocess, and return configuration with
     http://localhost:PORT
     """
+
     kube_ctl_proxy_cmd = ['kubectl', 'proxy']  # for tests override
 
     class LocalPP(LineProcessProtocol):
-        def __init__(self):
+        def __init__(self) -> None:
             super().__init__()
-            self.got_output_deferred = defer.Deferred()
-            self.terminated_deferred = defer.Deferred()
+            self.got_output_deferred: defer.Deferred[bytes] = defer.Deferred()
+            self.terminated_deferred: defer.Deferred[None] = defer.Deferred()
             self.first_line = b""
 
-        def outLineReceived(self, line):
+        def outLineReceived(self, line: bytes) -> None:
             if not self.got_output_deferred.called:
                 self.got_output_deferred.callback(line)
 
-        def errLineReceived(self, line):
+        def errLineReceived(self, line: bytes) -> None:
             if not self.got_output_deferred.called:
                 self.got_output_deferred.errback(Failure(RuntimeError(line)))
 
-        def processEnded(self, status):
+        def processEnded(self, status: Failure) -> None:
             super().processEnded(status)
             self.terminated_deferred.callback(None)
 
-    def checkConfig(self, proxy_port=8001, namespace="default"):
-        self.pp = None
-        self.process = None
+    def checkConfig(self, proxy_port: int = 8001, namespace: str = "default") -> None:  # type: ignore[override]
+        self.proxy_port = proxy_port
+        self.namespace = namespace
+        self.pp: KubeCtlProxyConfigLoader.LocalPP | None = None
+        self.process: Any = None
 
     @defer.inlineCallbacks
-    def ensureSubprocessKilled(self):
+    def ensure_subprocess_killed(self) -> InlineCallbacksType[None]:
         if self.pp is not None:
             try:
                 self.process.signalProcess("TERM")
@@ -146,26 +162,43 @@ class KubeCtlProxyConfigLoader(KubeConfigLoaderBase):
             yield self.pp.terminated_deferred
 
     @defer.inlineCallbacks
-    def reconfigService(self, proxy_port=8001, namespace="default"):
+    def reconfigService(
+        self, proxy_port: int = 8001, namespace: str = "default"
+    ) -> InlineCallbacksType[None]:
         self.proxy_port = proxy_port
         self.namespace = namespace
-        yield self.ensureSubprocessKilled()
+
+        if self.running:
+            yield self.ensure_subprocess_killed()
+            yield self.start_subprocess()
+
+    @defer.inlineCallbacks
+    def start_subprocess(self) -> InlineCallbacksType[None]:
         self.pp = self.LocalPP()
-        self.process = reactor.spawnProcess(
+        self.process = reactor.spawnProcess(  # type: ignore[attr-defined]
             self.pp,
             self.kube_ctl_proxy_cmd[0],
-            self.kube_ctl_proxy_cmd + ["-p", str(self.proxy_port)],
-            env=None)
+            [*self.kube_ctl_proxy_cmd, "-p", str(self.proxy_port)],
+            env=os.environ,
+        )
         self.kube_proxy_output = yield self.pp.got_output_deferred
 
-    def stopService(self):
-        return self.ensureSubprocessKilled()
+    @defer.inlineCallbacks
+    def startService(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        try:
+            yield self.start_subprocess()
+        except Exception:
+            yield self.ensure_subprocess_killed()
+            raise
+        yield super().startService()
 
-    def getConfig(self):
-        return {
-            'master_url': "http://localhost:{}".format(self.proxy_port),
-            'namespace': self.namespace
-        }
+    @defer.inlineCallbacks
+    def stopService(self) -> InlineCallbacksType[None]:
+        yield self.ensure_subprocess_killed()
+        yield super().stopService()
+
+    def getConfig(self) -> dict[str, Any]:
+        return {'master_url': f"http://localhost:{self.proxy_port}", 'namespace': self.namespace}
 
 
 class KubeInClusterConfigLoader(KubeConfigLoaderBase):
@@ -175,105 +208,80 @@ class KubeInClusterConfigLoader(KubeConfigLoaderBase):
     kube_token_file = os.path.join(kube_dir, 'token')
     kube_cert_file = os.path.join(kube_dir, 'ca.crt')
 
-    def checkConfig(self):
+    def checkConfig(self) -> None:  # type: ignore[override]
         if not os.path.exists(self.kube_dir):
-            config.error(
-                "Not in kubernetes cluster (kube_dir not found: {})".format(
-                    self.kube_dir))
+            config.error(f"Not in kubernetes cluster (kube_dir not found: {self.kube_dir})")
 
-    def reconfigService(self):
-        self.config = {}
-        self.config['master_url'] = os.environ['KUBERNETES_PORT'].replace(
-            'tcp', 'https')
+    def reconfigService(self) -> None:  # type: ignore[override]
+        self.config: dict[str, Any] = {}
+        self.config['master_url'] = self.get_master_url()
         self.config['verify'] = self.kube_cert_file
         with open(self.kube_token_file, encoding="utf-8") as token_content:
             token = token_content.read().strip()
-            self.config['headers'] = {
-                'Authorization': 'Bearer {0}'.format(token)
-            }
+            self.config['headers'] = {'Authorization': f'Bearer {token}'.format(token)}
         with open(self.kube_namespace_file, encoding="utf-8") as namespace_content:
             self.config['namespace'] = namespace_content.read().strip()
 
-    def getConfig(self):
+    def getConfig(self) -> dict[str, Any]:
         return self.config
 
-
-class KubeError(RuntimeError):
-    def __init__(self, response_json):
-        super().__init__(response_json['message'])
-        self.json = response_json
-        self.reason = response_json.get('reason')
+    def get_master_url(self) -> str:
+        return os.environ["KUBERNETES_PORT"].replace("tcp", "https")
 
 
-class KubeClientService(HTTPClientService):
-    def __init__(self, kube_config=None):
-        self.config = kube_config
-        super().__init__('')
-        self._namespace = None
-        kube_config.setServiceParent(self)
+class KubeClientService(service.SharedService):
+    name: str | None = "KubeClientService"  # type: ignore[assignment]
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._config_id_to_workers: dict[int, list[str]] = {}
+        self._worker_to_config: dict[str, KubeConfigLoaderBase] = {}
+        self._lock = defer.DeferredLock()
 
     @defer.inlineCallbacks
-    def _prepareRequest(self, ep, kwargs):
-        config = self.config.getConfig()
-        self._base_url = config['master_url']
-        url, req_kwargs = super()._prepareRequest(ep, kwargs)
-
-        if 'headers' not in req_kwargs:
-            req_kwargs['headers'] = {}
-        if 'headers' in config:
-            req_kwargs['headers'].update(config['headers'])
-
-        auth = yield self.config.getAuthorization()
-        if auth is not None:
-            req_kwargs['headers']['Authorization'] = auth
-
-        # warning: this only works with txrequests! not treq
-        for arg in ['cert', 'verify']:
-            if arg in config:
-                req_kwargs[arg] = config[arg]
-
-        return defer.returnValue((url, req_kwargs))
+    def register(self, worker: Any, config: KubeConfigLoaderBase) -> InlineCallbacksType[None]:
+        yield self._lock.acquire()
+        try:
+            if worker.name in self._worker_to_config:
+                raise ValueError(f"Worker {worker.name} registered multiple times")
+            self._worker_to_config[worker.name] = config
+            config_id = id(config)
+            if config_id in self._config_id_to_workers:
+                self._config_id_to_workers[config_id].append(worker.name)
+            else:
+                self._config_id_to_workers[config_id] = [worker.name]
+                yield config.setServiceParent(self)
+        finally:
+            self._lock.release()
 
     @defer.inlineCallbacks
-    def createPod(self, namespace, spec):
-        url = '/api/v1/namespaces/{namespace}/pods'.format(namespace=namespace)
-        res = yield self.post(url, json=spec)
-        res_json = yield res.json()
-        if res.code not in (200, 201, 202):
-            raise KubeError(res_json)
-        defer.returnValue(res_json)
+    def unregister(self, worker: Any) -> InlineCallbacksType[None]:
+        yield self._lock.acquire()
+        try:
+            if worker.name not in self._worker_to_config:
+                raise ValueError(f"Worker {worker.name} was not registered")
+            config = self._worker_to_config.pop(worker.name)
+            config_id = id(config)
+            worker_list = self._config_id_to_workers[config_id]
+            worker_list.remove(worker.name)
+            if not worker_list:
+                del self._config_id_to_workers[config_id]
+                yield config.disownServiceParent()
+        finally:
+            self._lock.release()
 
     @defer.inlineCallbacks
-    def deletePod(self, namespace, name, graceperiod=0):
-        url = '/api/v1/namespaces/{namespace}/pods/{name}'.format(
-            namespace=namespace, name=name)
-        res = yield self.delete(url, params={'graceperiod': graceperiod})
-        res_json = yield res.json()
-        if res.code != 200:
-            raise KubeError(res_json)
-        defer.returnValue(res_json)
+    def startService(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        yield self._lock.acquire()
+        try:
+            yield super().startService()
+        finally:
+            self._lock.release()
 
     @defer.inlineCallbacks
-    def waitForPodDeletion(self, namespace, name, timeout):
-        t1 = time.time()
-        url = '/api/v1/namespaces/{namespace}/pods/{name}/status'.format(
-            namespace=namespace, name=name)
-        while True:
-            if time.time() - t1 > timeout:
-                raise TimeoutError(
-                    "Did not see pod {name} terminate after {timeout}s".format(
-                        name=name, timeout=timeout))
-            res = yield self.get(url)
-            res_json = yield res.json()
-            if res.code == 404:
-                break  # 404 means the pod has terminated
-            if res.code != 200:
-                raise KubeError(res_json)
-            yield asyncSleep(1)
-        defer.returnValue(res_json)
-
-    @property
-    def namespace(self):
-        if self._namespace is None:
-            self._namespace = self.config.getConfig()['namespace']
-        return self._namespace
+    def stopService(self) -> InlineCallbacksType[None]:
+        yield self._lock.acquire()
+        try:
+            yield super().stopService()
+        finally:
+            self._lock.release()

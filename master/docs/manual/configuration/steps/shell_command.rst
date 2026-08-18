@@ -26,6 +26,13 @@ You can also specify the command with a single string, in which case the string 
 On Windows, commands are run via ``cmd.exe /c`` which works well.
 However, if you're running a batch file, the error level does not get propagated correctly unless you add 'call' before your batch file's name: ``cmd=['call', 'myfile.bat', ...]``.
 
+``ShellCommand`` includes all sub-processes created by the command in ``JobObject``. This ensures
+that all child processes are managed together with the parent process. When the main command is
+terminated, all sub-processes are also terminated automatically, preventing any orphaned processes.
+This enhancement aligns the behavior of Windows systems with POSIX systems, where similar process
+management has been in place.
+
+
 The :bb:step:`ShellCommand` arguments are:
 
 ``command``
@@ -159,6 +166,10 @@ The :bb:step:`ShellCommand` arguments are:
     If the command takes longer than this many seconds, it will be killed.
     This is disabled by default.
 
+``max_lines``
+    If the command outputs more lines than this maximum lines, it will be killed.
+    This is disabled by default.
+
 ``logEnviron``
     If ``True`` (the default), then the step's logfile will describe the environment variables on the worker.
     In situations where the environment is not relevant and is long, it may be easier to set it to ``False``.
@@ -170,7 +181,6 @@ The :bb:step:`ShellCommand` arguments are:
     This functionality requires a version 0.8.6 worker or newer.
 
 ``sigtermTime``
-
     If set, when interrupting, try to kill the command with SIGTERM and wait for sigtermTime seconds before firing ``interuptSignal``.
     If None, ``interruptSignal`` will be fired immediately upon interrupt.
 

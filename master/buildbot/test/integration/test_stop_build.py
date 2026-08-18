@@ -14,58 +14,58 @@
 # Copyright Buildbot Team Members
 
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from typing import Any
+
 from twisted.internet import defer
 
 from buildbot.test.util.integration import RunMasterBase
 
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
+
 
 class ShellMaster(RunMasterBase):
+    @defer.inlineCallbacks
+    def setup_config(self) -> InlineCallbacksType[None]:
+        c = {}
+        from buildbot.config import BuilderConfig  # noqa: PLC0415
+        from buildbot.plugins import schedulers  # noqa: PLC0415
+        from buildbot.plugins import steps  # noqa: PLC0415
+        from buildbot.process.factory import BuildFactory  # noqa: PLC0415
+
+        c['schedulers'] = [
+            schedulers.AnyBranchScheduler(name="sched", builderNames=["testy"]),
+            schedulers.ForceScheduler(name="force", builderNames=["testy"]),
+        ]
+
+        f = BuildFactory()
+        f.addStep(steps.ShellCommand(command='sleep 100', name='sleep'))
+        c['builders'] = [BuilderConfig(name="testy", workernames=["local1"], factory=f)]
+        yield self.setup_master(c)
 
     @defer.inlineCallbacks
-    def test_shell(self):
-        yield self.setupConfig(masterConfig())
+    def test_shell(self) -> InlineCallbacksType[None]:
+        yield self.setup_config()
 
         @defer.inlineCallbacks
-        def newStepCallback(_, data):
+        def newStepCallback(_: tuple[str, ...], data: dict[str, Any]) -> InlineCallbacksType[None]:
             # when the sleep step start, we kill it
             if data['name'] == 'sleep':
                 brs = yield self.master.data.get(('buildrequests',))
                 brid = brs[-1]['buildrequestid']
                 self.master.data.control(
-                    'cancel', {'reason': 'cancelled by test'}, ('buildrequests', brid))
+                    'cancel', {'reason': 'cancelled by test'}, ('buildrequests', brid)
+                )
 
-        yield self.master.mq.startConsuming(
-            newStepCallback,
-            ('steps', None, 'new'))
+        yield self.master.mq.startConsuming(newStepCallback, ('steps', None, 'new'))
 
         build = yield self.doForceBuild(wantSteps=True, wantLogs=True, wantProperties=True)
         self.assertEqual(build['buildid'], 1)
 
         # make sure the cancel reason is transferred all the way to the step log
-        cancel_log = build['steps'][1]['logs'][-1]
-        self.assertEqual(cancel_log['name'], 'cancelled')
-        self.assertIn('cancelled by test', cancel_log['contents']['content'])
-
-
-# master configuration
-def masterConfig():
-    c = {}
-    from buildbot.config import BuilderConfig
-    from buildbot.process.factory import BuildFactory
-    from buildbot.plugins import steps, schedulers
-
-    c['schedulers'] = [
-        schedulers.AnyBranchScheduler(
-            name="sched",
-            builderNames=["testy"]),
-        schedulers.ForceScheduler(
-            name="force",
-            builderNames=["testy"])]
-
-    f = BuildFactory()
-    f.addStep(steps.ShellCommand(command='sleep 100', name='sleep'))
-    c['builders'] = [
-        BuilderConfig(name="testy",
-                      workernames=["local1"],
-                      factory=f)]
-    return c
+        cancel_logs = [log for log in build['steps'][1]["logs"] if log["name"] == "cancelled"]
+        self.assertEqual(len(cancel_logs), 1)
+        self.assertIn('cancelled by test', cancel_logs[0]['contents']['content'])

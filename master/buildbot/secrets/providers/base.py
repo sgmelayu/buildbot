@@ -16,18 +16,21 @@
 secret provider interface
 """
 
+from __future__ import annotations
+
 import abc
+from typing import Any
 
 from buildbot.util.service import BuildbotService
 
 
 class SecretProviderBase(BuildbotService):
     """
-        Secret provider base
+    Secret provider base
     """
 
     @abc.abstractmethod
-    def get(self, *args, **kwargs):
+    def get(self, *args: Any, **kwargs: Any) -> Any:
         """
         this should be an abstract method
         """

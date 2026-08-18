@@ -13,10 +13,12 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from unittest import mock
+
 from parameterized import parameterized
-
-import mock
-
 from twisted.internet import defer
 from twisted.trial import unittest
 
@@ -28,13 +30,15 @@ from buildbot.locks import RealWorkerLock
 from buildbot.locks import WorkerLock
 from buildbot.util.eventual import flushEventualQueue
 
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
+
 
 class Requester:
     pass
 
 
 class BaseLockTests(unittest.TestCase):
-
     @parameterized.expand([
         ('counting', 0, 0),
         ('counting', 0, 1),
@@ -48,7 +52,7 @@ class BaseLockTests(unittest.TestCase):
         ('counting', 3, 3),
         ('exclusive', 1, 1),
     ])
-    def test_is_available_empty(self, mode, count, maxCount):
+    def test_is_available_empty(self, mode: str, count: int, maxCount: int) -> None:
         req = Requester()
         lock = BaseLock('test', maxCount=maxCount)
         access = mock.Mock(spec=LockAccess)
@@ -70,7 +74,7 @@ class BaseLockTests(unittest.TestCase):
         ('counting', 3, 3),
         ('exclusive', 1, 1),
     ])
-    def test_is_available_without_waiter(self, mode, count, maxCount):
+    def test_is_available_without_waiter(self, mode: str, count: int, maxCount: int) -> None:
         req = Requester()
         req_waiter = Requester()
 
@@ -90,7 +94,7 @@ class BaseLockTests(unittest.TestCase):
         ('counting', 3, 3),
         ('exclusive', 1, 1),
     ])
-    def test_is_available_with_waiter(self, mode, count, maxCount):
+    def test_is_available_with_waiter(self, mode: str, count: int, maxCount: int) -> None:
         req = Requester()
         req_waiter = Requester()
 
@@ -116,7 +120,7 @@ class BaseLockTests(unittest.TestCase):
         ('counting', 3, 3),
         ('exclusive', 1, 1),
     ])
-    def test_is_available_with_multiple_waiters(self, mode, count, maxCount):
+    def test_is_available_with_multiple_waiters(self, mode: str, count: int, maxCount: int) -> None:
         req = Requester()
         req_waiter1 = Requester()
         req_waiter2 = Requester()
@@ -146,7 +150,7 @@ class BaseLockTests(unittest.TestCase):
         self.assertTrue(lock.isAvailable(req_waiter1, access))
         self.assertTrue(lock.isAvailable(req_waiter2, access))
 
-    def test_is_available_with_multiple_waiters_multiple_counting(self):
+    def test_is_available_with_multiple_waiters_multiple_counting(self) -> None:
         req1 = Requester()
         req2 = Requester()
         req_waiter1 = Requester()
@@ -191,7 +195,7 @@ class BaseLockTests(unittest.TestCase):
         self.assertTrue(lock.isAvailable(req_waiter2, access))
         self.assertTrue(lock.isAvailable(req_waiter3, access))
 
-    def test_is_available_with_mult_waiters_mult_counting_set_maxCount(self):
+    def test_is_available_with_mult_waiters_mult_counting_set_maxCount(self) -> None:
         req1 = Requester()
         req2 = Requester()
         req_waiter1 = Requester()
@@ -253,8 +257,9 @@ class BaseLockTests(unittest.TestCase):
         ('counting', 3, 3),
         ('exclusive', 1, 1),
     ])
-    def test_duplicate_wait_until_maybe_available_throws(self, mode, count,
-            maxCount):
+    def test_duplicate_wait_until_maybe_available_throws(
+        self, mode: str, count: int, maxCount: int
+    ) -> None:
         req = Requester()
         req_waiter = Requester()
 
@@ -275,8 +280,9 @@ class BaseLockTests(unittest.TestCase):
         ('counting', 3, 3),
         ('exclusive', 1, 1),
     ])
-    def test_stop_waiting_ensures_deferred_was_previous_result_of_wait(self,
-            mode, count, maxCount):
+    def test_stop_waiting_ensures_deferred_was_previous_result_of_wait(
+        self, mode: str, count: int, maxCount: int
+    ) -> None:
         req = Requester()
         req_waiter = Requester()
 
@@ -289,7 +295,7 @@ class BaseLockTests(unittest.TestCase):
 
         lock.waitUntilMaybeAvailable(req_waiter, access)
         with self.assertRaises(AssertionError):
-            wrong_d = defer.Deferred()
+            wrong_d: defer.Deferred[None] = defer.Deferred()
             lock.stopWaitingUntilAvailable(req_waiter, access, wrong_d)
 
         lock.release(req, access)
@@ -300,8 +306,9 @@ class BaseLockTests(unittest.TestCase):
         ('counting', 3, 3),
         ('exclusive', 1, 1),
     ])
-    def test_stop_waiting_fires_deferred_if_not_woken(self, mode, count,
-            maxCount):
+    def test_stop_waiting_fires_deferred_if_not_woken(
+        self, mode: str, count: int, maxCount: int
+    ) -> None:
         req = Requester()
         req_waiter = Requester()
 
@@ -324,8 +331,9 @@ class BaseLockTests(unittest.TestCase):
         ('exclusive', 1, 1),
     ])
     @defer.inlineCallbacks
-    def test_stop_waiting_does_not_fire_deferred_if_already_woken(self, mode,
-            count, maxCount):
+    def test_stop_waiting_does_not_fire_deferred_if_already_woken(
+        self, mode: str, count: int, maxCount: int
+    ) -> InlineCallbacksType[None]:
         req = Requester()
         req_waiter = Requester()
 
@@ -350,8 +358,9 @@ class BaseLockTests(unittest.TestCase):
         ('counting', 3, 3),
         ('exclusive', 1, 1),
     ])
-    def test_stop_waiting_does_not_raise_after_release(self, mode, count,
-            maxCount):
+    def test_stop_waiting_does_not_raise_after_release(
+        self, mode: str, count: int, maxCount: int
+    ) -> None:
         req = Requester()
         req_waiter = Requester()
 
@@ -377,7 +386,9 @@ class BaseLockTests(unittest.TestCase):
         ('counting', 3, 3),
         ('exclusive', 1, 1),
     ])
-    def test_stop_waiting_removes_non_called_waiter(self, mode, count, maxCount):
+    def test_stop_waiting_removes_non_called_waiter(
+        self, mode: str, count: int, maxCount: int
+    ) -> InlineCallbacksType[None]:
         req = Requester()
         req_waiter1 = Requester()
         req_waiter2 = Requester()
@@ -416,8 +427,9 @@ class BaseLockTests(unittest.TestCase):
         ('exclusive', 1, 1),
     ])
     @defer.inlineCallbacks
-    def test_stop_waiting_wakes_up_next_deferred_if_already_woken(self, mode,
-            count, maxCount):
+    def test_stop_waiting_wakes_up_next_deferred_if_already_woken(
+        self, mode: str, count: int, maxCount: int
+    ) -> InlineCallbacksType[None]:
         req = Requester()
         req_waiter1 = Requester()
         req_waiter2 = Requester()
@@ -447,7 +459,9 @@ class BaseLockTests(unittest.TestCase):
         ('counting', 3, 3),
         ('exclusive', 1, 1),
     ])
-    def test_can_release_non_waited_lock(self, mode, count, maxCount):
+    def test_can_release_non_waited_lock(
+        self, mode: str, count: int, maxCount: int
+    ) -> InlineCallbacksType[None]:
         req = Requester()
         req_not_waited = Requester()
 
@@ -471,8 +485,9 @@ class BaseLockTests(unittest.TestCase):
         ('exclusive', 'exclusive', 1, 1, 1),
     ])
     @defer.inlineCallbacks
-    def test_release_calls_waiters_in_fifo_order(self, mode1, mode2, count1,
-            count2, maxCount):
+    def test_release_calls_waiters_in_fifo_order(
+        self, mode1: str, mode2: str, count1: int, count2: int, maxCount: int
+    ) -> InlineCallbacksType[None]:
         req = Requester()
 
         req_waiters = [Requester() for _ in range(5)]
@@ -489,8 +504,10 @@ class BaseLockTests(unittest.TestCase):
         expected_called = [False] * 5
 
         lock.claim(req, access1)
-        deferreds = [lock.waitUntilMaybeAvailable(req_waiter, access)
-                     for req_waiter, access in zip(req_waiters, accesses)]
+        deferreds = [
+            lock.waitUntilMaybeAvailable(req_waiter, access)
+            for req_waiter, access in zip(req_waiters, accesses)
+        ]
         self.assertEqual([d.called for d in deferreds], expected_called)
 
         lock.release(req, access1)
@@ -515,10 +532,12 @@ class BaseLockTests(unittest.TestCase):
         lock.release(req_waiters[4], accesses[4])
 
     @parameterized.expand([
-        (1, ),
+        (1,),
     ])
     @defer.inlineCallbacks
-    def test_release_calls_multiple_waiters_on_release(self, count):
+    def test_release_calls_multiple_waiters_on_release(
+        self, count: int
+    ) -> InlineCallbacksType[None]:
         req = Requester()
 
         req_waiters = [Requester() for _ in range(5)]
@@ -532,8 +551,9 @@ class BaseLockTests(unittest.TestCase):
         access_excl.count = 1
 
         lock.claim(req, access_excl)
-        deferreds = [lock.waitUntilMaybeAvailable(req_waiter, access_counting)
-                     for req_waiter in req_waiters]
+        deferreds = [
+            lock.waitUntilMaybeAvailable(req_waiter, access_counting) for req_waiter in req_waiters
+        ]
         self.assertEqual([d.called for d in deferreds], [False] * 5)
 
         lock.release(req, access_excl)
@@ -545,8 +565,9 @@ class BaseLockTests(unittest.TestCase):
         (1, 1),
     ])
     @defer.inlineCallbacks
-    def test_release_calls_multiple_waiters_on_setMaxCount(self, count,
-            maxCount):
+    def test_release_calls_multiple_waiters_on_setMaxCount(
+        self, count: int, maxCount: int
+    ) -> InlineCallbacksType[None]:
         req = Requester()
 
         req_waiters = [Requester() for _ in range(5)]
@@ -557,8 +578,9 @@ class BaseLockTests(unittest.TestCase):
         access_counting.count = count
 
         lock.claim(req, access_counting)
-        deferreds = [lock.waitUntilMaybeAvailable(req_waiter, access_counting)
-                     for req_waiter in req_waiters]
+        deferreds = [
+            lock.waitUntilMaybeAvailable(req_waiter, access_counting) for req_waiter in req_waiters
+        ]
         self.assertEqual([d.called for d in deferreds], [False] * 5)
 
         lock.release(req, access_counting)
@@ -577,8 +599,7 @@ class BaseLockTests(unittest.TestCase):
         (4, 4),
         (5, 5),
     ])
-    def test_exclusive_must_have_count_one(self, count,
-            maxCount):
+    def test_exclusive_must_have_count_one(self, count: int, maxCount: int) -> None:
         req = Requester()
 
         lock = BaseLock('test', maxCount=maxCount)
@@ -600,9 +621,7 @@ class BaseLockTests(unittest.TestCase):
         (2, 3),
         (3, 3),
     ])
-    def test_counting_count_zero_always_succeeds(self, count,
-            maxCount):
-
+    def test_counting_count_zero_always_succeeds(self, count: int, maxCount: int) -> None:
         reqs = [Requester() for _ in range(10)]
         req_waiters = [Requester() for _ in range(10)]
         req_nonzero = Requester()
@@ -635,9 +654,7 @@ class BaseLockTests(unittest.TestCase):
         (3, 1),
         (3, 2),
     ])
-    def test_count_cannot_be_larger_than_maxcount(self, count,
-            maxCount):
-
+    def test_count_cannot_be_larger_than_maxcount(self, count: int, maxCount: int) -> None:
         req = Requester()
 
         lock = BaseLock('test', maxCount=maxCount)
@@ -657,9 +674,7 @@ class BaseLockTests(unittest.TestCase):
         (2, 3, 5),
         (2, 3, 6),
     ])
-    def test_different_counts_below_limit(self, count1, count2,
-            maxCount):
-
+    def test_different_counts_below_limit(self, count1: int, count2: int, maxCount: int) -> None:
         req1 = Requester()
         req2 = Requester()
 
@@ -688,9 +703,7 @@ class BaseLockTests(unittest.TestCase):
         (2, 3, 4),
         (2, 4, 4),
     ])
-    def test_different_counts_over_limit(self, count1, count2,
-            maxCount):
-
+    def test_different_counts_over_limit(self, count1: int, count2: int, maxCount: int) -> None:
         req1 = Requester()
         req2 = Requester()
 
@@ -709,8 +722,7 @@ class BaseLockTests(unittest.TestCase):
 
 
 class RealLockTests(unittest.TestCase):
-
-    def test_master_lock_init_from_lockid(self):
+    def test_master_lock_init_from_lockid(self) -> None:
         lock = RealMasterLock('lock1')
         lock.updateFromLockId(MasterLock('lock1', maxCount=3), 0)
 
@@ -718,7 +730,7 @@ class RealLockTests(unittest.TestCase):
         self.assertEqual(lock.maxCount, 3)
         self.assertEqual(lock.description, '<MasterLock(lock1, 3)>')
 
-    def test_master_lock_update_from_lockid(self):
+    def test_master_lock_update_from_lockid(self) -> None:
         lock = RealMasterLock('lock1')
         lock.updateFromLockId(MasterLock('lock1', maxCount=3), 0)
         lock.updateFromLockId(MasterLock('lock1', maxCount=4), 0)
@@ -730,7 +742,7 @@ class RealLockTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             lock.updateFromLockId(MasterLock('lock2', maxCount=4), 0)
 
-    def test_worker_lock_init_from_lockid(self):
+    def test_worker_lock_init_from_lockid(self) -> None:
         lock = RealWorkerLock('lock1')
         lock.updateFromLockId(WorkerLock('lock1', maxCount=3), 0)
 
@@ -741,13 +753,11 @@ class RealLockTests(unittest.TestCase):
         worker_lock = lock.getLockForWorker('worker1')
         self.assertEqual(worker_lock.lockName, 'lock1')
         self.assertEqual(worker_lock.maxCount, 3)
-        self.assertTrue(worker_lock.description.startswith(
-            '<WorkerLock(lock1, 3)[worker1]'))
+        self.assertTrue(worker_lock.description.startswith('<WorkerLock(lock1, 3)[worker1]'))
 
-    def test_worker_lock_init_from_lockid_count_for_worker(self):
+    def test_worker_lock_init_from_lockid_count_for_worker(self) -> None:
         lock = RealWorkerLock('lock1')
-        lock.updateFromLockId(WorkerLock('lock1', maxCount=3,
-                                         maxCountForWorker={'worker2': 5}), 0)
+        lock.updateFromLockId(WorkerLock('lock1', maxCount=3, maxCountForWorker={'worker2': 5}), 0)
 
         self.assertEqual(lock.lockName, 'lock1')
         self.assertEqual(lock.maxCount, 3)
@@ -757,7 +767,7 @@ class RealLockTests(unittest.TestCase):
         worker_lock = lock.getLockForWorker('worker2')
         self.assertEqual(worker_lock.maxCount, 5)
 
-    def test_worker_lock_update_from_lockid(self):
+    def test_worker_lock_update_from_lockid(self) -> None:
         lock = RealWorkerLock('lock1')
         lock.updateFromLockId(WorkerLock('lock1', maxCount=3), 0)
 
@@ -772,8 +782,7 @@ class RealLockTests(unittest.TestCase):
 
         self.assertEqual(worker_lock.lockName, 'lock1')
         self.assertEqual(worker_lock.maxCount, 5)
-        self.assertTrue(worker_lock.description.startswith(
-            '<WorkerLock(lock1, 5)[worker1]'))
+        self.assertTrue(worker_lock.description.startswith('<WorkerLock(lock1, 5)[worker1]'))
 
         with self.assertRaises(AssertionError):
             lock.updateFromLockId(WorkerLock('lock2', maxCount=4), 0)
@@ -789,30 +798,28 @@ class RealLockTests(unittest.TestCase):
         (False, False, False),
     ])
     def test_worker_lock_update_from_lockid_count_for_worker(
-            self, acquire_before, worker_count_before, worker_count_after):
-
-        max_count_before = {}
+        self, acquire_before: bool, worker_count_before: bool, worker_count_after: bool
+    ) -> None:
+        max_count_before: dict[str, int] = {}
         if worker_count_before:
             max_count_before = {'worker1': 5}
-        max_count_after = {}
+        max_count_after: dict[str, int] = {}
         if worker_count_after:
             max_count_after = {'worker1': 7}
 
         lock = RealWorkerLock('lock1')
-        lock.updateFromLockId(WorkerLock('lock1', maxCount=3,
-                                         maxCountForWorker=max_count_before), 0)
+        lock.updateFromLockId(
+            WorkerLock('lock1', maxCount=3, maxCountForWorker=max_count_before), 0
+        )
 
         if acquire_before:
             worker_lock = lock.getLockForWorker('worker1')
-            self.assertEqual(worker_lock.maxCount,
-                             5 if worker_count_before else 3)
+            self.assertEqual(worker_lock.maxCount, 5 if worker_count_before else 3)
 
-        lockid = WorkerLock('lock1', maxCount=4,
-                            maxCountForWorker=max_count_after)
+        lockid = WorkerLock('lock1', maxCount=4, maxCountForWorker=max_count_after)
         lock.updateFromLockId(lockid, 0)
 
         if not acquire_before:
             worker_lock = lock.getLockForWorker('worker1')
 
-        self.assertEqual(worker_lock.maxCount,
-                         7 if worker_count_after else 4)
+        self.assertEqual(worker_lock.maxCount, 7 if worker_count_after else 4)

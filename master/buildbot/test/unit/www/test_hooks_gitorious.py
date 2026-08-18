@@ -14,13 +14,20 @@
 # Copyright Buildbot Team Members
 
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from twisted.internet import defer
 from twisted.trial import unittest
 
 from buildbot.test.fake.web import FakeRequest
 from buildbot.test.fake.web import fakeMasterForHooks
-from buildbot.test.util.misc import TestReactorMixin
+from buildbot.test.reactor import TestReactorMixin
 from buildbot.www import change_hook
+
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
 
 # Sample Gitorious commit payload
 # source: http://gitorious.org/gitorious/pages/WebHooks
@@ -61,19 +68,18 @@ gitJsonPayload = b"""
 """
 
 
-class TestChangeHookConfiguredWithGitChange(unittest.TestCase,
-                                            TestReactorMixin):
-
-    def setUp(self):
-        self.setUpTestReactor()
+class TestChangeHookConfiguredWithGitChange(TestReactorMixin, unittest.TestCase):
+    @defer.inlineCallbacks
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        self.setup_test_reactor()
         dialects = {'gitorious': True}
-        self.changeHook = change_hook.ChangeHookResource(
-            dialects=dialects, master=fakeMasterForHooks(self))
+        master = yield fakeMasterForHooks(self)
+        self.changeHook = change_hook.ChangeHookResource(dialects=dialects, master=master)
 
     # Test 'base' hook with attributes. We should get a json string
     # representing a Change object as a dictionary. All values show be set.
     @defer.inlineCallbacks
-    def testGitWithChange(self):
+    def testGitWithChange(self) -> InlineCallbacksType[None]:
         changeDict = {b"payload": [gitJsonPayload]}
         self.request = FakeRequest(changeDict)
         self.request.uri = b"/change_hook/gitorious"
@@ -85,24 +91,17 @@ class TestChangeHookConfiguredWithGitChange(unittest.TestCase,
 
         # Gitorious doesn't send changed files
         self.assertEqual(change['files'], [])
-        self.assertEqual(change["repository"],
-                         "http://gitorious.org/q/mainline")
-        self.assertEqual(
-            change["when_timestamp"],
-            1326218547
-        )
+        self.assertEqual(change["repository"], "http://gitorious.org/q/mainline")
+        self.assertEqual(change["when_timestamp"], 1326218547)
         self.assertEqual(change["author"], "jason <jason@nospam.org>")
-        self.assertEqual(change["revision"],
-                         'df5744f7bc8663b39717f87742dc94f52ccbf4dd')
-        self.assertEqual(change["comments"],
-                         "added a place to put the docstring for Book")
+        self.assertEqual(change["revision"], 'df5744f7bc8663b39717f87742dc94f52ccbf4dd')
+        self.assertEqual(change["comments"], "added a place to put the docstring for Book")
         self.assertEqual(change["branch"], "new_look")
-        revlink = ("http://gitorious.org/q/mainline/commit/"
-                   "df5744f7bc8663b39717f87742dc94f52ccbf4dd")
+        revlink = "http://gitorious.org/q/mainline/commit/df5744f7bc8663b39717f87742dc94f52ccbf4dd"
         self.assertEqual(change["revlink"], revlink)
 
     @defer.inlineCallbacks
-    def testGitWithNoJson(self):
+    def testGitWithNoJson(self) -> InlineCallbacksType[None]:
         self.request = FakeRequest()
         self.request.uri = b"/change_hook/gitorious"
         self.request.method = b"GET"

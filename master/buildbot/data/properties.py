@@ -13,48 +13,111 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
+import json
+from typing import TYPE_CHECKING
+from typing import Any
+
 from twisted.internet import defer
 
 from buildbot.data import base
 from buildbot.data import types
 
+if TYPE_CHECKING:
+    from buildbot.data.resultspec import ResultSpec
+    from buildbot.interfaces import IProperties
+    from buildbot.util.twisted import InlineCallbacksType
+
 
 class BuildsetPropertiesEndpoint(base.Endpoint):
+    kind = base.EndpointKind.SINGLE
+    pathPatterns = [
+        "/buildsets/n:bsid/properties",
+    ]
 
-    isCollection = False
-    pathPatterns = """
-        /buildsets/n:bsid/properties
-    """
-
-    def get(self, resultSpec, kwargs):
+    def get(self, resultSpec: ResultSpec, kwargs: dict[str, Any]) -> defer.Deferred[Any]:
         return self.master.db.buildsets.getBuildsetProperties(kwargs['bsid'])
 
 
 class BuildPropertiesEndpoint(base.Endpoint):
+    kind = base.EndpointKind.SINGLE
+    pathPatterns = [
+        "/builders/n:builderid/builds/n:build_number/properties",
+        "/builds/n:buildid/properties",
+    ]
 
-    isCollection = False
-    pathPatterns = """
-        /builders/n:builderid/builds/n:build_number/properties
-        /builds/n:buildid/properties
-    """
+    @defer.inlineCallbacks
+    def get(
+        self, resultSpec: ResultSpec, kwargs: dict[str, Any]
+    ) -> InlineCallbacksType[dict[str, Any]]:
+        retriever = base.NestedBuildDataRetriever(self.master, kwargs)
+        buildid = yield retriever.get_build_id()
+        build_properties = yield self.master.db.builds.getBuildProperties(buildid)
+        return build_properties
 
-    def get(self, resultSpec, kwargs):
+
+class PropertiesListEndpoint(base.Endpoint):
+    kind = base.EndpointKind.COLLECTION
+    pathPatterns = [
+        "/builds/n:buildid/property_list",
+        "/buildsets/n:bsid/properties_list",
+        "/changes/n:changeid/properties_list",
+    ]
+    buildFieldMapping = {
+        "name": "build_properties.name",
+        "source": "build_properties.source",
+        "value": "build_properties.value",
+    }
+    buildsetFieldMapping = {
+        "name": "buildset_properties.name",
+        "source": "buildset_properties.source",
+        "value": "buildset_properties.value",
+    }
+    changeFieldMapping = {
+        "name": "change_properties.name",
+        "source": "change_properties.source",
+        "value": "change_properties.value",
+    }
+
+    @defer.inlineCallbacks
+    def get(
+        self, resultSpec: ResultSpec, kwargs: dict[str, Any]
+    ) -> InlineCallbacksType[list[dict[str, Any]]]:
         buildid = kwargs.get("buildid", None)
-        if buildid is None:
-            buildid = kwargs.get("build_number")
-        return self.master.db.builds.getBuildProperties(buildid)
+        bsid = kwargs.get("bsid", None)
+        changeid = kwargs.get("changeid", None)
+        if buildid is not None:
+            if resultSpec is not None:
+                resultSpec.fieldMapping = self.buildFieldMapping
+            props = yield self.master.db.builds.getBuildProperties(buildid, resultSpec)
+        elif bsid is not None:
+            if resultSpec is not None:
+                resultSpec.fieldMapping = self.buildsetFieldMapping
+            props = yield self.master.db.buildsets.getBuildsetProperties(bsid)
+        elif changeid is not None:
+            if resultSpec is not None:
+                resultSpec.fieldMapping = self.buildsetFieldMapping
+            props = yield self.master.db.changes.getChangeProperties(changeid)  # type: ignore[attr-defined]
+        return [{'name': k, 'source': v[1], 'value': json.dumps(v[0])} for k, v in props.items()]
+
+
+class Property(base.ResourceType):
+    name = "_property"
+    plural = "_properties"
+    endpoints = [PropertiesListEndpoint]
+
+    entityType = types.PropertyEntityType(name)
 
 
 class Properties(base.ResourceType):
-
     name = "property"
     plural = "properties"
     endpoints = [BuildsetPropertiesEndpoint, BuildPropertiesEndpoint]
-    keyFields = []
 
     entityType = types.SourcedProperties()
 
-    def generateUpdateEvent(self, buildid, newprops):
+    def generateUpdateEvent(self, buildid: int, newprops: dict[str, Any]) -> Any:
         # This event cannot use the produceEvent mechanism, as the properties resource type is a bit
         # specific (this is a dictionary collection)
         # We only send the new properties, and count on the client to merge the resulting properties
@@ -66,26 +129,28 @@ class Properties(base.ResourceType):
 
     @base.updateMethod
     @defer.inlineCallbacks
-    def setBuildProperties(self, buildid, properties):
+    def setBuildProperties(
+        self, buildid: int, properties: IProperties
+    ) -> InlineCallbacksType[None]:
         to_update = {}
         oldproperties = yield self.master.data.get(('builds', str(buildid), "properties"))
-        properties = properties.getProperties()
-        properties = yield properties.render(properties.asDict())
-        for k, v in properties.items():
+        properties_real = properties.getProperties()
+        properties_dict = yield properties_real.render(properties_real.asDict())
+        for k, v in properties_dict.items():
             if k in oldproperties and oldproperties[k] == v:
                 continue
             to_update[k] = v
 
         if to_update:
             for k, v in to_update.items():
-                yield self.master.db.builds.setBuildProperty(
-                    buildid, k, v[0], v[1])
+                yield self.master.db.builds.setBuildProperty(buildid, k, v[0], v[1])
             yield self.generateUpdateEvent(buildid, to_update)
 
     @base.updateMethod
     @defer.inlineCallbacks
-    def setBuildProperty(self, buildid, name, value, source):
-        res = yield self.master.db.builds.setBuildProperty(
-            buildid, name, value, source)
-        yield self.generateUpdateEvent(buildid, dict(name=(value, source)))
+    def setBuildProperty(
+        self, buildid: int, name: str, value: Any, source: str
+    ) -> InlineCallbacksType[None]:
+        res = yield self.master.db.builds.setBuildProperty(buildid, name, value, source)
+        yield self.generateUpdateEvent(buildid, {"name": (value, source)})
         return res

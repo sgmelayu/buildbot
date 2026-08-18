@@ -11,10 +11,15 @@
 # this program; if not, write to the Free Software Foundation, Inc., 51
 # Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
-# Copyright Buildbot Team Members
+# Copyright Buildbot Team Member
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from typing import Any
 
 from twisted.internet import defer
+from twisted.logger import Logger
 from twisted.python import failure
 
 from buildbot.process.properties import Interpolate
@@ -30,13 +35,17 @@ from buildbot.reporters.base import ReporterBase
 from buildbot.reporters.generators.build import BuildStartEndStatusGenerator
 from buildbot.reporters.message import MessageFormatterRenderable
 from buildbot.util import httpclientservice
-from buildbot.util.logger import Logger
+
+if TYPE_CHECKING:
+    import datetime
+
+    from buildbot.util.twisted import InlineCallbacksType
 
 log = Logger()
 
 
 class GerritVerifyStatusPush(ReporterBase):
-    name = "GerritVerifyStatusPush"
+    name: str | None = "GerritVerifyStatusPush"
     # overridable constants
     RESULTS_TABLE = {
         SUCCESS: 1,
@@ -45,24 +54,44 @@ class GerritVerifyStatusPush(ReporterBase):
         SKIPPED: 0,
         EXCEPTION: 0,
         RETRY: 0,
-        CANCELLED: 0
+        CANCELLED: 0,
     }
     DEFAULT_RESULT = -1
 
-    def checkConfig(self, baseURL, auth, verification_name=None, abstain=False, category=None,
-                    reporter=None, verbose=False, debug=None, verify=None, generators=None,
-                    **kwargs):
-
+    def checkConfig(  # type: ignore[override]
+        self,
+        baseURL: str,
+        auth: Any,
+        verification_name: Any = None,
+        abstain: bool = False,
+        category: Any = None,
+        reporter: Any = None,
+        verbose: bool = False,
+        debug: bool | None = None,
+        verify: bool | None = None,
+        generators: list[Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
         if generators is None:
             generators = self._create_default_generators()
 
         super().checkConfig(generators=generators, **kwargs)
-        httpclientservice.HTTPClientService.checkAvailable(self.__class__.__name__)
 
     @defer.inlineCallbacks
-    def reconfigService(self, baseURL, auth, verification_name=None, abstain=False, category=None,
-                        reporter=None, verbose=False, debug=None, verify=None, generators=None,
-                        **kwargs):
+    def reconfigService(  # type: ignore[override]
+        self,
+        baseURL: str,
+        auth: Any,
+        verification_name: Any = None,
+        abstain: bool = False,
+        category: Any = None,
+        reporter: Any = None,
+        verbose: bool = False,
+        debug: bool | None = None,
+        verify: bool | None = None,
+        generators: list[Any] | None = None,
+        **kwargs: Any,
+    ) -> InlineCallbacksType[None]:
         auth = yield self.renderSecrets(auth)
         self.debug = debug
         self.verify = verify
@@ -76,38 +105,40 @@ class GerritVerifyStatusPush(ReporterBase):
         if baseURL.endswith('/'):
             baseURL = baseURL[:-1]
 
-        self._http = yield httpclientservice.HTTPClientService.getService(
-            self.master, baseURL, auth=auth,
-            debug=self.debug, verify=self.verify)
+        self._http = yield httpclientservice.HTTPSession(
+            self.master.httpservice, baseURL, auth=auth, debug=self.debug, verify=self.verify
+        )
 
-        self._verification_name = verification_name or Interpolate(
-            '%(prop:buildername)s')
+        self._verification_name = verification_name or Interpolate('%(prop:buildername)s')
         self._reporter = reporter or "buildbot"
         self._abstain = abstain
         self._category = category
         self._verbose = verbose
 
-    def _create_default_generators(self):
+    def _create_default_generators(self) -> list[Any]:
         start_formatter = MessageFormatterRenderable('Build started.')
         end_formatter = MessageFormatterRenderable('Build done.')
 
         return [
-            BuildStartEndStatusGenerator(start_formatter=start_formatter,
-                                         end_formatter=end_formatter)
+            BuildStartEndStatusGenerator(
+                start_formatter=start_formatter, end_formatter=end_formatter
+            )
         ]
 
-    def createStatus(self,
-                     change_id,
-                     revision_id,
-                     name,
-                     value,
-                     abstain=None,
-                     rerun=None,
-                     comment=None,
-                     url=None,
-                     reporter=None,
-                     category=None,
-                     duration=None):
+    def createStatus(
+        self,
+        change_id: Any,
+        revision_id: Any,
+        name: str,
+        value: int,
+        abstain: bool | None = None,
+        rerun: bool | None = None,
+        comment: str | None = None,
+        url: str | None = None,
+        reporter: str | None = None,
+        category: str | None = None,
+        duration: str | None = None,
+    ) -> Any:
         """
         Abstract the POST REST api documented here:
         https://gerrit.googlesource.com/plugins/verify-status/+/master/src/main/resources/Documentation/rest-api-changes.md
@@ -157,16 +188,21 @@ class GerritVerifyStatusPush(ReporterBase):
                 'Sending Gerrit status for {change_id}/{revision_id}: data={data}',
                 change_id=change_id,
                 revision_id=revision_id,
-                data=payload)
+                data=payload,
+            )
 
         return self._http.post(
             '/'.join([
-                '/a/changes', str(change_id), 'revisions', str(revision_id),
-                'verify-status~verifications'
+                '/a/changes',
+                str(change_id),
+                'revisions',
+                str(revision_id),
+                'verify-status~verifications',
             ]),
-            json=payload)
+            json=payload,
+        )
 
-    def formatDuration(self, duration):
+    def formatDuration(self, duration: datetime.timedelta) -> str:
         """Format the duration.
 
         This method could be overridden if really needed, as the duration format in gerrit
@@ -177,38 +213,39 @@ class GerritVerifyStatusPush(ReporterBase):
         hours, remainder = divmod(duration.seconds, 3600)
         minutes, seconds = divmod(remainder, 60)
         if days:
-            return '{} day{} {}h {}m {}s'.format(days, "s" if days > 1 else "",
-                                                 hours, minutes, seconds)
+            return f'{days} day{"s" if days > 1 else ""} {hours}h {minutes}m {seconds}s'
         elif hours:
-            return '{}h {}m {}s'.format(hours, minutes, seconds)
-        return '{}m {}s'.format(minutes, seconds)
+            return f'{hours}h {minutes}m {seconds}s'
+        return f'{minutes}m {seconds}s'
 
     @staticmethod
-    def getGerritChanges(props):
-        """ Get the gerrit changes
+    def getGerritChanges(props: Properties) -> Any:
+        """Get the gerrit changes
 
-            This method could be overridden if really needed to accommodate for other
-            custom steps method for fetching gerrit changes.
+        This method could be overridden if really needed to accommodate for other
+        custom steps method for fetching gerrit changes.
 
-            :param props: an IProperty
+        :param props: an IProperty
 
-            :return: (optionally via deferred) a list of dictionary with at list
-                change_id, and revision_id,
-                which format is the one accepted by the gerrit REST API as of
-                /changes/:change_id/revision/:revision_id paths (see gerrit doc)
+        :return: (optionally via deferred) a list of dictionary with at list
+            change_id, and revision_id,
+            which format is the one accepted by the gerrit REST API as of
+            /changes/:change_id/revision/:revision_id paths (see gerrit doc)
         """
         if 'gerrit_changes' in props:
             return props.getProperty('gerrit_changes')
 
         if 'event.change.number' in props:
-            return [{
-                'change_id': props.getProperty('event.change.number'),
-                'revision_id': props.getProperty('event.patchSet.number')
-            }]
+            return [
+                {
+                    'change_id': props.getProperty('event.change.number'),
+                    'revision_id': props.getProperty('event.patchSet.number'),
+                }
+            ]
         return []
 
     @defer.inlineCallbacks
-    def sendMessage(self, reports):
+    def sendMessage(self, reports: list[Any]) -> InlineCallbacksType[None]:
         report = reports[0]
         build = reports[0]['builds'][0]
 
@@ -218,8 +255,7 @@ class GerritVerifyStatusPush(ReporterBase):
         comment = report.get('body', None)
 
         if build['complete']:
-            value = self.RESULTS_TABLE.get(build['results'],
-                                           self.DEFAULT_RESULT)
+            value = self.RESULTS_TABLE.get(build['results'], self.DEFAULT_RESULT)
             duration = self.formatDuration(build['complete_at'] - build['started_at'])
         else:
             value = 0
@@ -246,7 +282,7 @@ class GerritVerifyStatusPush(ReporterBase):
                     url=build['url'],
                     reporter=reporter,
                     category=category,
-                    duration=duration)
+                    duration=duration,
+                )
             except Exception:
-                log.failure(
-                    'Failed to send status!', failure=failure.Failure())
+                log.failure('Failed to send status!', failure=failure.Failure())

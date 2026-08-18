@@ -12,23 +12,28 @@
 # Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
 # Copyright Buildbot Team Members
-
+from __future__ import annotations
 
 from fnmatch import fnmatch
+from typing import Any
 
 
 class PullRequestMixin:
+    external_property_whitelist: list[str] = []
+    external_property_denylist: list[str] = []
+    property_basename: str
 
-    def extractProperties(self, payload):
-        def flatten(properties, base, info_dict):
+    def extractProperties(self, payload: dict[str, Any]) -> dict[str, Any]:
+        def flatten(properties: dict[str, Any], base: str, info_dict: dict[str, Any]) -> None:
             for k, v in info_dict.items():
                 name = ".".join([base, k])
+                if name in self.external_property_denylist:
+                    continue
                 if isinstance(v, dict):
                     flatten(properties, name, v)
-                elif any([fnmatch(name, expr)
-                          for expr in self.external_property_whitelist]):
+                elif any(fnmatch(name, expr) for expr in self.external_property_whitelist):
                     properties[name] = v
 
-        properties = {}
+        properties: dict[str, Any] = {}
         flatten(properties, self.property_basename, payload)
         return properties

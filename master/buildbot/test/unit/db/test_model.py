@@ -13,52 +13,37 @@
 #
 # Copyright Buildbot Team Members
 
-import os
+from __future__ import annotations
 
-import mock
+from typing import TYPE_CHECKING
 
 from twisted.internet import defer
 from twisted.trial import unittest
 
-from buildbot.db import enginestrategy
-from buildbot.db import model
-from buildbot.test.util import db
+from buildbot.test.fake import fakemaster
+
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
 
 
-class DBConnector_Basic(db.RealDatabaseMixin, unittest.TestCase):
-
+class DBConnector_Basic(unittest.TestCase):
     """
     Basic tests of the DBConnector class - all start with an empty DB
     """
 
     @defer.inlineCallbacks
-    def setUp(self):
-        yield self.setUpRealDatabase()
-
-        engine = enginestrategy.create_engine(self.db_url,
-                                              basedir=os.path.abspath('basedir'))
-
-        # mock out the pool, and set up the model
-        self.db = mock.Mock()
-        self.db.pool.do_with_engine = lambda thd: defer.maybeDeferred(
-            thd, engine)
-        self.db.model = model.Model(self.db)
-        self.db.start()
-
-    def tearDown(self):
-        self.db.stop()
-        return self.tearDownRealDatabase()
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        self.master = yield fakemaster.make_master(
+            self, wantRealReactor=True, wantDb=True, auto_upgrade=False, check_version=False
+        )
 
     @defer.inlineCallbacks
-    def test_is_current_empty(self):
-        res = yield self.db.model.is_current()
+    def test_is_current_empty(self) -> InlineCallbacksType[None]:
+        res = yield self.master.db.model.is_current()
         self.assertFalse(res)
 
     @defer.inlineCallbacks
-    def test_is_current_full(self):
-        yield self.db.model.upgrade()
-        res = yield self.db.model.is_current()
+    def test_is_current_full(self) -> InlineCallbacksType[None]:
+        yield self.master.db.model.upgrade()
+        res = yield self.master.db.model.is_current()
         self.assertTrue(res)
-
-    # the upgrade method is very well-tested by the integration tests; the
-    # remainder of the object is just tables.

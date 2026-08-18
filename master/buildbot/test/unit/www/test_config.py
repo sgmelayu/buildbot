@@ -13,120 +13,256 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from typing import Any
+
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
+
 import json
 import os
+from unittest import mock
 
-import mock
-
+from parameterized import parameterized
 from twisted.internet import defer
-from twisted.python import log
 from twisted.trial import unittest
 
+from buildbot.test.reactor import TestReactorMixin
 from buildbot.test.util import www
-from buildbot.test.util.misc import TestReactorMixin
 from buildbot.util import bytes2unicode
 from buildbot.www import auth
 from buildbot.www import config
+from buildbot.www.authz.authz import Authz
+from buildbot.www.authz.authz import Forbidden
 
 
-class IndexResource(TestReactorMixin, www.WwwTestMixin, unittest.TestCase):
+class Utils(unittest.TestCase):
+    def test_serialize_www_frontend_theme_to_css(self) -> None:
+        self.maxDiff = None
+        self.assertEqual(
+            config.serialize_www_frontend_theme_to_css({}, indent=4),
+            """\
+--bb-avatar-bg-color: #ccc;
+    --bb-background-color: #fff;
+    --bb-border-color: #ddd;
+    --bb-btn-background-color: #fff;
+    --bb-btn-border-color: #ccc;
+    --bb-btn-hover-background-color: #e6e6e6;
+    --bb-btn-hover-border-color: #adadad;
+    --bb-card-bg-color: #f5f5f5;
+    --bb-card-border-color: #ddd;
+    --bb-card-header-text-color: #333;
+    --bb-dropdown-bg-color: #f7f7f7;
+    --bb-dropdown-border-color: #ebebeb;
+    --bb-dropdown-hover-bg-color: #f5f5f5;
+    --bb-highlight-border-color: #ffff00;
+    --bb-home-card-header-bg-color: #337ab7;
+    --bb-link-color: #337ab7;
+    --bb-muted-text-color: #555;
+    --bb-navbar-separator-color: #ccc;
+    --bb-panel-separator-bg-color: #ddd;
+    --bb-sidebar-background-color: #30426a;
+    --bb-sidebar-button-current-background-color: #273759;
+    --bb-sidebar-button-current-text-color: #b2bfdc;
+    --bb-sidebar-button-hover-background-color: #1b263d;
+    --bb-sidebar-button-hover-text-color: #fff;
+    --bb-sidebar-button-text-color: #b2bfdc;
+    --bb-sidebar-footer-background-color: #273759;
+    --bb-sidebar-header-background-color: #273759;
+    --bb-sidebar-header-text-color: #fff;
+    --bb-sidebar-stripe-current-color: #8c5e10;
+    --bb-sidebar-stripe-hover-color: #e99d1a;
+    --bb-sidebar-title-text-color: #627cb7;
+    --bb-tag-active-bg-color: #5cb85c;
+    --bb-tag-bg-color: #777;
+    --bb-text-color: #333;""",
+        )
 
-    def setUp(self):
-        self.setUpTestReactor()
+
+class TestConfigResource(TestReactorMixin, www.WwwTestMixin, unittest.TestCase):
+    def setUp(self) -> None:
+        self.setup_test_reactor()
 
     @defer.inlineCallbacks
-    def test_render(self):
+    def test_render(self) -> InlineCallbacksType[None]:
         _auth = auth.NoAuth()
-        _auth.maybeAutoLogin = mock.Mock()
+        _auth.maybeAutoLogin = mock.Mock()  # type: ignore[method-assign]
 
-        custom_versions = [
-            ['test compoent', '0.1.2'], ['test component 2', '0.2.1']]
+        custom_versions = [['test compoent', '0.1.2'], ['test component 2', '0.2.1']]
 
-        master = self.make_master(
-            url='h:/a/b/', auth=_auth, versions=custom_versions)
-        rsrc = config.IndexResource(master, "foo")
+        master = yield self.make_master(url='h:/a/b/', auth=_auth, versions=custom_versions)
+        rsrc = config.ConfigResource(master)
         rsrc.reconfigResource(master.config)
-        rsrc.jinja = mock.Mock()
-        template = mock.Mock()
-        rsrc.jinja.get_template = lambda x: template
-        template.render = lambda configjson, config, custom_templates: configjson
 
-        vjson = [list(v)
-                 for v in rsrc.getEnvironmentVersions()] + custom_versions
+        vjson = [list(v) for v in config.get_environment_versions()] + custom_versions
+
+        res = yield self.render_resource(rsrc, b'/config')
+        res_json = json.loads(bytes2unicode(res))  # type: ignore[arg-type]
+        exp = {
+            "authz": {},
+            "titleURL": "http://buildbot.net/",
+            "versions": vjson,
+            "title": "Buildbot",
+            "auth": {"name": "NoAuth"},
+            "user": {"anonymous": True},
+            "buildbotURL": "h:/a/b/",
+            "multiMaster": False,
+            "port": None,
+            "user_any_access_allowed": False,
+        }
+        self.assertEqual(res_json, exp)
+
+    @defer.inlineCallbacks
+    def test_render_with_default_page(self) -> InlineCallbacksType[None]:
+        _auth = auth.NoAuth()
+        _auth.maybeAutoLogin = mock.Mock()  # type: ignore[method-assign]
+
+        custom_versions = [['test compoent', '0.1.2'], ['test component 2', '0.2.1']]
+
+        master = yield self.make_master(
+            url='h:/a/b/', auth=_auth, versions=custom_versions, default_page='console'
+        )
+        rsrc = config.ConfigResource(master)
+        rsrc.reconfigResource(master.config)
+
+        vjson = [list(v) for v in config.get_environment_versions()] + custom_versions
+
+        res = yield self.render_resource(rsrc, b'/config')
+        res_json = json.loads(bytes2unicode(res))  # type: ignore[arg-type]
+        exp = {
+            "authz": {},
+            "titleURL": "http://buildbot.net/",
+            "versions": vjson,
+            "title": "Buildbot",
+            "auth": {"name": "NoAuth"},
+            "user": {"anonymous": True},
+            "buildbotURL": "h:/a/b/",
+            "multiMaster": False,
+            "port": None,
+            "default_page": "console",
+            "user_any_access_allowed": False,
+        }
+        self.assertEqual(res_json, exp)
+
+
+class IndexResourceTest(TestReactorMixin, www.WwwTestMixin, unittest.TestCase):
+    def setUp(self) -> None:
+        self.setup_test_reactor()
+
+    def get_react_base_path(self) -> str:
+        path = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
+        for _ in range(0, 4):
+            path = os.path.dirname(path)
+        return os.path.join(path, 'www/base')
+
+    def find_matching_line(self, lines: list[str], match: str, start_i: int) -> int | None:
+        for i in range(start_i, len(lines)):
+            if match in lines[i]:
+                return i
+        return None
+
+    def extract_config_json(self, res: str) -> Any:
+        lines = res.split('\n')
+
+        first_line = self.find_matching_line(lines, '<script id="bb-config">', 0)
+        if first_line is None:
+            raise RuntimeError("Could not find first config line")
+        first_line += 1
+
+        last_line = self.find_matching_line(lines, '</script>', first_line)
+        if last_line is None:
+            raise RuntimeError("Could not find last config line")
+
+        config_json = '\n'.join(lines[first_line:last_line])
+        config_json = config_json.replace('window.buildbotFrontendConfig = ', '').strip()
+        config_json = config_json.strip(';').strip()
+        return json.loads(config_json)
+
+    @parameterized.expand([
+        ('anonymous_user_cant_read', False, None, {'anonymous': True}),
+        ('anonymous_user', True, None, {'anonymous': True}),
+        (
+            'logged_in_user',
+            True,
+            {"name": 'me', "email": 'me@me.org'},
+            {"email": "me@me.org", "name": "me"},
+        ),
+    ])
+    @defer.inlineCallbacks
+    def test_render(
+        self,
+        name: str,
+        allowed_read_something: bool,
+        user_info: dict[str, str] | None,
+        expected_user: dict[str, Any],
+    ) -> InlineCallbacksType[None]:
+        _auth = auth.NoAuth()
+        _auth.maybeAutoLogin = mock.Mock()  # type: ignore[method-assign]
+
+        custom_versions = [['test compoent', '0.1.2'], ['test component 2', '0.2.1']]
+
+        master = yield self.make_master(
+            url='h:/a/b/', auth=_auth, versions=custom_versions, plugins={}
+        )
+        if user_info is not None:
+            master.session.user_info = user_info
+
+        # See https://github.com/python/cpython/issues/100739 why unsafe=True is needed
+        master.www.authz = mock.Mock(spec=Authz, unsafe=True)
+        if not allowed_read_something:
+            master.www.authz.assertUserAllowed = mock.Mock(side_effect=Forbidden(b'forbidden'))
+
+        # IndexResource only uses static path to get index.html. In the source checkout
+        # index.html resides not in www/base/public but in www/base. Thus
+        # base path is sent to IndexResource.
+        rsrc = config.IndexResource(master, self.get_react_base_path())
+        rsrc.reconfigResource(master.config)
+
+        vjson = [list(v) for v in config.get_environment_versions()] + custom_versions
 
         res = yield self.render_resource(rsrc, b'/')
-        res = json.loads(bytes2unicode(res))
+        config_json = self.extract_config_json(bytes2unicode(res))  # type: ignore[arg-type]
+
         _auth.maybeAutoLogin.assert_called_with(mock.ANY)
         exp = {
             "authz": {},
-            "titleURL": "http://buildbot.net",
+            "titleURL": "http://buildbot.net/",
             "versions": vjson,
             "title": "Buildbot",
             "auth": {"name": "NoAuth"},
-            "user": {"anonymous": True},
+            "user": expected_user,
+            "user_any_access_allowed": allowed_read_something,
             "buildbotURL": "h:/a/b/",
             "multiMaster": False,
-            "port": None
+            "port": None,
+            "plugins": {},
         }
-        self.assertEqual(res, exp)
+        self.assertEqual(config_json, exp)
 
-        master.session.user_info = dict(name="me", email="me@me.org")
-        res = yield self.render_resource(rsrc, b'/')
-        res = json.loads(bytes2unicode(res))
-        exp = {
-            "authz": {},
-            "titleURL": "http://buildbot.net",
-            "versions": vjson,
-            "title": "Buildbot",
-            "auth": {"name": "NoAuth"},
-            "user": {"email": "me@me.org", "name": "me"},
-            "buildbotURL": "h:/a/b/",
-            "multiMaster": False,
-            "port": None
-        }
-        self.assertEqual(res, exp)
+    @defer.inlineCallbacks
+    def test_render_non_ascii_index(self) -> InlineCallbacksType[None]:
+        # index.html must be read and served as UTF-8 regardless of the system
+        # locale, which may be ASCII when LC_ALL/LANG are not set (issue #5502)
+        static_dir = self.mktemp()
+        os.mkdir(static_dir)
+        with open(os.path.join(static_dir, 'index.html'), 'w', encoding='utf-8') as f:
+            f.write(
+                '<!DOCTYPE html>\n'
+                '<html lang="en">\n'
+                '<head><meta charset="utf-8"><title>Büildböt ✓</title></head>\n'
+                '<body> <!-- BUILDBOT_CONFIG_PLACEHOLDER --></body>\n'
+                '</html>\n'
+            )
 
-        master = self.make_master(
-            url='h:/a/c/', auth=_auth, versions=custom_versions)
+        master = yield self.make_master(url='h:/a/b/', plugins={})
+        master.www.authz = mock.Mock(spec=Authz, unsafe=True)
+
+        rsrc = config.IndexResource(master, static_dir)
         rsrc.reconfigResource(master.config)
+
         res = yield self.render_resource(rsrc, b'/')
-        res = json.loads(bytes2unicode(res))
-        exp = {
-            "authz": {},
-            "titleURL": "http://buildbot.net",
-            "versions": vjson,
-            "title": "Buildbot",
-            "auth": {"name": "NoAuth"},
-            "user": {"anonymous": True},
-            "buildbotURL": "h:/a/b/",
-            "multiMaster": False,
-            "port": None
-        }
-        self.assertEqual(res, exp)
-
-    def test_parseCustomTemplateDir(self):
-        exp = {'views/builds.html': '<div>\n</div>'}
-        try:
-            # we make the test work if pypugjs is present or note
-            # It is better than just skip if pypugjs is not there
-            import pypugjs  # pylint: disable=import-outside-toplevel
-            [pypugjs]
-            exp.update({'plugin/views/plugin.html':
-                        '<div class="myclass"><pre>this is customized</pre></div>'})
-        except ImportError:
-            log.msg("Only testing html based template override")
-        template_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                                    'test_templates_dir')
-        master = self.make_master(url='h:/a/b/')
-        rsrc = config.IndexResource(master, "foo")
-        res = rsrc.parseCustomTemplateDir(template_dir)
-        self.assertEqual(res, exp)
-
-    def test_CustomTemplateDir(self):
-        master = self.make_master(url='h:/a/b/')
-        rsrc = config.IndexResource(master, "foo")
-        master.config.www['custom_templates_dir'] = 'foo'
-        rsrc.parseCustomTemplateDir = mock.Mock(return_value="returnvalue")
-        rsrc.reconfigResource(master.config)
-        self.assertNotIn('custom_templates_dir', master.config.www)
-        self.assertEqual('returnvalue', rsrc.custom_templates)
+        page = res.decode('utf-8')
+        self.assertIn('Büildböt ✓', page)
+        self.assertIn('window.buildbotFrontendConfig', page)

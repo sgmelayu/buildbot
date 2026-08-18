@@ -1,23 +1,41 @@
+# Enable more strict mode for shell
+.SHELLFLAGS := -eu -c
+
 # developer utilities
 DOCKERBUILD := docker build --build-arg http_proxy=$$http_proxy --build-arg https_proxy=$$https_proxy
 ROOT_DIR := $(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
 
-.PHONY: docs pylint flake8 virtualenv
+.PHONY: docs ruff virtualenv check_for_npm
 
+ifeq ($(OS),Windows_NT)
+  VENV_BIN_DIR := Scripts
+  VENV_PY_VERSION ?= python
+  VENV_CREATE := python -m venv
+else
+  VENV_BIN_DIR := bin
+  VENV_PY_VERSION ?= python3
+  VENV_CREATE := virtualenv -p $(VENV_PY_VERSION)
+endif
 
 VENV_NAME := .venv$(VENV_PY_VERSION)
-PIP ?= $(ROOT_DIR)/$(VENV_NAME)/bin/pip
-PYTHON ?= $(ROOT_DIR)/$(VENV_NAME)/bin/python
-VENV_PY_VERSION ?= python3
-YARN := $(shell which yarnpkg || which yarn)
+PIP ?= $(ROOT_DIR)/$(VENV_NAME)/$(VENV_BIN_DIR)/pip
+VENV_PYTHON ?= $(ROOT_DIR)/$(VENV_NAME)/$(VENV_BIN_DIR)/python
+NPM := $(shell which npm)
+MYPY := mypy --sqlite-cache
+
+check_for_npm:
+	@if [ "$(NPM)" = "" ]; then echo "npm is not installed" ; exit 1; fi
 
 WWW_PKGS := www/base www/console_view www/grid_view www/waterfall_view www/wsgi_dashboards www/badges
-WWW_EX_PKGS := www/nestedexample www/codeparameter
-WWW_DEP_PKGS := www/guanlecoja-ui www/data_module
-ALL_PKGS := master worker pkg $(WWW_PKGS)
+WWW_EX_PKGS := www/nestedexample
+WWW_DEP_PKGS := www/plugin_support www/data-module www/ui
+WWW_PURE_DEP_PKGS := www/common-config
+ALL_PKGS := master worker $(WWW_PKGS)
 
-WWW_PKGS_FOR_UNIT_TESTS := $(filter-out www/badges, $(WWW_DEP_PKGS) $(WWW_PKGS))
-
+WWW_PKGS_FOR_UNIT_TESTS := $(filter-out www/badges www/plugin_support www/wsgi_dashboards, $(WWW_DEP_PKGS) $(WWW_PKGS))
+WWW_PKGS_FOR_PRETTIER := $(filter-out www/plugin_support www/badges, $(WWW_DEP_PKGS) $(WWW_PKGS))
+WWW_PKGS_FOR_NPM := $(filter-out www/badges, $(WWW_PURE_DEP_PKGS) $(WWW_DEP_PKGS) $(WWW_PKGS))
+WWW_PKGS_FOR_NPM_BUILD := $(filter-out www/badges, $(WWW_PKGS))
 ALL_PKGS_TARGETS := $(addsuffix _pkg,$(ALL_PKGS))
 .PHONY: $(ALL_PKGS_TARGETS)
 
@@ -27,9 +45,13 @@ docs:
 	@echo "You can now open master/docs/_build/html/index.html"
 
 docs-towncrier:
+	# Check that master/docs/relnotes/index.rst is not already generated (so it's in the staging area).
+	# If docs-release and docs-release-spelling are called one after the other, then towncrier will report duplicate release notes.
+	if ! git diff --name-only --cached | grep -q "master/docs/relnotes/index.rst"; then \
 	if command -v towncrier >/dev/null 2>&1 ;\
 	then \
 	towncrier --draft | grep  'No significant changes.' || yes n | towncrier ;\
+	fi \
 	fi
 
 docs-spelling:
@@ -44,56 +66,36 @@ docs-release: docs-towncrier
 docs-release-spelling: docs-towncrier
 	$(MAKE) -C master/docs SPHINXOPTS=-W spelling
 
-# pylint the whole sourcecode (validate.sh will do that as well, but only process the modified files)
-pylint:
-	$(MAKE) -C master pylint; master_res=$$?; \
-	$(MAKE) -C worker pylint; worker_res=$$?; \
-	if [ $$master_res != 0 ] || [ $$worker_res != 0 ]; then exit 1; fi
+frontend_npm_install: check_for_npm
+	for i in $(WWW_PKGS_FOR_NPM); \
+		do (cd $$i; $(NPM) ci); done
 
-# flake8 the whole sourcecode (validate.sh will do that as well, but only process the modified files)
-flake8:
-	$(MAKE) -C master flake8
-	$(MAKE) -C worker flake8
-	flake8 --config=common/flake8rc www/*/buildbot_*/
-	flake8 --config=common/flake8rc www/*/setup.py
-	flake8 --config=common/flake8rc common/*.py
-
-frontend_deps: $(VENV_NAME)
-	$(PIP) install -e pkg
-	$(PIP) install mock wheel buildbot
-	cd www/build_common; $(YARN) install --pure-lockfile
+frontend_deps: $(VENV_NAME) frontend_npm_install check_for_npm
+	$(PIP) install build wheel -r requirements-ci.txt
 	for i in $(WWW_DEP_PKGS); \
-		do (cd $$i; $(YARN) install --pure-lockfile; $(YARN) run build); done
+		do (cd $$i; $(NPM) run build); done
 
-frontend_tests: frontend_deps
-	for i in $(WWW_PKGS); \
-		do (cd $$i; $(YARN) install --pure-lockfile); done
+frontend_tests: frontend_deps check_for_npm
 	for i in $(WWW_PKGS_FOR_UNIT_TESTS); \
-		do (cd $$i; $(YARN) run build-dev || exit 1; $(YARN) run test || exit 1) || exit 1; done
+		do (cd $$i; $(NPM) run build-dev || exit 1; $(NPM) run test || exit 1) || exit 1; done
 
-frontend_tests_headless: frontend_deps
-	for i in $(WWW_PKGS); \
-		do (cd $$i; $(YARN) install --pure-lockfile); done
-	for i in $(WWW_PKGS_FOR_UNIT_TESTS); \
-		do (cd $$i; $(YARN) run build-dev || exit 1; $(YARN) run test --browsers BBChromeHeadless || exit 1) || exit 1; done
+frontend_build: frontend_deps
+	for i in $(WWW_PKGS_FOR_NPM_BUILD); \
+		do (cd $$i; $(NPM) run build); done
 
 # rebuild front-end from source
-frontend: frontend_deps
-	for i in pkg $(WWW_PKGS); do $(PIP) install -e $$i || exit 1; done
+frontend: frontend_build
+	for i in $(WWW_PKGS); do $(PIP) install -e $$i || exit 1; done
 
 # build frontend wheels for installation elsewhere
-frontend_wheels: frontend_deps
-	for i in pkg $(WWW_PKGS); \
-		do (cd $$i; $(PYTHON) setup.py bdist_wheel || exit 1) || exit 1; done
-
-# do installation tests. Test front-end can build and install for all install methods
-frontend_install_tests: frontend_deps
-	trial pkg/test_buildbot_pkg.py
+frontend_wheels: frontend_build
+	for i in $(WWW_PKGS); \
+		do (cd $$i; $(VENV_PYTHON) -m build --no-isolation --wheel || exit 1) || exit 1; done
 
 # upgrade FE dependencies
-frontend_yarn_upgrade:
-	for i in $(WWW_PKGS) $(WWW_EX_PKGS) $(WWW_DEP_PKGS); \
-		do (cd $$i; echo $$i; rm -rf yarn.lock; $(YARN) install || echo $$i failed); done
+frontend_npm_upgrade: check_for_npm
+	for i in $(WWW_PKGS_FOR_NPM); \
+		do (cd $$i; echo $$i; rm -rf package-lock.json; $(NPM) install || echo $$i failed); done
 
 # install git hooks for validating patches at commit time
 hooks:
@@ -101,46 +103,76 @@ hooks:
 rmpyc:
 	find master worker \( -name '*.pyc' -o -name '*.pyo' \) -exec rm -v {} \;
 
-isort:
-	isort -rc worker master
-	git diff --name-only --stat "HEAD" | grep '.py$$' | xargs autopep8 -i
-	git add -u
+prettier-check: check_for_npm
+	for subdir in $(WWW_PKGS_FOR_PRETTIER); do \
+		( \
+		cd $$subdir && \
+		echo "Running prettier in $$subdir" && \
+		$(NPM) exec -- prettier --check src *.ts *.js \
+		) \
+	done
 
+prettier: check_for_npm
+	for subdir in $(WWW_PKGS_FOR_PRETTIER); do \
+		( \
+		cd $$subdir && \
+		echo "Running prettier in $$subdir" && \
+		$(NPM) exec -- prettier --write src *.ts *.js \
+		) \
+	done
+
+ruff:
+	ruff format .
+
+mypy-master-linux:
+	$(MYPY) --cache-dir ".mypy_cache/master/linux" --platform linux --config-file ./pyproject.toml $(MYPY_EXTRA_FLAGS) master/buildbot
+mypy-master-win32:
+	$(MYPY) --cache-dir ".mypy_cache/master/win32" --platform win32 --config-file ./pyproject.toml $(MYPY_EXTRA_FLAGS) master/buildbot
+mypy-worker-linux:
+	$(MYPY) --cache-dir ".mypy_cache/worker/linux" --platform linux --config-file ./worker/.mypy.ini $(MYPY_EXTRA_FLAGS) worker/buildbot_worker
+mypy-worker-win32:
+	$(MYPY) --cache-dir ".mypy_cache/worker/win32" --platform win32 --config-file ./worker/.mypy.ini $(MYPY_EXTRA_FLAGS) worker/buildbot_worker
+
+mypy: mypy-master-linux mypy-master-win32 mypy-worker-linux mypy-worker-win32
 
 docker: docker-buildbot-worker docker-buildbot-master
 	echo done
 docker-buildbot-worker:
 	$(DOCKERBUILD) -t buildbot/buildbot-worker:master worker
+docker-buildbot-worker-node:
+	$(DOCKERBUILD) -t buildbot/buildbot-worker-node:master master/contrib/docker/pythonnode_worker
 docker-buildbot-master:
 	$(DOCKERBUILD) -t buildbot/buildbot-master:master master
 
 $(VENV_NAME):
-	virtualenv -p $(VENV_PY_VERSION) $(VENV_NAME)
-	$(PIP) install -U pip setuptools
+	$(VENV_CREATE) $(VENV_NAME)
+	$(PIP) install -r requirements-pip.txt
 
 # helper for virtualenv creation
-virtualenv: $(VENV_NAME)   # usage: make virtualenv VENV_PY_VERSION=python3.4
-	$(PIP) install -r requirements-minimal.txt \
+virtualenv: $(VENV_NAME) check_for_npm   # usage: make virtualenv VENV_PY_VERSION=python3.8
+	$(PIP) install -r requirements-ci.txt \
+		-r requirements-ciworker.txt \
+		-r requirements-cidocs.txt \
 		packaging towncrier
 	@echo now you can type following command  to activate your virtualenv
-	@echo . $(VENV_NAME)/bin/activate
+	@echo . $(VENV_NAME)/$(VENV_BIN_DIR)/activate
 
 TRIALOPTS?=buildbot
 
 .PHONY: trial
 trial: virtualenv
-	. $(VENV_NAME)/bin/activate && trial $(TRIALOPTS)
+	. $(VENV_NAME)/$(VENV_BIN_DIR)/activate && trial $(TRIALOPTS)
 
 release_notes: $(VENV_NAME)
 	test ! -z "$(VERSION)"  #  usage: make release_notes VERSION=0.9.2
-	yes | towncrier --version $(VERSION) --date `date -u  +%F`
+	towncrier build --yes  --version $(VERSION) --date `date -u  +%F`
 	git commit -m "Release notes for $(VERSION)"
 
-$(ALL_PKGS_TARGETS): cleanup_for_tarballs frontend_deps
-	. $(VENV_NAME)/bin/activate && ./common/maketarball.sh $(patsubst %_pkg,%,$@)
+$(ALL_PKGS_TARGETS): cleanup_for_tarballs frontend_build
+	. $(VENV_NAME)/$(VENV_BIN_DIR)/activate && ./common/maketarball.sh $(patsubst %_pkg,%,$@)
 
 cleanup_for_tarballs:
-	find master pkg worker www -name VERSION -exec rm {} \;
+	find master worker www -name VERSION -exec rm {} \;
 	rm -rf dist
 	mkdir dist
 .PHONY: cleanup_for_tarballs
@@ -153,20 +185,20 @@ release: virtualenv
 	test -d "../bbdocs/.git"  #  make release should be done with bbdocs populated at the same level as buildbot dir
 	GPG_TTY=`tty` git tag -a -sf v$(VERSION) -m "TAG $(VERSION)"
 	git push buildbot "v$(VERSION)"  # tarballs are made by circleci.yml, and create a github release
-	export VERSION=$(VERSION) ; . .venv/bin/activate && make docs-release
+	export VERSION=$(VERSION) ; . $(VENV_NAME)/$(VENV_BIN_DIR)/activate && make docs-release
 	rm -rf ../bbdocs/docs/$(VERSION)  # in case of re-run
 	cp -r master/docs/_build/html ../bbdocs/docs/$(VERSION)
 	cd ../bbdocs && git pull
-	. .venv/bin/activate && cd ../bbdocs && make && git add docs && git commit -m $(VERSION) && git push
-	@echo When tarballs have been generated by circleci:
+	. $(VENV_NAME)/$(VENV_BIN_DIR)/activate && cd ../bbdocs && make && git add docs && git commit -m $(VERSION) && git push
+	@echo When tarballs have been generated by github workflow 'release':
 	@echo make finishrelease
 
 finishrelease:
 	rm -rf dist
 	python3 ./common/download_release.py
 	rm -rf ./dist/v*
-	twine upload --sign dist/*
+	twine upload dist/*
 
 pyinstaller: virtualenv
 	$(PIP) install pyinstaller
-	$(VENV_NAME)/bin/pyinstaller -F pyinstaller/buildbot-worker.spec
+	$(VENV_NAME)/$(VENV_BIN_DIR)/pyinstaller pyinstaller/buildbot-worker.spec

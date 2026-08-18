@@ -13,24 +13,33 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from twisted.internet import defer
 from twisted.trial import reporter
 from twisted.trial import unittest
 
-from buildbot.test.util.runprocess import ExpectMaster
-from buildbot.test.util.runprocess import MasterRunProcessMixin
+from buildbot.test.runprocess import ExpectMasterShell
+from buildbot.test.runprocess import MasterRunProcessMixin
 from buildbot.util import runprocess
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from buildbot.util.twisted import InlineCallbacksType
 
 
 class TestRunprocessMixin(unittest.TestCase):
-
-    def run_test_method(self, method):
+    def run_test_method(
+        self, method: Callable[[MasterRunProcessMixin], defer.Deferred[None] | None]
+    ) -> reporter.TestResult:
         class TestCase(MasterRunProcessMixin, unittest.TestCase):
-
-            def setUp(self):
+            def setUp(self) -> None:
                 self.setup_master_run_process()
 
-            def runTest(self):
+            def runTest(self) -> defer.Deferred[None] | None:
                 return method(self)
 
         self.testcase = TestCase()
@@ -38,28 +47,30 @@ class TestRunprocessMixin(unittest.TestCase):
         self.testcase.run(result)  # This blocks
         return result
 
-    def assert_test_failure(self, result, expected_failure):
+    def assert_test_failure(
+        self, result: reporter.TestResult, expected_failure: str | None
+    ) -> None:
         self.assertEqual(result.errors, [])
         self.assertEqual(len(result.failures), 1)
-        self.assertTrue(result.failures[0][1].check(unittest.FailTest))
+        self.assertTrue(result.failures[0][1].check(unittest.FailTest))  # type: ignore[attr-defined]
         if expected_failure:
-            self.assertSubstring(expected_failure, result.failures[0][1].getErrorMessage())
+            self.assertSubstring(expected_failure, result.failures[0][1].getErrorMessage())  # type: ignore[attr-defined]
 
-    def assert_successful(self, result):
+    def assert_successful(self, result: reporter.TestResult) -> None:
         if not result.wasSuccessful():
             output = 'expected success'
             if result.failures:
-                output += ('\ntest failed: {}'.format(result.failures[0][1].getErrorMessage()))
+                output += f'\ntest failed: {result.failures[0][1].getErrorMessage()}'  # type: ignore[attr-defined]
             if result.errors:
-                output += ('\nerrors: {}'.format([error[1].value for error in result.errors]))
+                output += f'\nerrors: {[error[1].value for error in result.errors]}'  # type: ignore[attr-defined]
             raise self.failureException(output)
 
         self.assertTrue(result.wasSuccessful())
 
-    def test_patch(self):
+    def test_patch(self) -> None:
         original_run_process = runprocess.run_process
 
-        def method(testcase):
+        def method(testcase: MasterRunProcessMixin) -> None:
             testcase.expect_commands()
             self.assertEqual(runprocess.run_process, testcase.patched_run_process)
 
@@ -67,56 +78,63 @@ class TestRunprocessMixin(unittest.TestCase):
         self.assert_successful(result)
         self.assertEqual(runprocess.run_process, original_run_process)
 
-    def test_method_chaining(self):
-        expect = ExpectMaster('command')
+    def test_method_chaining(self) -> None:
+        expect = ExpectMasterShell('command')  # type: ignore[arg-type]
         self.assertEqual(expect, expect.exit(0))
         self.assertEqual(expect, expect.stdout(b"output"))
         self.assertEqual(expect, expect.stderr(b"error"))
 
-    def test_run_process_one_command_only_rc(self):
-
+    def test_run_process_one_command_only_rc(self) -> None:
         @defer.inlineCallbacks
-        def method(testcase):
-            testcase.expect_commands(ExpectMaster(["command"]).stdout(b'stdout').stderr(b'stderr'))
-            res = yield runprocess.run_process(None, ["command"],
-                                               collect_stdout=False, collect_stderr=False)
+        def method(testcase: MasterRunProcessMixin) -> InlineCallbacksType[None]:
+            testcase.expect_commands(
+                ExpectMasterShell(["command"]).stdout(b'stdout').stderr(b'stderr')
+            )
+            res = yield runprocess.run_process(
+                None, ["command"], collect_stdout=False, collect_stderr=False
+            )
             self.assertEqual(res, 0)
             testcase.assert_all_commands_ran()
 
         result = self.run_test_method(method)
         self.assert_successful(result)
 
-    def test_run_process_one_command_only_rc_stdout(self):
-
+    def test_run_process_one_command_only_rc_stdout(self) -> None:
         @defer.inlineCallbacks
-        def method(testcase):
-            testcase.expect_commands(ExpectMaster(["command"]).stdout(b'stdout').stderr(b'stderr'))
-            res = yield runprocess.run_process(None, ["command"],
-                                               collect_stdout=True, collect_stderr=False)
+        def method(testcase: MasterRunProcessMixin) -> InlineCallbacksType[None]:
+            testcase.expect_commands(
+                ExpectMasterShell(["command"]).stdout(b'stdout').stderr(b'stderr')
+            )
+            res = yield runprocess.run_process(
+                None, ["command"], collect_stdout=True, collect_stderr=False
+            )
             self.assertEqual(res, (0, b'stdout'))
             testcase.assert_all_commands_ran()
 
         result = self.run_test_method(method)
         self.assert_successful(result)
 
-    def test_run_process_one_command_with_rc_stderr(self):
-
+    def test_run_process_one_command_with_rc_stderr(self) -> None:
         @defer.inlineCallbacks
-        def method(testcase):
-            testcase.expect_commands(ExpectMaster(["command"]).stdout(b'stdout').stderr(b'stderr'))
-            res = yield runprocess.run_process(None, ["command"],
-                                               collect_stdout=False, collect_stderr=True)
+        def method(testcase: MasterRunProcessMixin) -> InlineCallbacksType[None]:
+            testcase.expect_commands(
+                ExpectMasterShell(["command"]).stdout(b'stdout').stderr(b'stderr')
+            )
+            res = yield runprocess.run_process(
+                None, ["command"], collect_stdout=False, collect_stderr=True
+            )
             self.assertEqual(res, (0, b'stderr'))
             testcase.assert_all_commands_ran()
 
         result = self.run_test_method(method)
         self.assert_successful(result)
 
-    def test_run_process_one_command_with_rc_stdout_stderr(self):
-
+    def test_run_process_one_command_with_rc_stdout_stderr(self) -> None:
         @defer.inlineCallbacks
-        def method(testcase):
-            testcase.expect_commands(ExpectMaster(["command"]).stdout(b'stdout').stderr(b'stderr'))
+        def method(testcase: MasterRunProcessMixin) -> InlineCallbacksType[None]:
+            testcase.expect_commands(
+                ExpectMasterShell(["command"]).stdout(b'stdout').stderr(b'stderr')
+            )
             res = yield runprocess.run_process(None, ["command"])
             self.assertEqual(res, (0, b'stdout', b'stderr'))
             testcase.assert_all_commands_ran()
@@ -124,12 +142,11 @@ class TestRunprocessMixin(unittest.TestCase):
         result = self.run_test_method(method)
         self.assert_successful(result)
 
-    def test_run_process_expect_two_run_one(self):
-
+    def test_run_process_expect_two_run_one(self) -> None:
         @defer.inlineCallbacks
-        def method(testcase):
-            testcase.expect_commands(ExpectMaster(["command"]))
-            testcase.expect_commands(ExpectMaster(["command2"]))
+        def method(testcase: MasterRunProcessMixin) -> InlineCallbacksType[None]:
+            testcase.expect_commands(ExpectMasterShell(["command"]))
+            testcase.expect_commands(ExpectMasterShell(["command2"]))
             res = yield runprocess.run_process(None, ["command"])
             self.assertEqual(res, (0, b'', b''))
             testcase.assert_all_commands_ran()
@@ -137,11 +154,10 @@ class TestRunprocessMixin(unittest.TestCase):
         result = self.run_test_method(method)
         self.assert_test_failure(result, "assert all expected commands were run")
 
-    def test_run_process_wrong_command(self):
-
+    def test_run_process_wrong_command(self) -> None:
         @defer.inlineCallbacks
-        def method(testcase):
-            testcase.expect_commands(ExpectMaster(["command2"]))
+        def method(testcase: MasterRunProcessMixin) -> InlineCallbacksType[None]:
+            testcase.expect_commands(ExpectMasterShell(["command2"]))
             yield runprocess.run_process(None, ["command"])
 
         result = self.run_test_method(method)
@@ -149,68 +165,63 @@ class TestRunprocessMixin(unittest.TestCase):
         # assert we have a meaningful message
         self.assert_test_failure(result, "command2")
 
-    def test_run_process_wrong_args(self):
-
+    def test_run_process_wrong_args(self) -> None:
         @defer.inlineCallbacks
-        def method(testcase):
-            testcase.expect_commands(ExpectMaster(["command", "arg"]))
+        def method(testcase: MasterRunProcessMixin) -> InlineCallbacksType[None]:
+            testcase.expect_commands(ExpectMasterShell(["command", "arg"]))
             yield runprocess.run_process(None, ["command", "otherarg"])
             testcase.assert_all_commands_ran()
 
         result = self.run_test_method(method)
         self.assert_test_failure(result, "unexpected command run")
 
-    def test_run_process_missing_path(self):
-
+    def test_run_process_missing_path(self) -> None:
         @defer.inlineCallbacks
-        def method(testcase):
-            testcase.expect_commands(ExpectMaster(["command"]).workdir("/home"))
+        def method(testcase: MasterRunProcessMixin) -> InlineCallbacksType[None]:
+            testcase.expect_commands(ExpectMasterShell(["command"]).workdir("/home"))
             yield runprocess.run_process(None, ["command"])
             testcase.assert_all_commands_ran()
 
         result = self.run_test_method(method)
         self.assert_test_failure(result, "unexpected command run")
 
-    def test_run_process_wrong_path(self):
-
+    def test_run_process_wrong_path(self) -> None:
         @defer.inlineCallbacks
-        def method(testcase):
-            testcase.expect_commands(ExpectMaster(["command", "arg"]).workdir("/home"))
+        def method(testcase: MasterRunProcessMixin) -> InlineCallbacksType[None]:
+            testcase.expect_commands(ExpectMasterShell(["command", "arg"]).workdir("/home"))
             yield runprocess.run_process(None, ["command"], workdir="/path")
             testcase.assert_all_commands_ran()
 
         result = self.run_test_method(method)
         self.assert_test_failure(result, "unexpected command run")
 
-    def test_run_process_not_current_path(self):
-
+    def test_run_process_not_current_path(self) -> None:
         @defer.inlineCallbacks
-        def method(testcase):
-            testcase.expect_commands(ExpectMaster(["command", "arg"]))
+        def method(testcase: MasterRunProcessMixin) -> InlineCallbacksType[None]:
+            testcase.expect_commands(ExpectMasterShell(["command", "arg"]))
             yield runprocess.run_process(None, ["command"], workdir="/path")
             testcase.assert_all_commands_ran()
 
         result = self.run_test_method(method)
         self.assert_test_failure(result, "unexpected command run")
 
-    def test_run_process_error_output(self):
-
+    def test_run_process_error_output(self) -> None:
         @defer.inlineCallbacks
-        def method(testcase):
-            testcase.expect_commands(ExpectMaster(["command"]).stderr(b"some test"))
-            res = yield runprocess.run_process(None, ["command"], collect_stderr=False,
-                                               stderr_is_error=True)
+        def method(testcase: MasterRunProcessMixin) -> InlineCallbacksType[None]:
+            testcase.expect_commands(ExpectMasterShell(["command"]).stderr(b"some test"))
+            res = yield runprocess.run_process(
+                None, ["command"], collect_stderr=False, stderr_is_error=True
+            )
             self.assertEqual(res, (-1, b''))
             testcase.assert_all_commands_ran()
 
         result = self.run_test_method(method)
         self.assert_successful(result)
 
-    def test_run_process_nonzero_exit(self):
-
+    def test_run_process_nonzero_exit(self) -> None:
         @defer.inlineCallbacks
-        def method(testcase):
-            testcase.expect_commands(ExpectMaster(["command"]).exit(1))
+        def method(testcase: MasterRunProcessMixin) -> InlineCallbacksType[None]:
+            testcase.expect_commands(ExpectMasterShell(["command"]).exit(1))
             res = yield runprocess.run_process(None, ["command"])
             self.assertEqual(res, (1, b'', b''))
             testcase.assert_all_commands_ran()
@@ -218,11 +229,10 @@ class TestRunprocessMixin(unittest.TestCase):
         result = self.run_test_method(method)
         self.assert_successful(result)
 
-    def test_run_process_environ_success(self):
-
+    def test_run_process_environ_success(self) -> None:
         @defer.inlineCallbacks
-        def method(testcase):
-            testcase.expect_commands(ExpectMaster(["command"]))
+        def method(testcase: MasterRunProcessMixin) -> InlineCallbacksType[None]:
+            testcase.expect_commands(ExpectMasterShell(["command"]))
             testcase.add_run_process_expect_env({'key': 'value'})
             res = yield runprocess.run_process(None, ["command"], env={'key': 'value'})
             self.assertEqual(res, (0, b'', b''))
@@ -231,11 +241,10 @@ class TestRunprocessMixin(unittest.TestCase):
         result = self.run_test_method(method)
         self.assert_successful(result)
 
-    def test_run_process_environ_wrong_value(self):
-
+    def test_run_process_environ_wrong_value(self) -> None:
         @defer.inlineCallbacks
-        def method(testcase):
-            testcase.expect_commands(ExpectMaster(["command"]))
+        def method(testcase: MasterRunProcessMixin) -> InlineCallbacksType[None]:
+            testcase.expect_commands(ExpectMasterShell(["command"]))
             testcase.add_run_process_expect_env({'key': 'value'})
             yield runprocess.run_process(None, ["command"], env={'key': 'wrongvalue'})
             testcase.assert_all_commands_ran()
@@ -243,12 +252,13 @@ class TestRunprocessMixin(unittest.TestCase):
         result = self.run_test_method(method)
         self.assert_test_failure(result, "Expected environment to have key = 'value'")
 
-    def test_run_process_environ_missing(self):
+    def test_run_process_environ_missing(self) -> None:
         @defer.inlineCallbacks
-        def method(testcase):
-            testcase.expect_commands(ExpectMaster(["command"]))
+        def method(testcase: MasterRunProcessMixin) -> InlineCallbacksType[None]:
+            testcase.expect_commands(ExpectMasterShell(["command"]))
             testcase.add_run_process_expect_env({'key': 'value'})
             d = runprocess.run_process(None, ["command"])
-            return d
+            return d  # type: ignore[return-value]
+
         result = self.run_test_method(method)
         self.assert_test_failure(result, "Expected environment to have key = 'value'")

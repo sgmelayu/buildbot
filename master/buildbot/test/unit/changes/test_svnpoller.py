@@ -1,4 +1,3 @@
-# coding: utf-8
 # This file is part of Buildbot.  Buildbot is free software: you can
 # redistribute it and/or modify it under the terms of the GNU General Public
 # License as published by the Free Software Foundation, version 2.
@@ -13,19 +12,25 @@
 # Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
 # Copyright Buildbot Team Members
+from __future__ import annotations
 
 import os
 import xml.dom.minidom
+from typing import TYPE_CHECKING
+from typing import Any
 
 from twisted.internet import defer
 from twisted.trial import unittest
 
 from buildbot.changes import svnpoller
 from buildbot.process.properties import Interpolate
+from buildbot.test.reactor import TestReactorMixin
+from buildbot.test.runprocess import ExpectMasterShell
+from buildbot.test.runprocess import MasterRunProcessMixin
 from buildbot.test.util import changesource
-from buildbot.test.util.misc import TestReactorMixin
-from buildbot.test.util.runprocess import ExpectMaster
-from buildbot.test.util.runprocess import MasterRunProcessMixin
+
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
 
 # this is the output of "svn info --xml
 # svn+ssh://svn.twistedmatrix.com/svn/Twisted/trunk"
@@ -59,7 +64,7 @@ prefix_output_2 = b"""\
 """
 
 # this is the svn info output for a local repository, svn info --xml
-# file:///home/warner/stuff/Projects/Buildbot/trees/svnpoller/_trial_temp/test_vc/repositories/SVN-Repository  # noqa pylint: disable=line-too-long
+# file:///home/warner/stuff/Projects/Buildbot/trees/svnpoller/_trial_temp/test_vc/repositories/SVN-Repository
 prefix_output_3 = b"""\
 <?xml version="1.0"?>
 <info>
@@ -81,7 +86,7 @@ prefix_output_3 = b"""\
 </info>
 """
 
-# % svn info --xml file:///home/warner/stuff/Projects/Buildbot/trees/svnpoller/_trial_temp/test_vc/repositories/SVN-Repository/sample/trunk  # noqa pylint: disable=line-too-long
+# % svn info --xml file:///home/warner/stuff/Projects/Buildbot/trees/svnpoller/_trial_temp/test_vc/repositories/SVN-Repository/sample/trunk
 
 prefix_output_4 = b"""\
 <?xml version="1.0"?>
@@ -102,14 +107,16 @@ prefix_output_4 = b"""\
 </commit>
 </entry>
 </info>
-"""  # noqa pylint: disable=line-too-long
+"""
 
 
 # output from svn log on .../SVN-Repository/sample
 # (so it includes trunk and branches)
-sample_base = ("file:///usr/home/warner/stuff/Projects/Buildbot/trees/misc/" +
-               "_trial_temp/test_vc/repositories/SVN-Repository/sample")
-sample_logentries = [None] * 6
+sample_base = (
+    "file:///usr/home/warner/stuff/Projects/Buildbot/trees/misc/"
+    + "_trial_temp/test_vc/repositories/SVN-Repository/sample"
+)
+sample_logentries: list[bytes | None] = [None] * 6
 
 sample_logentries[5] = b"""\
 <logentry
@@ -223,108 +230,117 @@ sample_info_output = b"""\
 """
 
 
-def make_changes_output(maxrevision):
+def make_changes_output(maxrevision: int) -> bytes:
     # return what 'svn log' would have just after the given revision was
     # committed
     logs = sample_logentries[0:maxrevision]
     assert len(logs) == maxrevision
     logs.reverse()
-    output = (b"""<?xml version="1.0"?>
+    output = (
+        b"""<?xml version="1.0"?>
 <log>"""
-              + b"".join(logs)
-              + b"</log>")
+        + b"".join(logs)  # type: ignore[arg-type]
+        + b"</log>"
+    )
     return output
 
 
-def make_logentry_elements(maxrevision):
+def make_logentry_elements(maxrevision: int) -> list[xml.dom.minidom.Element]:
     "return the corresponding logentry elements for the given revisions"
     doc = xml.dom.minidom.parseString(make_changes_output(maxrevision))
     return doc.getElementsByTagName("logentry")
 
 
-def split_file(path):
+def split_file(path: str) -> dict[str, str]:
     pieces = path.split("/")
     if pieces[0] == "branch":
-        return dict(branch="branch", path="/".join(pieces[1:]))
+        return {"branch": 'branch', "path": '/'.join(pieces[1:])}
     if pieces[0] == "trunk":
-        return dict(path="/".join(pieces[1:]))
-    raise RuntimeError("there shouldn't be any files like %r" % path)
+        return {"path": '/'.join(pieces[1:])}
+    raise RuntimeError(f"there shouldn't be any files like {path!r}")
 
 
-class TestSVNPoller(MasterRunProcessMixin,
-                    changesource.ChangeSourceMixin,
-                    TestReactorMixin,
-                    unittest.TestCase):
-
-    def setUp(self):
-        self.setUpTestReactor()
+class TestSVNPoller(
+    MasterRunProcessMixin, changesource.ChangeSourceMixin, TestReactorMixin, unittest.TestCase
+):
+    def setUp(self) -> defer.Deferred[None]:  # type: ignore[override]
+        self.setup_test_reactor()
         self.setup_master_run_process()
         return self.setUpChangeSource()
 
-    def tearDown(self):
-        return self.tearDownChangeSource()
-
-    def attachSVNPoller(self, *args, **kwargs):
+    @defer.inlineCallbacks
+    def attachSVNPoller(
+        self, *args: str, **kwargs: Any
+    ) -> InlineCallbacksType[svnpoller.SVNPoller]:
         s = svnpoller.SVNPoller(*args, **kwargs)
-        self.attachChangeSource(s)
+        yield self.attachChangeSource(s)
         return s
 
-    # tests
-    def test_describe(self):
-        s = self.attachSVNPoller('file://')
+    @defer.inlineCallbacks
+    def test_describe(self) -> InlineCallbacksType[None]:
+        s = yield self.attachSVNPoller('file://')
         self.assertSubstring("SVNPoller", s.describe())
 
-    def test_name(self):
-        s = self.attachSVNPoller('file://')
+    @defer.inlineCallbacks
+    def test_name(self) -> InlineCallbacksType[None]:
+        s = yield self.attachSVNPoller('file://')
         self.assertEqual("file://", s.name)
 
-        s = self.attachSVNPoller('file://', name='MyName')
+        s = yield self.attachSVNPoller('file://', name='MyName')
         self.assertEqual("MyName", s.name)
 
-    def test_strip_repourl(self):
+    @defer.inlineCallbacks
+    def test_strip_repourl(self) -> InlineCallbacksType[None]:
         base = "svn+ssh://svn.twistedmatrix.com/svn/Twisted/trunk"
-        s = self.attachSVNPoller(base + "/")
+        s = yield self.attachSVNPoller(base + "/")
         self.assertEqual(s.repourl, base)
 
     @defer.inlineCallbacks
-    def do_test_get_prefix(self, base, output, expected):
-        s = self.attachSVNPoller(base)
+    def do_test_get_prefix(
+        self, base: str, output: bytes, expected: str
+    ) -> InlineCallbacksType[None]:
+        s = yield self.attachSVNPoller(base)
         self.expect_commands(
-            ExpectMaster(['svn', 'info', '--xml', '--non-interactive', base])
-            .stdout(output)
+            ExpectMasterShell(['svn', 'info', '--xml', '--non-interactive', base]).stdout(output)
         )
         prefix = yield s.get_prefix()
 
         self.assertEqual(prefix, expected)
         self.assert_all_commands_ran()
 
-    def test_get_prefix_1(self):
+    def test_get_prefix_1(self) -> defer.Deferred[None]:
         base = "svn+ssh://svn.twistedmatrix.com/svn/Twisted/trunk"
         return self.do_test_get_prefix(base, prefix_output, 'trunk')
 
-    def test_get_prefix_2(self):
+    def test_get_prefix_2(self) -> defer.Deferred[None]:
         base = "svn+ssh://svn.twistedmatrix.com/svn/Twisted"
         return self.do_test_get_prefix(base, prefix_output_2, '')
 
-    def test_get_prefix_3(self):
-        base = ("file:///home/warner/stuff/Projects/Buildbot/trees/" +
-                "svnpoller/_trial_temp/test_vc/repositories/SVN-Repository")
+    def test_get_prefix_3(self) -> defer.Deferred[None]:
+        base = (
+            "file:///home/warner/stuff/Projects/Buildbot/trees/"
+            + "svnpoller/_trial_temp/test_vc/repositories/SVN-Repository"
+        )
         return self.do_test_get_prefix(base, prefix_output_3, '')
 
-    def test_get_prefix_4(self):
-        base = ("file:///home/warner/stuff/Projects/Buildbot/trees/" +
-                "svnpoller/_trial_temp/test_vc/repositories/SVN-Repository/sample/trunk")
+    def test_get_prefix_4(self) -> defer.Deferred[None]:
+        base = (
+            "file:///home/warner/stuff/Projects/Buildbot/trees/"
+            + "svnpoller/_trial_temp/test_vc/repositories/SVN-Repository/sample/trunk"
+        )
         return self.do_test_get_prefix(base, prefix_output_3, 'sample/trunk')
 
-    def test_log_parsing(self):
-        s = self.attachSVNPoller('file:///foo')
+    @defer.inlineCallbacks
+    def test_log_parsing(self) -> InlineCallbacksType[None]:
+        s = yield self.attachSVNPoller('file:///foo')
         output = make_changes_output(4)
         entries = s.parse_logs(output)
         # no need for elaborate assertions here; this is minidom's logic
         self.assertEqual(len(entries), 4)
 
-    def test_get_new_logentries(self):
-        s = self.attachSVNPoller('file:///foo')
+    @defer.inlineCallbacks
+    def test_get_new_logentries(self) -> InlineCallbacksType[None]:
+        s = yield self.attachSVNPoller('file:///foo')
         entries = make_logentry_elements(4)
 
         s.last_change = 4
@@ -348,28 +364,33 @@ class TestSVNPoller(MasterRunProcessMixin,
         self.assertEqual(s.last_change, 4)
         self.assertEqual(len(new), 0)
 
-    def test_get_text(self):
-        doc = xml.dom.minidom.parseString("""
+    @defer.inlineCallbacks
+    def test_get_text(self) -> InlineCallbacksType[None]:
+        doc = xml.dom.minidom.parseString(
+            """
             <parent>
                 <child>
                     hi
                     <grandchild>1</grandchild>
                     <grandchild>2</grandchild>
                 </child>
-            </parent>""".strip())
-        s = self.attachSVNPoller('http://', split_file=split_file)
+            </parent>""".strip()
+        )
+        s = yield self.attachSVNPoller('http://', split_file=split_file)
 
         self.assertEqual(s._get_text(doc, 'grandchild'), '1')
         self.assertEqual(s._get_text(doc, 'nonexistent'), 'unknown')
 
-    def test_create_changes(self):
-        base = ("file:///home/warner/stuff/Projects/Buildbot/trees/" +
-                "svnpoller/_trial_temp/test_vc/repositories/SVN-Repository/sample")
-        s = self.attachSVNPoller(base, split_file=split_file)
+    @defer.inlineCallbacks
+    def test_create_changes(self) -> InlineCallbacksType[None]:
+        base = (
+            "file:///home/warner/stuff/Projects/Buildbot/trees/"
+            + "svnpoller/_trial_temp/test_vc/repositories/SVN-Repository/sample"
+        )
+        s = yield self.attachSVNPoller(base, split_file=split_file)
         s._prefix = "sample"
 
-        logentries = dict(
-            zip(range(1, 7), reversed(make_logentry_elements(6))))
+        logentries = dict(zip(range(1, 7), reversed(make_logentry_elements(6))))
         changes = s.create_changes(reversed([logentries[3], logentries[2]]))
         self.assertEqual(len(changes), 2)
         # note that parsing occurs in reverse
@@ -400,23 +421,22 @@ class TestSVNPoller(MasterRunProcessMixin,
         self.assertEqual(changes[0]['revision'], '6')
         self.assertEqual(changes[0]['files'], ["version.c"])
 
-    def makeInfoExpect(self, password='bbrocks'):
-        args = ['svn', 'info', '--xml', '--non-interactive', sample_base,
-                '--username=dustin']
+    def makeInfoExpect(self, password: str | None = 'bbrocks') -> ExpectMasterShell:
+        args = ['svn', 'info', '--xml', '--non-interactive', sample_base, '--username=dustin']
         if password is not None:
             args.append('--password=' + password)
-        return ExpectMaster(args)
+        return ExpectMasterShell(args)
 
-    def makeLogExpect(self, password='bbrocks'):
-        args = ['svn', 'log', '--xml', '--verbose', '--non-interactive',
-                '--username=dustin']
+    def makeLogExpect(self, password: str | None = 'bbrocks') -> ExpectMasterShell:
+        args = ['svn', 'log', '--xml', '--verbose', '--non-interactive', '--username=dustin']
         if password is not None:
             args.append('--password=' + password)
         args.extend(['--limit=100', sample_base])
-        return ExpectMaster(args)
+        return ExpectMasterShell(args)
 
-    def test_create_changes_overridden_project(self):
-        def custom_split_file(path):
+    @defer.inlineCallbacks
+    def test_create_changes_overridden_project(self) -> InlineCallbacksType[None]:
+        def custom_split_file(path: str) -> dict[str, str] | None:
             f = split_file(path)
             if f:
                 f["project"] = "overridden-project"
@@ -424,13 +444,14 @@ class TestSVNPoller(MasterRunProcessMixin,
                 f["codebase"] = "overridden-codebase"
             return f
 
-        base = ("file:///home/warner/stuff/Projects/Buildbot/trees/" +
-                "svnpoller/_trial_temp/test_vc/repositories/SVN-Repository/sample")
-        s = self.attachSVNPoller(base, split_file=custom_split_file)
+        base = (
+            "file:///home/warner/stuff/Projects/Buildbot/trees/"
+            + "svnpoller/_trial_temp/test_vc/repositories/SVN-Repository/sample"
+        )
+        s = yield self.attachSVNPoller(base, split_file=custom_split_file)
         s._prefix = "sample"
 
-        logentries = dict(
-            zip(range(1, 7), reversed(make_logentry_elements(6))))
+        logentries = dict(zip(range(1, 7), reversed(make_logentry_elements(6))))
         changes = s.create_changes(reversed([logentries[3], logentries[2]]))
         self.assertEqual(len(changes), 2)
 
@@ -449,9 +470,10 @@ class TestSVNPoller(MasterRunProcessMixin,
         self.assertEqual(changes[1]['codebase'], "overridden-codebase")
 
     @defer.inlineCallbacks
-    def test_poll(self):
-        s = self.attachSVNPoller(sample_base, split_file=split_file,
-                                 svnuser='dustin', svnpasswd='bbrocks')
+    def test_poll(self) -> InlineCallbacksType[None]:
+        s = yield self.attachSVNPoller(
+            sample_base, split_file=split_file, svnuser='dustin', svnpasswd='bbrocks'
+        )
 
         self.expect_commands(
             self.makeInfoExpect().stdout(sample_info_output),
@@ -476,68 +498,78 @@ class TestSVNPoller(MasterRunProcessMixin,
         # and again, with r2 this time
         yield s.poll()
 
-        self.assertEqual(self.master.data.updates.changesAdded, [{
-            'author': 'warner',
-            'committer': None,
-            'branch': 'branch',
-            'category': None,
-            'codebase': None,
-            'comments': 'make_branch',
-            'files': [''],
-            'project': '',
-            'properties': {},
-            'repository':
-                'file:///usr/home/warner/stuff/Projects/Buildbot/trees/misc/_trial_temp/test_vc/repositories/SVN-Repository/sample',  # noqa pylint: disable=line-too-long
-            'revision': '2',
-            'revlink': '',
-            'src': 'svn',
-            'when_timestamp': None,
-        }])
+        self.assertEqual(
+            self.master.data.updates.changesAdded,
+            [
+                {
+                    'author': 'warner',
+                    'committer': None,
+                    'branch': 'branch',
+                    'category': None,
+                    'codebase': None,
+                    'comments': 'make_branch',
+                    'files': [''],
+                    'project': '',
+                    'properties': None,
+                    'repository': 'file:///usr/home/warner/stuff/Projects/Buildbot/trees/misc/_trial_temp/test_vc/repositories/SVN-Repository/sample',
+                    'revision': '2',
+                    'revlink': '',
+                    'src': 'svn',
+                    'when_timestamp': None,
+                }
+            ],
+        )
         self.assertEqual(s.last_change, 2)
 
         # and again with both r3 and r4 appearing together
         self.master.data.updates.changesAdded = []
         yield s.poll()
 
-        self.assertEqual(self.master.data.updates.changesAdded, [{
-            'author': 'warner',
-            'committer': None,
-            'branch': 'branch',
-            'category': None,
-            'codebase': None,
-            'comments': 'commit_on_branch',
-            'files': ['çmain.c'],
-            'project': '',
-            'properties': {},
-            'repository':
-                'file:///usr/home/warner/stuff/Projects/Buildbot/trees/misc/_trial_temp/test_vc/repositories/SVN-Repository/sample',  # noqa pylint: disable=line-too-long
-            'revision': '3',
-            'revlink': '',
-            'src': 'svn',
-            'when_timestamp': None,
-        }, {
-            'author': 'warner',
-            'committer': None,
-            'branch': None,
-            'category': None,
-            'codebase': None,
-            'comments': 'revised_to_2',
-            'files': ['version.c'],
-            'project': '',
-            'properties': {},
-            'repository':
-                'file:///usr/home/warner/stuff/Projects/Buildbot/trees/misc/_trial_temp/test_vc/repositories/SVN-Repository/sample',  # noqa pylint: disable=line-too-long
-            'revision': '4',
-            'revlink': '',
-            'src': 'svn',
-            'when_timestamp': None,
-        }])
+        self.assertEqual(
+            self.master.data.updates.changesAdded,
+            [
+                {
+                    'author': 'warner',
+                    'committer': None,
+                    'branch': 'branch',
+                    'category': None,
+                    'codebase': None,
+                    'comments': 'commit_on_branch',
+                    'files': ['çmain.c'],
+                    'project': '',
+                    'properties': None,
+                    'repository': 'file:///usr/home/warner/stuff/Projects/Buildbot/trees/misc/_trial_temp/test_vc/repositories/SVN-Repository/sample',
+                    'revision': '3',
+                    'revlink': '',
+                    'src': 'svn',
+                    'when_timestamp': None,
+                },
+                {
+                    'author': 'warner',
+                    'committer': None,
+                    'branch': None,
+                    'category': None,
+                    'codebase': None,
+                    'comments': 'revised_to_2',
+                    'files': ['version.c'],
+                    'project': '',
+                    'properties': None,
+                    'repository': 'file:///usr/home/warner/stuff/Projects/Buildbot/trees/misc/_trial_temp/test_vc/repositories/SVN-Repository/sample',
+                    'revision': '4',
+                    'revlink': '',
+                    'src': 'svn',
+                    'when_timestamp': None,
+                },
+            ],
+        )
         self.assertEqual(s.last_change, 4)
         self.assert_all_commands_ran()
 
-    def test_poll_empty_password(self):
-        s = self.attachSVNPoller(sample_base, split_file=split_file,
-                                 svnuser='dustin', svnpasswd='')
+    @defer.inlineCallbacks
+    def test_poll_empty_password(self) -> InlineCallbacksType[None]:
+        s = yield self.attachSVNPoller(
+            sample_base, split_file=split_file, svnuser='dustin', svnpasswd=''
+        )
 
         self.expect_commands(
             self.makeInfoExpect(password="").stdout(sample_info_output),
@@ -546,11 +578,11 @@ class TestSVNPoller(MasterRunProcessMixin,
             self.makeLogExpect(password="").stdout(make_changes_output(2)),
             self.makeLogExpect(password="").stdout(make_changes_output(4)),
         )
-        s.poll()
+        yield s.poll()
 
-    def test_poll_no_password(self):
-        s = self.attachSVNPoller(sample_base, split_file=split_file,
-                                 svnuser='dustin')
+    @defer.inlineCallbacks
+    def test_poll_no_password(self) -> InlineCallbacksType[None]:
+        s = yield self.attachSVNPoller(sample_base, split_file=split_file, svnuser='dustin')
 
         self.expect_commands(
             self.makeInfoExpect(password=None).stdout(sample_info_output),
@@ -559,11 +591,13 @@ class TestSVNPoller(MasterRunProcessMixin,
             self.makeLogExpect(password=None).stdout(make_changes_output(2)),
             self.makeLogExpect(password=None).stdout(make_changes_output(4)),
         )
-        s.poll()
+        yield s.poll()
 
-    def test_poll_interpolated_password(self):
-        s = self.attachSVNPoller(sample_base, split_file=split_file,
-                                 svnuser='dustin', svnpasswd=Interpolate('pa$$'))
+    @defer.inlineCallbacks
+    def test_poll_interpolated_password(self) -> InlineCallbacksType[None]:
+        s = yield self.attachSVNPoller(
+            sample_base, split_file=split_file, svnuser='dustin', svnpasswd=Interpolate('pa$$')
+        )
 
         self.expect_commands(
             self.makeInfoExpect(password='pa$$').stdout(sample_info_output),
@@ -572,15 +606,15 @@ class TestSVNPoller(MasterRunProcessMixin,
             self.makeLogExpect(password='pa$$').stdout(make_changes_output(2)),
             self.makeLogExpect(password='pa$$').stdout(make_changes_output(4)),
         )
-        s.poll()
+        yield s.poll()
 
     @defer.inlineCallbacks
-    def test_poll_get_prefix_exception(self):
-        s = self.attachSVNPoller(sample_base, split_file=split_file,
-                                 svnuser='dustin', svnpasswd='bbrocks')
+    def test_poll_get_prefix_exception(self) -> InlineCallbacksType[None]:
+        s = yield self.attachSVNPoller(
+            sample_base, split_file=split_file, svnuser='dustin', svnpasswd='bbrocks'
+        )
 
-        self.expect_commands(
-            self.makeInfoExpect().stderr(b"error"))
+        self.expect_commands(self.makeInfoExpect().stderr(b"error"))
         yield s.poll()
 
         # should have logged the RuntimeError, but not errback'd from poll
@@ -588,135 +622,126 @@ class TestSVNPoller(MasterRunProcessMixin,
         self.assert_all_commands_ran()
 
     @defer.inlineCallbacks
-    def test_poll_get_logs_exception(self):
-        s = self.attachSVNPoller(sample_base, split_file=split_file,
-                                 svnuser='dustin', svnpasswd='bbrocks')
+    def test_poll_get_logs_exception(self) -> InlineCallbacksType[None]:
+        s = yield self.attachSVNPoller(
+            sample_base, split_file=split_file, svnuser='dustin', svnpasswd='bbrocks'
+        )
         s._prefix = "abc"  # skip the get_prefix stuff
 
-        self.expect_commands(
-            self.makeLogExpect().stderr(b"some error"))
+        self.expect_commands(self.makeLogExpect().stderr(b"some error"))
         yield s.poll()
 
         # should have logged the RuntimeError, but not errback'd from poll
         self.assertEqual(len(self.flushLoggedErrors(EnvironmentError)), 1)
         self.assert_all_commands_ran()
 
-    def test_cachepath_empty(self):
+    @defer.inlineCallbacks
+    def test_cachepath_empty(self) -> InlineCallbacksType[None]:
         cachepath = os.path.abspath('revcache')
         if os.path.exists(cachepath):
             os.unlink(cachepath)
-        s = self.attachSVNPoller(sample_base, cachepath=cachepath)
+        s = yield self.attachSVNPoller(sample_base, cachepath=cachepath)
         self.assertEqual(s.last_change, None)
 
-    def test_cachepath_full(self):
+    @defer.inlineCallbacks
+    def test_cachepath_full(self) -> InlineCallbacksType[None]:
         cachepath = os.path.abspath('revcache')
-        with open(cachepath, "w") as f:
+        with open(cachepath, "w", encoding='utf-8') as f:
             f.write('33')
-        s = self.attachSVNPoller(sample_base, cachepath=cachepath)
+        s = yield self.attachSVNPoller(sample_base, cachepath=cachepath)
         self.assertEqual(s.last_change, 33)
 
         s.last_change = 44
-        s.finished_ok(None)
-        with open(cachepath) as f:
+        s.finished_ok()
+        with open(cachepath, encoding='utf-8') as f:
             self.assertEqual(f.read().strip(), '44')
 
-    def test_cachepath_bogus(self):
+    @defer.inlineCallbacks
+    def test_cachepath_bogus(self) -> InlineCallbacksType[None]:
         cachepath = os.path.abspath('revcache')
-        with open(cachepath, "w") as f:
+        with open(cachepath, "w", encoding='utf-8') as f:
             f.write('nine')
-        s = self.attachSVNPoller(sample_base, cachepath=cachepath)
+        s = yield self.attachSVNPoller(sample_base, cachepath=cachepath)
         self.assertEqual(s.last_change, None)
         self.assertEqual(s.cachepath, None)
         # it should have called log.err once with a ValueError
         self.assertEqual(len(self.flushLoggedErrors(ValueError)), 1)
 
-    def test_constructor_pollinterval(self):
-        self.attachSVNPoller(sample_base, pollinterval=100)  # just don't fail!
+    def test_constructor_pollInterval(self) -> defer.Deferred[svnpoller.SVNPoller]:
+        return self.attachSVNPoller(sample_base, pollInterval=100)  # just don't fail!
 
-    def test_extra_args(self):
-        extra_args = ['--no-auth-cache', ]
+    @defer.inlineCallbacks
+    def test_extra_args(self) -> InlineCallbacksType[None]:
+        extra_args = [
+            '--no-auth-cache',
+        ]
         base = "svn+ssh://svn.twistedmatrix.com/svn/Twisted/trunk"
 
-        s = self.attachSVNPoller(repourl=base, extra_args=extra_args)
+        s = yield self.attachSVNPoller(repourl=base, extra_args=extra_args)
         self.assertEqual(s.extra_args, extra_args)
 
-    def test_use_svnurl(self):
+    @defer.inlineCallbacks
+    def test_use_svnurl(self) -> InlineCallbacksType[None]:
         base = "svn+ssh://svn.twistedmatrix.com/svn/Twisted/trunk"
         with self.assertRaises(TypeError):
-            self.attachSVNPoller(svnurl=base)
+            yield self.attachSVNPoller(svnurl=base)
 
 
 class TestSplitFile(unittest.TestCase):
+    def test_split_file_alwaystrunk(self) -> None:
+        self.assertEqual(svnpoller.split_file_alwaystrunk('foo'), {"path": 'foo'})
 
-    def test_split_file_alwaystrunk(self):
+    def test_split_file_branches_trunk(self) -> None:
+        self.assertEqual(svnpoller.split_file_branches('trunk/'), (None, ''))
+
+    def test_split_file_branches_trunk_subdir(self) -> None:
+        self.assertEqual(svnpoller.split_file_branches('trunk/subdir/'), (None, 'subdir/'))
+
+    def test_split_file_branches_trunk_subfile(self) -> None:
         self.assertEqual(
-            svnpoller.split_file_alwaystrunk('foo'), dict(path='foo'))
+            svnpoller.split_file_branches('trunk/subdir/file.c'), (None, 'subdir/file.c')
+        )
 
-    def test_split_file_branches_trunk(self):
-        self.assertEqual(
-            svnpoller.split_file_branches('trunk/'),
-            (None, ''))
-
-    def test_split_file_branches_trunk_subdir(self):
-        self.assertEqual(
-            svnpoller.split_file_branches('trunk/subdir/'),
-            (None, 'subdir/'))
-
-    def test_split_file_branches_trunk_subfile(self):
-        self.assertEqual(
-            svnpoller.split_file_branches('trunk/subdir/file.c'),
-            (None, 'subdir/file.c'))
-
-    def test_split_file_branches_trunk_invalid(self):
+    def test_split_file_branches_trunk_invalid(self) -> None:
         # file named trunk (not a directory):
-        self.assertEqual(
-            svnpoller.split_file_branches('trunk'),
-            None)
+        self.assertEqual(svnpoller.split_file_branches('trunk'), None)
 
-    def test_split_file_branches_branch(self):
-        self.assertEqual(
-            svnpoller.split_file_branches('branches/1.5.x/'),
-            ('branches/1.5.x', ''))
+    def test_split_file_branches_branch(self) -> None:
+        self.assertEqual(svnpoller.split_file_branches('branches/1.5.x/'), ('branches/1.5.x', ''))
 
-    def test_split_file_branches_branch_subdir(self):
+    def test_split_file_branches_branch_subdir(self) -> None:
         self.assertEqual(
-            svnpoller.split_file_branches('branches/1.5.x/subdir/'),
-            ('branches/1.5.x', 'subdir/'))
+            svnpoller.split_file_branches('branches/1.5.x/subdir/'), ('branches/1.5.x', 'subdir/')
+        )
 
-    def test_split_file_branches_branch_subfile(self):
+    def test_split_file_branches_branch_subfile(self) -> None:
         self.assertEqual(
             svnpoller.split_file_branches('branches/1.5.x/subdir/file.c'),
-            ('branches/1.5.x', 'subdir/file.c'))
+            ('branches/1.5.x', 'subdir/file.c'),
+        )
 
-    def test_split_file_branches_branch_invalid(self):
+    def test_split_file_branches_branch_invalid(self) -> None:
         # file named branches/1.5.x (not a directory):
-        self.assertEqual(
-            svnpoller.split_file_branches('branches/1.5.x'),
-            None)
+        self.assertEqual(svnpoller.split_file_branches('branches/1.5.x'), None)
 
-    def test_split_file_branches_otherdir(self):
+    def test_split_file_branches_otherdir(self) -> None:
         # other dirs are ignored:
-        self.assertEqual(
-            svnpoller.split_file_branches('tags/testthis/subdir/'),
-            None)
+        self.assertEqual(svnpoller.split_file_branches('tags/testthis/subdir/'), None)
 
-    def test_split_file_branches_otherfile(self):
+    def test_split_file_branches_otherfile(self) -> None:
         # other files are ignored:
-        self.assertEqual(
-            svnpoller.split_file_branches('tags/testthis/subdir/file.c'),
-            None)
+        self.assertEqual(svnpoller.split_file_branches('tags/testthis/subdir/file.c'), None)
 
-    def test_split_file_projects_branches(self):
+    def test_split_file_projects_branches(self) -> None:
         self.assertEqual(
-            svnpoller.split_file_projects_branches(
-                'buildbot/trunk/subdir/file.c'),
-            dict(project='buildbot', path='subdir/file.c'))
+            svnpoller.split_file_projects_branches('buildbot/trunk/subdir/file.c'),
+            {"project": 'buildbot', "path": 'subdir/file.c'},
+        )
         self.assertEqual(
-            svnpoller.split_file_projects_branches(
-                'buildbot/branches/1.5.x/subdir/file.c'),
-            dict(project='buildbot', branch='branches/1.5.x', path='subdir/file.c'))
+            svnpoller.split_file_projects_branches('buildbot/branches/1.5.x/subdir/file.c'),
+            {"project": 'buildbot', "branch": 'branches/1.5.x', "path": 'subdir/file.c'},
+        )
         # tags are ignored:
         self.assertEqual(
-            svnpoller.split_file_projects_branches(
-                'buildbot/tags/testthis/subdir/file.c'),
-            None)
+            svnpoller.split_file_projects_branches('buildbot/tags/testthis/subdir/file.c'), None
+        )

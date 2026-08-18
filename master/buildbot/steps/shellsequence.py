@@ -12,8 +12,11 @@
 # Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
 # Copyright Buildbot Team Members
+from __future__ import annotations
 
 import copy
+from typing import TYPE_CHECKING
+from typing import Any
 
 from twisted.internet import defer
 from twisted.python import log
@@ -21,53 +24,44 @@ from twisted.python import log
 from buildbot import config
 from buildbot.process import buildstep
 from buildbot.process import results
-from buildbot.warnings import warn_deprecated
+
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
 
 
 class ShellArg(results.ResultComputingConfigMixin):
-    publicAttributes = (
-        results.ResultComputingConfigMixin.resultConfig +
-        ["command", "logname"])
+    publicAttributes = [*results.ResultComputingConfigMixin.resultConfig, "command", "logname"]
 
-    def __init__(self, command=None, logname=None, logfile=None, **kwargs):
+    def __init__(self, command: Any = None, logname: str | None = None, **kwargs: Any) -> None:
         name = self.__class__.__name__
         if command is None:
-            config.error(("the 'command' parameter of {} "
-                          "must not be None").format(name))
+            config.error(f"the 'command' parameter of {name} must not be None")
         self.command = command
 
         self.logname = logname
-        if logfile is not None:
-            warn_deprecated('2.10.0', "{}: logfile is deprecated, use logname")
-            if self.logname is not None:
-                config.error(("{}: the 'logfile' parameter must not be specified when 'logname' " +
-                              "is set").format(name))
-            self.logname = logfile
 
         for k, v in kwargs.items():
             if k not in self.resultConfig:
-                config.error(("the parameter '{}' is not "
-                              "handled by ShellArg").format(k))
+                config.error(f"the parameter '{k}' is not handled by ShellArg")
             setattr(self, k, v)
         # we don't validate anything yet as we can have renderables.
 
-    def validateAttributes(self):
+    def validateAttributes(self) -> None:
         # only make the check if we have a list
         if not isinstance(self.command, (str, list)):
-            config.error(("{} is an invalid command, "
-                          "it must be a string or a list").format(self.command))
+            config.error(f"{self.command} is an invalid command, it must be a string or a list")
         if isinstance(self.command, list):
-            if not all([isinstance(x, str) for x in self.command]):
-                config.error("{} must only have strings in it".format(self.command))
-        runConfParams = [(p_attr, getattr(self, p_attr))
-                         for p_attr in self.resultConfig]
-        not_bool = [(p_attr, p_val) for (p_attr, p_val) in runConfParams if not isinstance(p_val,
-                                                                                           bool)]
+            if not all(isinstance(x, str) for x in self.command):
+                config.error(f"{self.command} must only have strings in it")
+        runConfParams = [(p_attr, getattr(self, p_attr)) for p_attr in self.resultConfig]
+        not_bool = [
+            (p_attr, p_val) for (p_attr, p_val) in runConfParams if not isinstance(p_val, bool)
+        ]
         if not_bool:
-            config.error("%r must be booleans" % (not_bool,))
+            config.error(f"{not_bool!r} must be booleans")
 
     @defer.inlineCallbacks
-    def getRenderingFor(self, build):
+    def getRenderingFor(self, build: Any) -> InlineCallbacksType[ShellArg]:
         rv = copy.copy(self)
         for p_attr in self.publicAttributes:
             res = yield build.render(getattr(self, p_attr))
@@ -79,19 +73,19 @@ class ShellSequence(buildstep.ShellMixin, buildstep.BuildStep):
     last_command = None
     renderables = ['commands']
 
-    def __init__(self, commands=None, **kwargs):
+    def __init__(self, commands: list[Any] | None = None, **kwargs: Any) -> None:
         self.commands = commands
         kwargs = self.setupShellMixin(kwargs, prohibitArgs=['command'])
         super().__init__(**kwargs)
 
-    def shouldRunTheCommand(self, cmd):
+    def shouldRunTheCommand(self, cmd: Any) -> bool:
         return bool(cmd)
 
-    def getFinalState(self):
-        return self.describe(True)
+    def getFinalState(self) -> Any:
+        return self.describe(True)  # type: ignore[attr-defined]
 
     @defer.inlineCallbacks
-    def runShellSequence(self, commands):
+    def runShellSequence(self, commands: list[Any] | None) -> InlineCallbacksType[int]:
         terminate = False
         if commands is None:
             log.msg("After rendering, ShellSequence `commands` is None")
@@ -99,13 +93,15 @@ class ShellSequence(buildstep.ShellMixin, buildstep.BuildStep):
         overall_result = results.SUCCESS
         for arg in commands:
             if not isinstance(arg, ShellArg):
-                log.msg("After rendering, ShellSequence `commands` list "
-                        "contains something that is not a ShellArg")
+                log.msg(
+                    "After rendering, ShellSequence `commands` list "
+                    "contains something that is not a ShellArg"
+                )
                 return results.EXCEPTION
             try:
                 arg.validateAttributes()
             except config.ConfigErrors as e:
-                log.msg("After rendering, ShellSequence `commands` is invalid: {}".format(e))
+                log.msg(f"After rendering, ShellSequence `commands` is invalid: {e}")
                 return results.EXCEPTION
 
             # handle the command from the arg
@@ -116,14 +112,14 @@ class ShellSequence(buildstep.ShellMixin, buildstep.BuildStep):
             # keep the command around so we can describe it
             self.last_command = command
 
-            cmd = yield self.makeRemoteShellCommand(command=command,
-                                                    stdioLogName=arg.logname)
+            cmd = yield self.makeRemoteShellCommand(command=command, stdioLogName=arg.logname)  # type: ignore[arg-type]
             yield self.runCommand(cmd)
-            overall_result, terminate = results.computeResultAndTermination(
-                arg, cmd.results(), overall_result)
+            overall_result, terminate = results.computeResultAndTermination(  # type: ignore[assignment]
+                arg, cmd.results(), overall_result
+            )
             if terminate:
                 break
         return overall_result
 
-    def run(self):
+    def run(self) -> defer.Deferred[int]:
         return self.runShellSequence(self.commands)

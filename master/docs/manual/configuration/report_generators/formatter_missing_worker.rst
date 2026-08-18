@@ -7,9 +7,11 @@ MessageFormatterMissingWorkers
 
 This formatter is used to format messages in :ref:`Reportgen-WorkerMissingGenerator`.
 
-It formats a message using the Jinja2_ templating language and picks the template either from a string or from a file.
+It formats a message using the Jinja2_ templating language and picks the template either from a
+string or from a file.
 
-The constructor to that class takes the same arguments as MessageFormatter, minus ``wantLogs``, ``wantProperties``, ``wantSteps``.
+The constructor to that class takes the same arguments as MessageFormatter, minus ``want_logs``,
+``want_logs_content``, ``want_properties``, ``want_steps``.
 
 ``template``
     The content of the template used to generate the body of the mail as string.
@@ -26,7 +28,8 @@ The constructor to that class takes the same arguments as MessageFormatter, minu
     This is an extension of the standard context that will be given to the templates.
     Use this to add content to the templates that is otherwise not available.
 
-    Alternatively, you can subclass MessageFormatter and override the :py:meth:`buildAdditionalContext` in order to grab more context from the data API.
+    Alternatively, you can subclass MessageFormatter and override the
+    :py:meth:`buildAdditionalContext` in order to grab more context from the data API.
 
     .. py:method:: buildAdditionalContext(master, ctx)
         :noindex:
@@ -41,10 +44,10 @@ The constructor to that class takes the same arguments as MessageFormatter, minu
 The default ``ctx`` for the missing worker email is made of:
 
 ``buildbot_title``
-    The Buildbot title as per ``c['title']`` from the ``master.cfg``
+    The title of the Buildbot instance as per ``c['title']`` from the ``master.cfg``
 
 ``buildbot_url``
-    The Buildbot title as per ``c['title']`` from the ``master.cfg``
+    The URL of the Buildbot instance as per ``c['buildbotURL']`` from the ``master.cfg``
 
 ``worker``
     The worker object as defined in the REST api plus two attributes:

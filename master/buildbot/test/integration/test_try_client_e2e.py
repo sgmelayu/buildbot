@@ -14,12 +14,19 @@
 # Copyright Buildbot Team Members
 
 
+from __future__ import annotations
+
 import os
+from typing import TYPE_CHECKING
 
 from twisted.internet import defer
 from twisted.internet import reactor
 
+from buildbot.test.util.decorators import flaky
 from buildbot.test.util.integration import RunMasterBase
+
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
 
 
 # This integration test tests that the try command line works end2end
@@ -27,37 +34,40 @@ class TryClientE2E(RunMasterBase):
     timeout = 15
 
     @defer.inlineCallbacks
-    def test_shell(self):
-        yield self.setupConfig(masterConfig())
+    def setup_config(self) -> InlineCallbacksType[None]:
+        c = {}
+        from buildbot.config import BuilderConfig  # noqa: PLC0415
+        from buildbot.plugins import schedulers  # noqa: PLC0415
+        from buildbot.plugins import steps  # noqa: PLC0415
+        from buildbot.process.factory import BuildFactory  # noqa: PLC0415
 
-        def trigger_callback():
-            def thd():
-                os.system("buildbot try --connect=pb --master=127.0.0.1:8030 -b testy "
-                          "--property=foo:bar --username=alice --passwd=pw1 --vc=none")
-            reactor.callInThread(thd)
+        c['schedulers'] = [
+            schedulers.Try_Userpass(
+                name="try", builderNames=["testy"], port='tcp:0', userpass=[("alice", "pw1")]
+            )
+        ]
+        f = BuildFactory()
+        f.addStep(steps.ShellCommand(command='echo hello'))
+        c['builders'] = [BuilderConfig(name="testy", workernames=["local1"], factory=f)]
+        yield self.setup_master(c)
 
-        build = yield self.doForceBuild(wantSteps=True, triggerCallback=trigger_callback,
-                                        wantLogs=True, wantProperties=True)
+    @flaky(bugNumber=7084)
+    @defer.inlineCallbacks
+    def test_shell(self) -> InlineCallbacksType[None]:
+        yield self.setup_config()
+
+        def trigger_callback() -> None:
+            port = self.master.pbmanager.dispatchers['tcp:0'].port.getHost().port  # type: ignore[attr-defined]
+
+            def thd() -> None:
+                os.system(
+                    f"buildbot try --connect=pb --master=127.0.0.1:{port} -b testy "
+                    "--property=foo:bar --username=alice --passwd=pw1 --vc=none"
+                )
+
+            reactor.callInThread(thd)  # type: ignore[attr-defined]
+
+        build = yield self.doForceBuild(
+            wantSteps=True, triggerCallback=trigger_callback, wantLogs=True, wantProperties=True
+        )
         self.assertEqual(build['buildid'], 1)
-
-
-# master configuration
-def masterConfig():
-    c = {}
-    from buildbot.config import BuilderConfig
-    from buildbot.process.factory import BuildFactory
-    from buildbot.plugins import steps, schedulers
-
-    c['schedulers'] = [
-        schedulers.Try_Userpass(name="try",
-                                builderNames=["testy"],
-                                port=8030,
-                                userpass=[("alice", "pw1")])
-    ]
-    f = BuildFactory()
-    f.addStep(steps.ShellCommand(command='echo hello'))
-    c['builders'] = [
-        BuilderConfig(name="testy",
-                      workernames=["local1"],
-                      factory=f)]
-    return c

@@ -13,18 +13,20 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
 
 import errno
 import os
 import signal
 import time
+from typing import Any
 
 from twisted.python.runtime import platformType
 
 from buildbot.scripts import base
 
 
-def stop(config, signame="TERM", wait=None):
+def stop(config: dict[str, Any], signame: str = "TERM", wait: bool | None = None) -> int:
     basedir = config['basedir']
     quiet = config['quiet']
 
@@ -39,7 +41,7 @@ def stop(config, signame="TERM", wait=None):
 
     pidfile = os.path.join(basedir, 'twistd.pid')
     try:
-        with open(pidfile, "rt") as f:
+        with open(pidfile, encoding='utf-8') as f:
             pid = int(f.read().strip())
     except Exception:
         if not config['quiet']:
@@ -63,7 +65,7 @@ def stop(config, signame="TERM", wait=None):
 
     if not wait:
         if not quiet:
-            print("sent SIG{} to process".format(signame))
+            print(f"sent SIG{signame} to process")
         return 0
 
     time.sleep(0.1)
@@ -76,7 +78,7 @@ def stop(config, signame="TERM", wait=None):
             os.kill(pid, 0)
         except OSError:
             if not quiet:
-                print("buildbot process %d is dead" % pid)
+                print(f"buildbot process {pid} is dead")
             return 0
         time.sleep(1)
         count += 1

@@ -12,55 +12,89 @@
 # Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
 # Copyright Buildbot Team Members
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from typing import Any
 
 from twisted.cred import credentials
+from twisted.internet import defer
 from twisted.internet import reactor
 from twisted.spread import pb
 
 from buildbot.util import unicode2bytes
 
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
+
 
 class Sender:
-
-    def __init__(self, master, auth=('change', 'changepw'), encoding='utf8'):
+    def __init__(
+        self,
+        master: str,
+        auth: tuple[str, str] = ('change', 'changepw'),
+        encoding: str = 'utf8',
+    ) -> None:
         self.username = unicode2bytes(auth[0])
         self.password = unicode2bytes(auth[1])
-        self.host, self.port = master.split(":")
-        self.port = int(self.port)
+        self.host: str
+        port_str: str
+        self.host, port_str = master.split(":")
+        self.port = int(port_str)
         self.encoding = encoding
 
-    def send(self, branch, revision, comments, files, who=None, category=None,
-             when=None, properties=None, repository='', vc=None, project='',
-             revlink='', codebase=None):
+    @defer.inlineCallbacks
+    def send(
+        self,
+        branch: str | bytes | None,
+        revision: str | bytes | None,
+        comments: str | bytes,
+        files: list[str | bytes] | tuple[str | bytes, ...],
+        who: str | bytes | None = None,
+        category: str | bytes | None = None,
+        when: float | None = None,
+        properties: dict[str | bytes, Any] | None = None,
+        repository: str | bytes = '',
+        vc: str | None = None,
+        project: str | bytes = '',
+        revlink: str | bytes = '',
+        codebase: str | None = None,
+    ) -> InlineCallbacksType[None]:
         if properties is None:
             properties = {}
 
-        change = {'project': project, 'repository': repository, 'who': who,
-                  'files': files, 'comments': comments, 'branch': branch,
-                  'revision': revision, 'category': category, 'when': when,
-                  'properties': properties, 'revlink': revlink, 'src': vc}
+        change = {
+            'project': project,
+            'repository': repository,
+            'who': who,
+            'files': files,
+            'comments': comments,
+            'branch': branch,
+            'revision': revision,
+            'category': category,
+            'when': when,
+            'properties': properties,
+            'revlink': revlink,
+            'src': vc,
+        }
 
         # codebase is only sent if set; this won't work with masters older than
         # 0.8.7
         if codebase:
             change['codebase'] = codebase
 
-        for key in change:
-            if isinstance(change[key], bytes):
-                change[key] = change[key].decode(self.encoding, 'replace')
-        change['files'] = list(change['files'])
-        for i, file in enumerate(change.get('files', [])):
+        for key, value in change.items():
+            if isinstance(value, bytes):
+                change[key] = value.decode(self.encoding, 'replace')
+        change['files'] = list(change['files'])  # type: ignore[arg-type]
+        for i, file in enumerate(change.get('files', [])):  # type: ignore[arg-type]
             if isinstance(file, bytes):
-                change['files'][i] = file.decode(self.encoding, 'replace')
+                change['files'][i] = file.decode(self.encoding, 'replace')  # type: ignore[index]
 
         f = pb.PBClientFactory()
         d = f.login(credentials.UsernamePassword(self.username, self.password))
-        reactor.connectTCP(self.host, self.port, f)
+        reactor.connectTCP(self.host, self.port, f)  # type: ignore[attr-defined]
 
-        @d.addCallback
-        def call_addChange(remote):
-            d = remote.callRemote('addChange', change)
-            d.addCallback(lambda res: remote.broker.transport.loseConnection())
-            return d
-
-        return d
+        remote = yield d
+        yield remote.callRemote('addChange', change)
+        yield remote.broker.transport.loseConnection()

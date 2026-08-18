@@ -13,9 +13,12 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
+from typing import Any
+
 
 class State:
-
     """
     A simple class you can use to keep track of state throughout
     a test.  Just assign whatever you want to its attributes.  Its
@@ -23,5 +26,5 @@ class State:
     attributes
     """
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
         self.__dict__.update(kwargs)

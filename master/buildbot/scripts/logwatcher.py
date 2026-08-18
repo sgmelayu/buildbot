@@ -13,9 +13,11 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
 
 import os
 import platform
+from typing import TYPE_CHECKING
 
 from twisted.internet import defer
 from twisted.internet import error
@@ -24,6 +26,12 @@ from twisted.internet import reactor
 from twisted.python.failure import Failure
 
 from buildbot.util import unicode2bytes
+
+if TYPE_CHECKING:
+    from twisted.internet.interfaces import IDelayedCall
+    from twisted.internet.interfaces import IProcessTransport
+    from twisted.internet.interfaces import IReactorProcess
+    from twisted.internet.interfaces import IReactorTime
 
 
 class FakeTransport:
@@ -43,12 +51,13 @@ class ReconfigError(Exception):
 
 
 class TailProcess(protocol.ProcessProtocol):
+    lw: LogWatcher
 
-    def outReceived(self, data):
+    def outReceived(self, data: bytes) -> None:
         self.lw.dataReceived(data)
 
-    def errReceived(self, data):
-        self.lw.print_output("ERR: '{}'".format(data))
+    def errReceived(self, data: bytes) -> None:
+        self.lw.print_output(f"ERR: '{data}'")  # type: ignore[str-bytes-safe]
 
 
 class LineOnlyLongLineReceiver(protocol.Protocol):
@@ -56,15 +65,16 @@ class LineOnlyLongLineReceiver(protocol.Protocol):
     This is almost the same as Twisted's LineOnlyReceiver except that long lines are handled
     appropriately.
     """
+
     _buffer = b''
     delimiter = b'\r\n'
     MAX_LENGTH = 16384
 
-    def dataReceived(self, data):
+    def dataReceived(self, data: bytes) -> None:
         lines = (self._buffer + data).split(self.delimiter)
         self._buffer = lines.pop(-1)
         for line in lines:
-            if self.transport.disconnecting:
+            if self.transport.disconnecting:  # type: ignore[union-attr]
                 # this is necessary because the transport may be told to lose
                 # the connection by a line within a larger packet, and it is
                 # important to disregard all the lines in that packet following
@@ -75,10 +85,10 @@ class LineOnlyLongLineReceiver(protocol.Protocol):
             else:
                 self.lineReceived(line)
 
-    def lineReceived(self, line):
+    def lineReceived(self, line: bytes) -> None:
         raise NotImplementedError
 
-    def lineLengthExceeded(self, line):
+    def lineLengthExceeded(self, line: bytes) -> None:
         raise NotImplementedError
 
 
@@ -87,17 +97,22 @@ class LogWatcher(LineOnlyLongLineReceiver):
     TIMEOUT_DELAY = 10.0
     delimiter = unicode2bytes(os.linesep)
 
-    def __init__(self, logfile, timeout=None, _reactor=reactor):
+    def __init__(
+        self,
+        logfile: str,
+        timeout: float | None = None,
+        _reactor: IReactorTime | IReactorProcess = reactor,  # type: ignore[assignment]
+    ) -> None:
         self.logfile = logfile
         self.in_reconfig = False
-        self.transport = FakeTransport()
+        self.transport = FakeTransport()  # type: ignore[assignment]
         self.pp = TailProcess()
         self.pp.lw = self
-        self.timer = None
+        self.timer: IDelayedCall | None = None
         self._reactor = _reactor
         self._timeout_delay = timeout or self.TIMEOUT_DELAY
 
-    def start(self):
+    def start(self) -> defer.Deferred[str]:
         # If the log file doesn't exist, create it now.
         self.create_logfile(self.logfile)
 
@@ -110,25 +125,28 @@ class LogWatcher(LineOnlyLongLineReceiver):
             tailBin = "/usr/xpg4/bin/tail"
         elif platform.system().lower() == 'haiku' and os.path.exists('/bin/tail'):
             tailBin = "/bin/tail"
+        elif os.path.exists('/etc/nixos') and os.path.exists('/run/current-system/sw/bin/tail'):
+            tailBin = "/run/current-system/sw/bin/tail"
         else:
             tailBin = "/usr/bin/tail"
 
-        args = ("tail", "-f", "-n", "0", self.logfile)
-        self.p = self._reactor.spawnProcess(self.pp, tailBin, args,
-                                            env=os.environ)
+        args = ("tail", "-F", "-n", "0", self.logfile)
+        self.p: IProcessTransport = self._reactor.spawnProcess(  # type: ignore[union-attr]
+            self.pp, tailBin, args, env=os.environ
+        )
         self.running = True
         d = defer.maybeDeferred(self._start)
         return d
 
-    def _start(self):
-        self.d = defer.Deferred()
+    def _start(self) -> defer.Deferred[str]:
+        self.d: defer.Deferred[str] = defer.Deferred()
         self.startTimer()
         return self.d
 
-    def startTimer(self):
-        self.timer = self._reactor.callLater(self._timeout_delay, self.timeout)
+    def startTimer(self) -> None:
+        self.timer = self._reactor.callLater(self._timeout_delay, self.timeout)  # type: ignore[union-attr]
 
-    def timeout(self):
+    def timeout(self) -> None:
         # was the timeout set to be ignored? if so, restart it
         if not self.timer:
             self.startTimer()
@@ -138,7 +156,7 @@ class LogWatcher(LineOnlyLongLineReceiver):
         e = BuildmasterTimeoutError()
         self.finished(Failure(e))
 
-    def finished(self, results):
+    def finished(self, results: str | Failure) -> None:
         try:
             self.p.signalProcess("KILL")
         except error.ProcessExitedAlready:
@@ -150,18 +168,19 @@ class LogWatcher(LineOnlyLongLineReceiver):
         self.in_reconfig = False
         self.d.callback(results)
 
-    def create_logfile(self, path):  # pragma: no cover
+    def create_logfile(self, path: str) -> None:  # pragma: no cover
         if not os.path.exists(path):
-            open(path, 'a').close()
+            with open(path, 'a', encoding='utf-8'):
+                pass
 
-    def print_output(self, output):  # pragma: no cover
+    def print_output(self, output: str) -> None:  # pragma: no cover
         print(output)
 
-    def lineLengthExceeded(self, line):
-        msg = 'Got an a very long line in the log (length {} bytes), ignoring'.format(len(line))
+    def lineLengthExceeded(self, line: bytes) -> None:
+        msg = f'Got an a very long line in the log (length {len(line)} bytes), ignoring'
         self.print_output(msg)
 
-    def lineReceived(self, line):
+    def lineReceived(self, line: bytes) -> None:
         if not self.running:
             return None
         if b"Log opened." in line:
@@ -174,8 +193,14 @@ class LogWatcher(LineOnlyLongLineReceiver):
 
         # certain lines indicate progress, so we "cancel" the timeout
         # and it will get re-added when it fires
-        PROGRESS_TEXT = [b'Starting BuildMaster', b'Loading configuration from', b'added builder',
-                         b'adding scheduler', b'Loading builder', b'Starting factory']
+        PROGRESS_TEXT = [
+            b'Starting BuildMaster',
+            b'Loading configuration from',
+            b'added builder',
+            b'adding scheduler',
+            b'Loading builder',
+            b'Starting factory',
+        ]
         for progressText in PROGRESS_TEXT:
             if progressText in line:
                 self.timer = None
@@ -183,8 +208,10 @@ class LogWatcher(LineOnlyLongLineReceiver):
 
         if b"message from master: attached" in line:
             return self.finished("worker")
-        if b"configuration update aborted" in line or \
-                b'configuration update partially applied' in line:
+        if (
+            b"configuration update aborted" in line
+            or b'configuration update partially applied' in line
+        ):
             return self.finished(Failure(ReconfigError()))
         if b"Server Shut Down" in line:
             return self.finished(Failure(ReconfigError()))

@@ -14,6 +14,8 @@
 # Copyright Buildbot Team Members
 
 
+from __future__ import annotations
+
 from random import choice
 from string import ascii_uppercase
 
@@ -28,16 +30,15 @@ from buildbot.steps.shell import Configure
 
 
 class TestBuildFactory(unittest.TestCase):
-
-    def setUp(self):
+    def setUp(self) -> None:
         self.factory = BuildFactory()
 
-    def test_init(self):
+    def test_init(self) -> None:
         step = BuildStep()
         self.factory = BuildFactory([step])
         self.assertEqual(self.factory.steps, [_BuildStepFactory(BuildStep)])
 
-    def test_addStep(self):
+    def test_addStep(self) -> None:
         # create a string random string that will probably not collide
         # with what is already in the factory
         string = ''.join(choice(ascii_uppercase) for x in range(6))
@@ -49,46 +50,43 @@ class TestBuildFactory(unittest.TestCase):
         # check if the number of nodes grew by one
         self.assertTrue(length + 1, len(self.factory.steps))
         # check if the 'right' node added in the factory
-        self.assertEqual(self.factory.steps[-1],
-                         _BuildStepFactory(BuildStep, name=string))
+        self.assertEqual(self.factory.steps[-1], _BuildStepFactory(BuildStep, name=string))
 
-    def test_s(self):
+    def test_s(self) -> None:
         """
         L{s} is deprecated, but pass keyword arguments to the first argument,
         to construct a step.
         """
         stepFactory = s(BuildStep, name='test')
-        self.assertEqual(
-            stepFactory, _BuildStepFactory(BuildStep, name='test'))
+        self.assertEqual(stepFactory, _BuildStepFactory(BuildStep, name='test'))
         warnings = self.flushWarnings([self.test_s])
         self.assertEqual(len(warnings), 1)
         self.assertEqual(warnings[0]['category'], DeprecationWarning)
 
-    def test_addStep_notAStep(self):
+    def test_addStep_notAStep(self) -> None:
         # This fails because object isn't adaptable to IBuildStepFactory
         with self.assertRaises(TypeError):
-            self.factory.addStep(object())
+            self.factory.addStep(object())  # type: ignore[arg-type]
 
-    def test_addStep_ArgumentsInTheWrongPlace(self):
+    def test_addStep_ArgumentsInTheWrongPlace(self) -> None:
         with self.assertRaises(TypeError):
-            self.factory.addStep(BuildStep(), name="name")
+            self.factory.addStep(BuildStep(), name="name")  # type: ignore[call-arg]
         # this also raises a deprecation error, which we don't care about (see
         # test_s)
         self.flushWarnings()
 
-    def test_addSteps(self):
+    def test_addSteps(self) -> None:
         self.factory.addSteps([BuildStep(), BuildStep()])
-        self.assertEqual(self.factory.steps[-2:],
-                         [_BuildStepFactory(BuildStep),
-                          _BuildStepFactory(BuildStep)])
+        self.assertEqual(
+            self.factory.steps[-2:], [_BuildStepFactory(BuildStep), _BuildStepFactory(BuildStep)]
+        )
 
 
 class TestGNUAutoconf(TestBuildFactory):
-
-    def setUp(self):
+    def setUp(self) -> None:
         self.factory = GNUAutoconf(source=BuildStep())
 
-    def test_init(self):
+    def test_init(self) -> None:
         # actual initialization is already done by setUp
         configurePresent = False
         compilePresent = False
@@ -100,13 +98,13 @@ class TestGNUAutoconf(TestBuildFactory):
             # the following checks are rather hairy and should be
             # rewritten less implementation dependent.
             try:
-                if step.buildStep().command == ['make', 'all']:
+                if step.buildStep().command == ['make', 'all']:  # type: ignore[attr-defined]
                     compilePresent = True
-                if step.buildStep().command == ['make', 'check']:
+                if step.buildStep().command == ['make', 'check']:  # type: ignore[attr-defined]
                     checkPresent = True
-                if step.buildStep().command == ['make', 'distcheck']:
+                if step.buildStep().command == ['make', 'distcheck']:  # type: ignore[attr-defined]
                     distcheckPresent = True
-            except(AttributeError, KeyError):
+            except (AttributeError, KeyError):
                 pass
 
         self.assertTrue(configurePresent)
@@ -114,21 +112,22 @@ class TestGNUAutoconf(TestBuildFactory):
         self.assertTrue(checkPresent)
         self.assertTrue(distcheckPresent)
 
-    def test_init_none(self):
+    def test_init_none(self) -> None:
         """Default steps can be uninitialized by setting None"""
 
-        self.factory = GNUAutoconf(source=BuildStep(), compile=None, test=None,
-                                   distcheck=None)
+        self.factory = GNUAutoconf(source=BuildStep(), compile=None, test=None, distcheck=None)
         for step in self.factory.steps:
             try:
-                cmd = step.buildStep().command
-                self.assertNotIn(cmd, [['make', 'all'], ['make', 'check'],
-                                 ['make', 'distcheck']],
-                                 "Build step {} should not be present.".format(cmd))
-            except(AttributeError, KeyError):
+                cmd = step.buildStep().command  # type: ignore[attr-defined]
+                self.assertNotIn(
+                    cmd,
+                    [['make', 'all'], ['make', 'check'], ['make', 'distcheck']],
+                    f"Build step {cmd} should not be present.",
+                )
+            except (AttributeError, KeyError):
                 pass
 
-    def test_init_reconf(self):
+    def test_init_reconf(self) -> None:
         # test reconf = True
         self.factory = GNUAutoconf(source=BuildStep(), reconf=True)
         self.test_init()
@@ -137,20 +136,19 @@ class TestGNUAutoconf(TestBuildFactory):
 
         for step in self.factory.steps:
             try:
-                if step.buildStep().command[0] == 'autoreconf':
+                if step.buildStep().command[0] == 'autoreconf':  # type: ignore[attr-defined]
                     reconfPresent = True
-            except(AttributeError, KeyError):
+            except (AttributeError, KeyError):
                 pass
         self.assertTrue(reconfPresent)
 
         # test setting your own reconfiguration step
-        self.factory = GNUAutoconf(source=BuildStep(),
-                                   reconf=['notsoautoreconf'])
+        self.factory = GNUAutoconf(source=BuildStep(), reconf=['notsoautoreconf'])
         self.test_init()
         for step in self.factory.steps:
             try:
-                if step.buildStep().command == ['notsoautoreconf']:
+                if step.buildStep().command == ['notsoautoreconf']:  # type: ignore[attr-defined]
                     selfreconfPresent = True
-            except(AttributeError, KeyError):
+            except (AttributeError, KeyError):
                 pass
         self.assertTrue(selfreconfPresent)

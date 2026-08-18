@@ -1,0 +1,349 @@
+@use 'bootstrap/scss/bootstrap';
+@use 'animations.scss';
+@use 'colors.scss';
+@use 'mobile.scss';
+@use 'guanlecoja.scss';
+@use 'buildbot-ui/style.css';
+
+// Dashboards which use SVG to draw contents such as waterfall may require
+//  setting  body height to 100vh. (100% of viewport height)
+//  e.g. Waterfall uses this, otherwise the contents do not appear.
+// The controller dynamically adds and removes this class to body
+//   when entering and leaving Waterfall.
+//
+//  (note: adding height:100vh to a div also would solve this problem
+//   except that causes the dialogs to make the SVG disappear due to
+//   the dialog setting the body to overflow:hidden via modal-open rule.)
+body.hundredpercent {
+  height: 100vh;
+}
+
+@media screen {
+  /* border-radius looks strange for navbar,
+     on lower screen sizes it is 0 by default */
+  .navbar-static-top {
+    border-radius: 0;
+  }
+}
+
+/* make the sidebar be on the back of the modals dialog */
+.sidebar {
+  z-index: (bootstrap.$zindex-modal - 1) !important;
+}
+
+/* button bar inside the breadcrum, used for forcesched buttons */
+.breadcrumb .btn {
+  height: 29px;
+  margin-top: -5px;
+  padding-top: 4px;
+}
+
+.breadcrumb > li + li.pull-right:before {
+  content: ' ';
+  padding: 0 2px;
+}
+
+.clickable {
+  cursor: pointer;
+}
+
+.container {
+  padding-left: 30px !important;
+  padding-right: 30px !important;
+}
+
+.no-select {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  -khtml-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+}
+.select-content {
+  -webkit-touch-callout: text;
+  -webkit-user-select: text;
+  -khtml-user-select: text;
+  -moz-user-select: text;
+  -ms-user-select: text;
+  user-select: text;
+}
+/* https://danoc.me/blog/css-prevent-copy/
+Firefox will insert newlines if the selection go over a no-select span, so we need to implement them with ::before
+*/
+[data-linenumber-content]::before,
+[data-linenumber-content--before]::before,
+[data-linenumber-content--after]::after {
+  content: attr(data-linenumber-content);
+  color: colors.$bb-color-log-white;
+  padding-right: 10px;
+  white-space: pre;
+}
+
+img.avatar {
+  background-color: var(--bb-avatar-bg-color);
+  border-radius: 50%;
+  height: 40px;
+  margin: -10px;
+  width: 40px;
+}
+
+.changedetails > .no-select > * {
+  margin-left: 0.3em;
+  margin-right: 0.3em;
+}
+
+li.unstyled {
+  list-style: none;
+}
+.no-margin {
+  margin: 0px !important;
+}
+.mouse-over-only {
+  display: none;
+}
+span:hover > .mouse-over-only {
+  display: inline;
+}
+
+/* flex row will make the row grow automatically given the size of the content
+   This will make sure all the inside div will fill all content.
+   This is useful when you want to create a row with one left and one right
+   the level of grow give the importance of the div. The more it has grow the more it will win
+   space when fighting against the other divs
+   You can use it with following jade code:
+   .flex-row
+      .flex-grow-1  left content
+      .flex-grow-1
+          .pull-right right content
+
+*/
+.flex-row {
+  display: flex;
+  flex-flow: row;
+
+  /* Then we define how is distributed the remaining space */
+  justify-content: space-around;
+  .flex-grow-1 {
+    flex-grow: 1;
+  }
+  .flex-grow-2 {
+    flex-grow: 2;
+  }
+  .flex-grow-3 {
+    flex-grow: 3;
+  }
+  .flex-grow-4 {
+    flex-grow: 4;
+  }
+}
+
+#root,
+.modal .modal-dialog {
+  font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--bb-text-color);
+  background-color: var(--bb-background-color);
+
+  // Override Bootstrap's hardcoded a { color: #007bff } so links use our
+  // theme-aware color. Sidebar links are excluded — they have their own palette.
+  a:not([class*='bb-sidebar']) {
+    color: var(--bb-link-color);
+  }
+
+  a:hover {
+    text-decoration: none;
+  }
+
+  .modal-header,
+  .modal-body,
+  .modal-footer {
+    // The padding is increased so that scroll bars don't appear when using .row elements in modal. The padding
+    // is such that it's larger than the negative margin of .row.
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .btn-light {
+    background-color: var(--bb-btn-background-color);
+    border-color: var(--bb-btn-border-color);
+    color: var(--bb-text-color);
+  }
+
+  .btn-light:hover {
+    background-color: var(--bb-btn-hover-background-color);
+    border-color: var(--bb-btn-hover-border-color);
+    color: var(--bb-text-color);
+  }
+
+  .nav-tabs {
+    border-bottom-color: var(--bb-border-color);
+  }
+
+  .nav-tabs .nav-link {
+    color: var(--bb-link-color);
+  }
+
+  .nav-tabs .nav-link.active {
+    background-color: var(--bb-background-color);
+    border-color: var(--bb-border-color) var(--bb-border-color) var(--bb-background-color);
+    color: var(--bb-text-color);
+  }
+
+  .nav-tabs .nav-link:hover {
+    border-color: var(--bb-border-color) var(--bb-border-color) var(--bb-border-color);
+  }
+
+  .card {
+    background-color: var(--bb-background-color);
+    border-color: var(--bb-card-border-color);
+  }
+
+  .card-header {
+    background-color: var(--bb-card-bg-color);
+    border-bottom-color: var(--bb-card-border-color);
+    color: var(--bb-card-header-text-color);
+  }
+
+  .card-body {
+    background-color: var(--bb-background-color);
+    color: var(--bb-text-color);
+  }
+
+  .form-control {
+    background-color: var(--bb-background-color);
+    border-color: var(--bb-btn-border-color);
+    color: var(--bb-text-color);
+  }
+
+  .form-control:focus {
+    background-color: var(--bb-background-color);
+    color: var(--bb-text-color);
+  }
+
+  .navbar {
+    background-color: var(--bb-card-bg-color) !important;
+    border-color: var(--bb-border-color);
+  }
+
+  .navbar-brand,
+  .navbar-text {
+    color: var(--bb-text-color) !important;
+  }
+
+  .navbar .nav-link {
+    // In light mode, falls back to Bootstrap's original rgba(0,0,0,.5).
+    // In dark mode, ThemeManager sets --bb-navbar-link-color to a readable value.
+    color: var(--bb-navbar-link-color, rgba(0, 0, 0, 0.5));
+  }
+
+  .breadcrumb {
+    background-color: var(--bb-card-bg-color);
+    color: var(--bb-text-color);
+  }
+
+  .list-group-item {
+    background-color: var(--bb-background-color);
+    border-color: var(--bb-card-border-color);
+    color: var(--bb-text-color);
+  }
+
+  .table {
+    color: var(--bb-text-color);
+  }
+
+  .table-striped tbody tr:nth-of-type(odd) {
+    background-color: var(--bb-card-bg-color);
+  }
+
+  .table td,
+  .table th {
+    border-color: var(--bb-border-color);
+  }
+
+  .table-hover tbody tr:hover {
+    color: var(--bb-text-color);
+    background-color: var(--bb-card-bg-color);
+  }
+
+  .table thead th {
+    color: var(--bb-text-color);
+    border-color: var(--bb-border-color);
+  }
+
+  .modal-content {
+    background-color: var(--bb-background-color);
+    border-color: var(--bb-border-color);
+    color: var(--bb-text-color);
+  }
+
+  .modal-header {
+    border-bottom-color: var(--bb-border-color);
+  }
+
+  .modal-footer {
+    border-top-color: var(--bb-border-color);
+  }
+
+  .form-check-label {
+    color: var(--bb-text-color);
+  }
+
+  select.form-control,
+  .custom-select {
+    background-color: var(--bb-background-color);
+    border-color: var(--bb-btn-border-color);
+    color: var(--bb-text-color);
+    color-scheme: light dark;
+  }
+
+  .dropdown-menu {
+    background-color: var(--bb-background-color);
+    border-color: var(--bb-border-color);
+  }
+
+  .dropdown-item {
+    color: var(--bb-text-color);
+  }
+
+  .dropdown-item:hover,
+  .dropdown-item:focus {
+    background-color: var(--bb-card-bg-color);
+    color: var(--bb-text-color);
+  }
+
+  pre:not(.log) {
+    color: var(--bb-text-color);
+    background-color: var(--bb-card-bg-color);
+    border-color: var(--bb-border-color);
+  }
+
+  code {
+    color: var(--bb-text-color);
+  }
+
+  .page-link {
+    background-color: var(--bb-background-color);
+    border-color: var(--bb-border-color);
+    color: var(--bb-link-color);
+  }
+
+  .page-link:hover {
+    background-color: var(--bb-card-bg-color);
+    border-color: var(--bb-border-color);
+    color: var(--bb-link-color);
+  }
+
+  .page-item.active .page-link {
+    background-color: var(--bb-link-color);
+    border-color: var(--bb-link-color);
+    color: #fff;
+  }
+
+  .page-item.disabled .page-link {
+    background-color: var(--bb-card-bg-color);
+    border-color: var(--bb-border-color);
+    color: var(--bb-muted-text-color);
+  }
+}

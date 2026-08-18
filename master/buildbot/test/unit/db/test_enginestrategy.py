@@ -13,49 +13,51 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
+from typing import Any
+
+import sqlalchemy as sa
 from sqlalchemy.engine import url
 from sqlalchemy.pool import NullPool
-
 from twisted.python import runtime
 from twisted.trial import unittest
 
 from buildbot.db import enginestrategy
+from buildbot.util.sautils import sa_version
 
 
-class BuildbotEngineStrategy_special_cases(unittest.TestCase):
-
+class BuildbotCreateEngineTest(unittest.TestCase):
     "Test the special case methods, without actually creating a db"
 
     # used several times below
-    mysql_kwargs = dict(
-        basedir='my-base-dir',
-        connect_args=dict(init_command='SET default_storage_engine=MyISAM'),
-        pool_recycle=3600)
-    sqlite_kwargs = dict(basedir='/my-base-dir', poolclass=NullPool)
-
-    def setUp(self):
-        self.strat = enginestrategy.BuildbotEngineStrategy()
+    mysql_kwargs = {
+        "basedir": 'my-base-dir',
+        "connect_args": {"init_command": 'SET default_storage_engine=MyISAM'},
+        "pool_recycle": 3600,
+    }
+    sqlite_kwargs = {"basedir": '/my-base-dir', "poolclass": NullPool}
 
     # utility
 
-    def filter_kwargs(self, kwargs):
+    def filter_kwargs(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         # filter out the listeners list to just include the class name
         if 'listeners' in kwargs:
-            kwargs['listeners'] = [lstnr.__class__.__name__
-                                   for lstnr in kwargs['listeners']]
+            kwargs['listeners'] = [lstnr.__class__.__name__ for lstnr in kwargs['listeners']]
         return kwargs
 
     # tests
 
-    def test_sqlite_pct_sub(self):
+    def test_sqlite_pct_sub(self) -> None:
         u = url.make_url("sqlite:///%(basedir)s/x/state.sqlite")
-        kwargs = dict(basedir='/my-base-dir')
-        u, kwargs, max_conns = self.strat.special_case_sqlite(u, kwargs)
-        self.assertEqual([str(u), max_conns, self.filter_kwargs(kwargs)],
-                         ["sqlite:////my-base-dir/x/state.sqlite", 1,
-                          self.sqlite_kwargs])
+        kwargs = {"basedir": '/my-base-dir'}
+        u, kwargs, max_conns = enginestrategy.special_case_sqlite(u, kwargs)
+        self.assertEqual(
+            [str(u), max_conns, self.filter_kwargs(kwargs)],
+            ["sqlite:////my-base-dir/x/state.sqlite", 1, self.sqlite_kwargs],
+        )
 
-    def test_sqlite_relpath(self):
+    def test_sqlite_relpath(self) -> None:
         url_src = "sqlite:///x/state.sqlite"
         basedir = "/my-base-dir"
         expected_url = "sqlite:////my-base-dir/x/state.sqlite"
@@ -70,113 +72,138 @@ class BuildbotEngineStrategy_special_cases(unittest.TestCase):
         exp_kwargs['basedir'] = basedir
 
         u = url.make_url(url_src)
-        kwargs = dict(basedir=basedir)
-        u, kwargs, max_conns = self.strat.special_case_sqlite(u, kwargs)
-        self.assertEqual([str(u), max_conns, self.filter_kwargs(kwargs)],
-                         [expected_url, 1, exp_kwargs])
+        kwargs = {"basedir": basedir}
+        u, kwargs, max_conns = enginestrategy.special_case_sqlite(u, kwargs)
+        self.assertEqual(
+            [str(u), max_conns, self.filter_kwargs(kwargs)], [expected_url, 1, exp_kwargs]
+        )
 
-    def test_sqlite_abspath(self):
+    def test_sqlite_abspath(self) -> None:
         u = url.make_url("sqlite:////x/state.sqlite")
-        kwargs = dict(basedir='/my-base-dir')
-        u, kwargs, max_conns = self.strat.special_case_sqlite(u, kwargs)
-        self.assertEqual([str(u), max_conns, self.filter_kwargs(kwargs)],
-                         ["sqlite:////x/state.sqlite", 1, self.sqlite_kwargs])
+        kwargs = {"basedir": '/my-base-dir'}
+        u, kwargs, max_conns = enginestrategy.special_case_sqlite(u, kwargs)
+        self.assertEqual(
+            [str(u), max_conns, self.filter_kwargs(kwargs)],
+            ["sqlite:////x/state.sqlite", 1, self.sqlite_kwargs],
+        )
 
-    def test_sqlite_memory(self):
+    def test_sqlite_memory(self) -> None:
         u = url.make_url("sqlite://")
-        kwargs = dict(basedir='my-base-dir')
-        u, kwargs, max_conns = self.strat.special_case_sqlite(u, kwargs)
-        self.assertEqual([str(u), max_conns, self.filter_kwargs(kwargs)],
-                         ["sqlite://", 1,  # only one conn at a time
-                          dict(basedir='my-base-dir',
-                               connect_args=dict(check_same_thread=False))])
+        kwargs = {"basedir": 'my-base-dir'}
+        u, kwargs, max_conns = enginestrategy.special_case_sqlite(u, kwargs)
+        self.assertEqual(
+            [str(u), max_conns, self.filter_kwargs(kwargs)],
+            [
+                "sqlite://",
+                1,  # only one conn at a time
+                {"basedir": 'my-base-dir', "connect_args": {"check_same_thread": False}},
+            ],
+        )
 
-    def test_mysql_simple(self):
+    def test_mysql_simple(self) -> None:
         u = url.make_url("mysql://host/dbname")
-        kwargs = dict(basedir='my-base-dir')
-        u, kwargs, max_conns = self.strat.special_case_mysql(u, kwargs)
-        self.assertEqual([str(u), max_conns, self.filter_kwargs(kwargs)],
-                         ["mysql://host/dbname?charset=utf8&use_unicode=True", None,
-                          self.mysql_kwargs])
+        kwargs = {"basedir": 'my-base-dir'}
+        u, kwargs, max_conns = enginestrategy.special_case_mysql(u, kwargs)
+        self.assertEqual(
+            [str(u), max_conns, self.filter_kwargs(kwargs)],
+            ["mysql://host/dbname?charset=utf8&use_unicode=True", None, self.mysql_kwargs],
+        )
 
-    def test_mysql_userport(self):
+    def test_mysql_userport(self) -> None:
         u = url.make_url("mysql://user:pass@host:1234/dbname")
-        kwargs = dict(basedir='my-base-dir')
-        u, kwargs, max_conns = self.strat.special_case_mysql(u, kwargs)
-        self.assertEqual([str(u), max_conns, self.filter_kwargs(kwargs)],
-                         ["mysql://user:pass@host:1234/dbname?"
-                          "charset=utf8&use_unicode=True", None, self.mysql_kwargs])
+        kwargs = {"basedir": 'my-base-dir'}
+        u, kwargs, max_conns = enginestrategy.special_case_mysql(u, kwargs)
+        self.assertEqual(
+            [str(u), max_conns, self.filter_kwargs(kwargs)],
+            [
+                (
+                    "mysql://user:pass@host:1234/dbname?charset=utf8&use_unicode=True"
+                    if sa_version()[0] < 2
+                    else "mysql://user:***@host:1234/dbname?charset=utf8&use_unicode=True"
+                ),
+                None,
+                self.mysql_kwargs,
+            ],
+        )
 
-    def test_mysql_local(self):
+    def test_mysql_local(self) -> None:
         u = url.make_url("mysql:///dbname")
-        kwargs = dict(basedir='my-base-dir')
-        u, kwargs, max_conns = self.strat.special_case_mysql(u, kwargs)
-        self.assertEqual([str(u), max_conns, self.filter_kwargs(kwargs)],
-                         ["mysql:///dbname?charset=utf8&use_unicode=True", None,
-                          self.mysql_kwargs])
+        kwargs = {"basedir": 'my-base-dir'}
+        u, kwargs, max_conns = enginestrategy.special_case_mysql(u, kwargs)
+        self.assertEqual(
+            [str(u), max_conns, self.filter_kwargs(kwargs)],
+            ["mysql:///dbname?charset=utf8&use_unicode=True", None, self.mysql_kwargs],
+        )
 
-    def test_mysql_args(self):
+    def test_mysql_args(self) -> None:
         u = url.make_url("mysql:///dbname?foo=bar")
-        kwargs = dict(basedir='my-base-dir')
-        u, kwargs, max_conns = self.strat.special_case_mysql(u, kwargs)
-        self.assertEqual([str(u), max_conns, self.filter_kwargs(kwargs)],
-                         ["mysql:///dbname?charset=utf8&foo=bar&use_unicode=True",
-                          None, self.mysql_kwargs])
+        kwargs = {"basedir": 'my-base-dir'}
+        u, kwargs, max_conns = enginestrategy.special_case_mysql(u, kwargs)
+        self.assertEqual(
+            [str(u), max_conns, self.filter_kwargs(kwargs)],
+            ["mysql:///dbname?charset=utf8&foo=bar&use_unicode=True", None, self.mysql_kwargs],
+        )
 
-    def test_mysql_max_idle(self):
+    def test_mysql_max_idle(self) -> None:
         u = url.make_url("mysql:///dbname?max_idle=1234")
-        kwargs = dict(basedir='my-base-dir')
-        u, kwargs, max_conns = self.strat.special_case_mysql(u, kwargs)
+        kwargs = {"basedir": 'my-base-dir'}
+        u, kwargs, max_conns = enginestrategy.special_case_mysql(u, kwargs)
         exp = self.mysql_kwargs.copy()
         exp['pool_recycle'] = 1234
-        self.assertEqual([str(u), max_conns, self.filter_kwargs(kwargs)],
-                         ["mysql:///dbname?charset=utf8&use_unicode=True", None,
-                          exp])
+        self.assertEqual(
+            [str(u), max_conns, self.filter_kwargs(kwargs)],
+            ["mysql:///dbname?charset=utf8&use_unicode=True", None, exp],
+        )
 
-    def test_mysql_good_charset(self):
+    def test_mysql_good_charset(self) -> None:
         u = url.make_url("mysql:///dbname?charset=utf8")
-        kwargs = dict(basedir='my-base-dir')
-        u, kwargs, max_conns = self.strat.special_case_mysql(u, kwargs)
-        self.assertEqual([str(u), max_conns, self.filter_kwargs(kwargs)],
-                         ["mysql:///dbname?charset=utf8&use_unicode=True", None,
-                          self.mysql_kwargs])
+        kwargs = {"basedir": 'my-base-dir'}
+        u, kwargs, max_conns = enginestrategy.special_case_mysql(u, kwargs)
+        self.assertEqual(
+            [str(u), max_conns, self.filter_kwargs(kwargs)],
+            ["mysql:///dbname?charset=utf8&use_unicode=True", None, self.mysql_kwargs],
+        )
 
-    def test_mysql_bad_charset(self):
+    def test_mysql_bad_charset(self) -> None:
         u = url.make_url("mysql:///dbname?charset=ebcdic")
-        kwargs = dict(basedir='my-base-dir')
+        kwargs = {"basedir": 'my-base-dir'}
         with self.assertRaises(TypeError):
-            self.strat.special_case_mysql(u, kwargs)
+            enginestrategy.special_case_mysql(u, kwargs)
 
-    def test_mysql_good_use_unicode(self):
+    def test_mysql_good_use_unicode(self) -> None:
         u = url.make_url("mysql:///dbname?use_unicode=True")
-        kwargs = dict(basedir='my-base-dir')
-        u, kwargs, max_conns = self.strat.special_case_mysql(u, kwargs)
-        self.assertEqual([str(u), max_conns, self.filter_kwargs(kwargs)],
-                         ["mysql:///dbname?charset=utf8&use_unicode=True", None,
-                          self.mysql_kwargs])
+        kwargs = {"basedir": 'my-base-dir'}
+        u, kwargs, max_conns = enginestrategy.special_case_mysql(u, kwargs)
+        self.assertEqual(
+            [str(u), max_conns, self.filter_kwargs(kwargs)],
+            ["mysql:///dbname?charset=utf8&use_unicode=True", None, self.mysql_kwargs],
+        )
 
-    def test_mysql_bad_use_unicode(self):
+    def test_mysql_bad_use_unicode(self) -> None:
         u = url.make_url("mysql:///dbname?use_unicode=maybe")
-        kwargs = dict(basedir='my-base-dir')
+        kwargs = {"basedir": 'my-base-dir'}
         with self.assertRaises(TypeError):
-            self.strat.special_case_mysql(u, kwargs)
+            enginestrategy.special_case_mysql(u, kwargs)
 
-    def test_mysql_storage_engine(self):
+    def test_mysql_storage_engine(self) -> None:
         u = url.make_url("mysql:///dbname?storage_engine=foo")
-        kwargs = dict(basedir='my-base-dir')
-        u, kwargs, max_conns = self.strat.special_case_mysql(u, kwargs)
+        kwargs = {"basedir": 'my-base-dir'}
+        u, kwargs, max_conns = enginestrategy.special_case_mysql(u, kwargs)
         exp = self.mysql_kwargs.copy()
-        exp['connect_args'] = dict(
-            init_command='SET default_storage_engine=foo')
-        self.assertEqual([str(u), max_conns, self.filter_kwargs(kwargs)],
-                         ["mysql:///dbname?charset=utf8&use_unicode=True", None,
-                          exp])
+        exp['connect_args'] = {"init_command": 'SET default_storage_engine=foo'}
+        self.assertEqual(
+            [str(u), max_conns, self.filter_kwargs(kwargs)],
+            ["mysql:///dbname?charset=utf8&use_unicode=True", None, exp],
+        )
 
 
 class BuildbotEngineStrategy(unittest.TestCase):
-
     "Test create_engine by creating a sqlite in-memory db"
 
-    def test_create_engine(self):
+    def test_create_engine(self) -> None:
         engine = enginestrategy.create_engine('sqlite://', basedir="/base")
-        self.assertEqual(engine.scalar("SELECT 13 + 14"), 27)
+        try:
+            with engine.connect() as conn:
+                self.assertEqual(conn.scalar(sa.text("SELECT 13 + 14")), 27)
+        finally:
+            engine.dispose()

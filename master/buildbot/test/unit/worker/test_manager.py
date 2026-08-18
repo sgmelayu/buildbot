@@ -13,7 +13,10 @@
 #
 # Copyright Buildbot Team Members
 
-import mock
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from unittest import mock
 
 from twisted.internet import defer
 from twisted.trial import unittest
@@ -22,23 +25,29 @@ from zope.interface import implementer
 from buildbot import interfaces
 from buildbot.process import botmaster
 from buildbot.test.fake import fakemaster
-from buildbot.test.util.misc import TestReactorMixin
+from buildbot.test.reactor import TestReactorMixin
 from buildbot.util import service
 from buildbot.worker import manager as workermanager
+
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
 
 
 @implementer(interfaces.IWorker)
 class FakeWorker(service.BuildbotService):
-
     reconfig_count = 0
 
-    def __init__(self, workername):
+    def __init__(self, workername: str) -> None:
         super().__init__(name=workername)
 
-    def reconfigService(self):
+    def reconfigService(self) -> defer.Deferred[None]:  # type: ignore[override]
         self.reconfig_count += 1
         self.configured = True
         return defer.succeed(None)
+
+    @property
+    def workername(self) -> str:
+        return self.name  # type: ignore[return-value]
 
 
 class FakeWorker2(FakeWorker):
@@ -46,11 +55,10 @@ class FakeWorker2(FakeWorker):
 
 
 class TestWorkerManager(TestReactorMixin, unittest.TestCase):
-
     @defer.inlineCallbacks
-    def setUp(self):
-        self.setUpTestReactor()
-        self.master = fakemaster.make_master(self, wantMq=True, wantData=True)
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        self.setup_test_reactor()
+        self.master = yield fakemaster.make_master(self, wantMq=True, wantData=True)
         self.master.mq = self.master.mq
         self.workers = workermanager.WorkerManager(self.master)
         yield self.workers.setServiceParent(self.master)
@@ -62,12 +70,10 @@ class TestWorkerManager(TestReactorMixin, unittest.TestCase):
 
         self.new_config = mock.Mock()
         self.workers.startService()
-
-    def tearDown(self):
-        return self.workers.stopService()
+        self.addCleanup(self.workers.stopService)
 
     @defer.inlineCallbacks
-    def test_reconfigServiceWorkers_add_remove(self):
+    def test_reconfigServiceWorkers_add_remove(self) -> InlineCallbacksType[None]:
         worker = FakeWorker('worker1')
         self.new_config.workers = [worker]
 
@@ -84,12 +90,12 @@ class TestWorkerManager(TestReactorMixin, unittest.TestCase):
         self.assertEqual(worker.running, False)
 
     @defer.inlineCallbacks
-    def test_reconfigServiceWorkers_reconfig(self):
+    def test_reconfigServiceWorkers_reconfig(self) -> InlineCallbacksType[None]:
         worker = FakeWorker('worker1')
         yield worker.setServiceParent(self.workers)
         worker.parent = self.master
-        worker.manager = self.workers
-        worker.botmaster = self.master.botmaster
+        worker.manager = self.workers  # type: ignore[attr-defined]
+        worker.botmaster = self.master.botmaster  # type: ignore[attr-defined]
 
         worker_new = FakeWorker('worker1')
         self.new_config.workers = [worker_new]
@@ -100,7 +106,7 @@ class TestWorkerManager(TestReactorMixin, unittest.TestCase):
         self.assertIdentical(self.workers.workers['worker1'], worker)
 
     @defer.inlineCallbacks
-    def test_reconfigServiceWorkers_class_changes(self):
+    def test_reconfigServiceWorkers_class_changes(self) -> InlineCallbacksType[None]:
         worker = FakeWorker('worker1')
         yield worker.setServiceParent(self.workers)
 
@@ -113,12 +119,11 @@ class TestWorkerManager(TestReactorMixin, unittest.TestCase):
         self.assertIdentical(self.workers.workers['worker1'], worker_new)
 
     @defer.inlineCallbacks
-    def test_newConnection_remoteGetWorkerInfo_failure(self):
+    def test_newConnection_remoteGetWorkerInfo_failure(self) -> InlineCallbacksType[None]:
         class Error(RuntimeError):
             pass
 
         conn = mock.Mock()
-        conn.remoteGetWorkerInfo = mock.Mock(
-            return_value=defer.fail(Error()))
-        yield self.assertFailure(
-            self.workers.newConnection(conn, "worker"), Error)
+        conn.remoteGetWorkerInfo = mock.Mock(return_value=defer.fail(Error()))
+        with self.assertRaises(Error):
+            yield self.workers.newConnection(conn, "worker")

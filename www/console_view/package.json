@@ -1,27 +1,58 @@
 {
-    "name": "buildbot-console-view",
-    "plugin_name": "console_view",
-    "private": true,
-    "main": "buildbot_console_view/static/scripts.js",
-    "style": "buildbot_console_view/static/styles.js",
-    "scripts": {
-        "build": "rimraf buildbot_console_view/static && webpack --bail --progress --profile --env prod",
-        "build-dev": "rimraf buildbot_console_view/static && webpack --bail --progress --profile --env dev",
-        "dev": "webpack --bail --progress --profile --watch --env dev",
-        "test": "karma start",
-        "test-watch": "karma start --auto-watch --no-single-run"
-    },
-    "devDependencies": {
-        "angular-mocks": "^1.7.9",
-        "buildbot-build-common": "link:../build_common",
-        "lodash": "^4.17.11",
-        "rimraf": "^2.6.3"
-    },
-    "dependencies": {
-        "@uirouter/angularjs": "^1.0.15",
-        "angular": "^1.7.9",
-        "angular-animate": "^1.7.9",
-        "buildbot-data-js": "link:../data_module",
-        "guanlecoja-ui": "link:../guanlecoja-ui"
-    }
+  "name": "buildbot-console-view",
+  "private": true,
+  "type": "module",
+  "module": "buildbot_console_view/static/scripts.js",
+  "style": "buildbot_console_view/static/styles.css",
+  "scripts": {
+    "start": "vite",
+    "build": "vite build",
+    "build-dev": "vite build -m development",
+    "test": "vitest run",
+    "test-watch": "vitest --watch"
+  },
+  "babel": {
+    "presets": [
+      "react-app"
+    ]
+  },
+  "peerDependencies": {
+    "axios": "~1.7.7",
+    "mobx": "^6.13.4",
+    "mobx-react": "^9.1.1",
+    "moment": "^2.29.4",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.3.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "~5.1.4",
+    "axios": "~1.7.7",
+    "axios-mock-adapter": "~2.0.0",
+    "build-config-buildbot": "file:../common-config",
+    "buildbot-data-js": "file:../data-module",
+    "buildbot-plugin-support": "file:../plugin_support",
+    "buildbot-ui": "file:../ui",
+    "eslint": "^9.27.0",
+    "jsdom": "^25.0.0",
+    "mobx": "^6.13.4",
+    "mobx-react": "^9.1.1",
+    "moment": "^2.29.4",
+    "prettier": "^3.8.1",
+    "react": "^18.2.0",
+    "react-app-polyfill": "~3.0.0",
+    "react-bootstrap": "^2.10.10",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.3.0",
+    "sass": "^1.56.0",
+    "vite": "~7.1.10",
+    "vite-plugin-checker": "^0.9.0",
+    "vitest": "~3.0.5"
+  },
+  "packageManager": "npm@11.10.1",
+  "license": "GPL-2.0",
+  "dependencies": {
+    "react-icons": "^5.3.0",
+    "typescript": "~5.8.3"
+  }
 }

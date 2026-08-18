@@ -13,19 +13,24 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
+from typing import Any
+from typing import Callable
 
 from twisted.internet import defer
 from twisted.python import util
 
 
-def patch_noargs_decorator(decorator):
-    def new_decorator(func):
+def patch_noargs_decorator(decorator: Callable[..., Any]) -> Callable[..., Any]:
+    def new_decorator(func: Callable[..., Any]) -> Any:
         wrapper = decorator(func)
         wrapper.__wrapped__ = func
         return wrapper
+
     util.mergeFunctionMetadata(decorator, new_decorator)
     return new_decorator
 
 
-def patch():
+def patch() -> None:
     defer.inlineCallbacks = patch_noargs_decorator(defer.inlineCallbacks)

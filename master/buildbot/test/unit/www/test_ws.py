@@ -12,83 +12,348 @@
 # Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
 # Copyright Buildbot Team Members
+from __future__ import annotations
 
+import datetime
 import json
+import re
+from typing import TYPE_CHECKING
+from typing import Any
+from unittest import mock
 
-from mock import Mock
-
+import jwt
+from autobahn.websocket.types import ConnectionDeny
+from autobahn.websocket.types import ConnectionRequest
+from twisted.internet import defer
 from twisted.trial import unittest
 
+from buildbot.test.reactor import TestReactorMixin
 from buildbot.test.util import www
-from buildbot.test.util.misc import TestReactorMixin
 from buildbot.util import bytes2unicode
+from buildbot.www import auth
 from buildbot.www import ws
+
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
 
 
 class WsResource(TestReactorMixin, www.WwwTestMixin, unittest.TestCase):
-
-    def setUp(self):
-        self.setUpTestReactor()
-        self.master = master = self.make_master(url='h:/a/b/')
+    @defer.inlineCallbacks
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        self.setup_test_reactor()
+        self.master = master = yield self.make_master(url="h:/a/b/", wantMq=True, wantGraphql=True)
         self.ws = ws.WsResource(master)
         self.proto = self.ws._factory.buildProtocol("me")
-        self.gotMsg = []
-        self.proto.sendMessage = Mock(spec=self.proto.sendMessage)
+        self.proto.sendMessage = mock.Mock(spec=self.proto.sendMessage)
 
-    def assert_called_with_json(self, obj, expected_json):
+    def assert_called_with_json(self, obj: mock.Mock, expected_json: dict[str, Any]) -> None:
         jsonArg = obj.call_args[0][0]
         jsonArg = bytes2unicode(jsonArg)
         actual_json = json.loads(jsonArg)
+
+        keys_to_pop = []
+        for key, expected_value in expected_json.items():
+            if hasattr(expected_value, 'match'):
+                keys_to_pop.append(key)
+                self.assertRegex(actual_json[key], expected_value)
+
+        for key in keys_to_pop:
+            expected_json.pop(key)
+            actual_json.pop(key)
+
         self.assertEqual(actual_json, expected_json)
 
-    def test_ping(self):
-        self.proto.onMessage(json.dumps(dict(cmd="ping", _id=1)), False)
-        self.assert_called_with_json(self.proto.sendMessage,
-            {"msg": "pong", "code": 200, "_id": 1})
+    def test_ping(self) -> None:
+        self.proto.onMessage(json.dumps({"cmd": 'ping', "_id": 1}), False)
+        self.assert_called_with_json(self.proto.sendMessage, {"msg": "pong", "code": 200, "_id": 1})
 
-    def test_bad_cmd(self):
-        self.proto.onMessage(json.dumps(dict(cmd="poing", _id=1)), False)
-        self.assert_called_with_json(self.proto.sendMessage,
-            {"_id": 1, "code": 404, "error": "no such command 'poing'"})
+    def test_bad_cmd(self) -> None:
+        self.proto.onMessage(json.dumps({"cmd": 'poing', "_id": 1}), False)
+        self.assert_called_with_json(
+            self.proto.sendMessage,
+            {"_id": 1, "code": 404, "error": "no such command type 'poing'"},
+        )
 
-    def test_no_cmd(self):
-        self.proto.onMessage(json.dumps(dict(_id=1)), False)
-        self.assert_called_with_json(self.proto.sendMessage,
-            {"_id": None, "code": 400, "error": "no 'cmd' in websocket frame"})
+    def test_no_cmd(self) -> None:
+        self.proto.onMessage(json.dumps({"_id": 1}), False)
+        self.assert_called_with_json(
+            self.proto.sendMessage,
+            {"_id": None, "code": 400, "error": "no 'cmd' in websocket frame"},
+        )
 
-    def test_no_id(self):
-        self.proto.onMessage(json.dumps(dict(cmd="ping")), False)
-        self.assert_called_with_json(self.proto.sendMessage,
-            {"_id": None, "code": 400, "error": "no '_id' in websocket frame"})
+    def test_too_many_arguments(self) -> None:
+        self.proto.onMessage(json.dumps({"_id": 1, "cmd": 'ping', "foo": 'bar'}), False)
+        self.assert_called_with_json(
+            self.proto.sendMessage,
+            {
+                "_id": 1,
+                "code": 400,
+                "error": re.compile(".*Invalid method argument.*"),
+            },
+        )
 
-    def test_startConsuming(self):
+    def test_no_id(self) -> None:
+        self.proto.onMessage(json.dumps({"cmd": 'ping'}), False)
+        self.assert_called_with_json(
+            self.proto.sendMessage,
+            {
+                "_id": None,
+                "code": 400,
+                "error": "no '_id' or 'type' in websocket frame",
+            },
+        )
+
+    def test_startConsuming(self) -> None:
         self.proto.onMessage(
-            json.dumps(dict(cmd="startConsuming", path="builds/*/*", _id=1)), False)
-        self.assert_called_with_json(self.proto.sendMessage,
-            {"msg": "OK", "code": 200, "_id": 1})
+            json.dumps({"cmd": 'startConsuming', "path": 'builds/*/*', "_id": 1}), False
+        )
+        self.assert_called_with_json(self.proto.sendMessage, {"msg": "OK", "code": 200, "_id": 1})
         self.master.mq.verifyMessages = False
         self.master.mq.callConsumer(("builds", "1", "new"), {"buildid": 1})
-        self.assert_called_with_json(self.proto.sendMessage,
-            {"k": "builds/1/new", "m": {"buildid": 1}})
+        self.assert_called_with_json(
+            self.proto.sendMessage, {"k": "builds/1/new", "m": {"buildid": 1}}
+        )
 
-    def test_startConsumingBadPath(self):
-        self.proto.onMessage(
-            json.dumps(dict(cmd="startConsuming", path={}, _id=1)), False)
-        self.assert_called_with_json(self.proto.sendMessage,
-            {"_id": 1, "code": 400, "error": "invalid path format '{}'"})
+    def test_startConsumingBadPath(self) -> None:
+        self.proto.onMessage(json.dumps({"cmd": 'startConsuming', "path": {}, "_id": 1}), False)
+        self.assert_called_with_json(
+            self.proto.sendMessage,
+            {"_id": 1, "code": 400, "error": "invalid path format '{}'"},
+        )
 
-    def test_stopConsumingNotRegistered(self):
+    def test_stopConsumingNotRegistered(self) -> None:
         self.proto.onMessage(
-            json.dumps(dict(cmd="stopConsuming", path="builds/*/*", _id=1)), False)
-        self.assert_called_with_json(self.proto.sendMessage,
-            {"_id": 1, "code": 400, "error": "path was not consumed \'builds/*/*\'"})
+            json.dumps({"cmd": 'stopConsuming', "path": 'builds/*/*', "_id": 1}), False
+        )
+        self.assert_called_with_json(
+            self.proto.sendMessage,
+            {"_id": 1, "code": 400, "error": "path was not consumed 'builds/*/*'"},
+        )
 
-    def test_stopConsuming(self):
+    def test_stopConsuming(self) -> None:
         self.proto.onMessage(
-            json.dumps(dict(cmd="startConsuming", path="builds/*/*", _id=1)), False)
-        self.assert_called_with_json(self.proto.sendMessage,
-            {"msg": "OK", "code": 200, "_id": 1})
+            json.dumps({"cmd": 'startConsuming', "path": 'builds/*/*', "_id": 1}), False
+        )
+        self.assert_called_with_json(self.proto.sendMessage, {"msg": "OK", "code": 200, "_id": 1})
         self.proto.onMessage(
-            json.dumps(dict(cmd="stopConsuming", path="builds/*/*", _id=2)), False)
-        self.assert_called_with_json(self.proto.sendMessage,
-            {"msg": "OK", "code": 200, "_id": 2})
+            json.dumps({"cmd": 'stopConsuming', "path": 'builds/*/*', "_id": 2}), False
+        )
+        self.assert_called_with_json(self.proto.sendMessage, {"msg": "OK", "code": 200, "_id": 2})
+
+    def build_token(self, expired: bool, user_info: dict[str, Any]) -> str:
+        delta = datetime.timedelta(weeks=1)
+        if expired:
+            delta = -delta
+
+        expiration = datetime.datetime.now(datetime.timezone.utc) + delta
+
+        payload = {'user_info': user_info, 'exp': expiration}
+        return jwt.encode(
+            payload, self.master.www.site.session_secret, algorithm=auth.SESSION_SECRET_ALGORITHM
+        )
+
+    @defer.inlineCallbacks
+    def test_on_connect_no_ssl(self) -> InlineCallbacksType[None]:
+        self.master.www = mock.Mock()
+        self.master.www.authz = mock.Mock()
+        self.master.www.authz.assertUserAllowed = mock.Mock(return_value=defer.succeed(None))
+
+        request = ConnectionRequest(
+            path='/ws',
+            headers={'cookie': ''},
+            peer='tcp:127.0.0.1:1234',
+            host='localhost',
+            origin='http://localhost',
+            protocols=[],
+            version=13,
+            params={},
+            extensions=[],
+        )
+        yield self.proto.onConnect(request)
+        self.master.www.authz.assertUserAllowed.assert_called_once_with(
+            ('masters',), 'get', {}, {'anonymous': True}
+        )
+
+    @defer.inlineCallbacks
+    def test_on_connect_with_token(self) -> InlineCallbacksType[None]:
+        self.master.www = mock.Mock()
+        self.master.www.site = mock.Mock()
+        self.master.www.site.session_secret = 'secret_with_enough_length_for_jwt'
+        self.master.www.authz = mock.Mock()
+        self.master.www.authz.assertUserAllowed = mock.Mock(return_value=defer.succeed(None))
+
+        token = self.build_token(expired=False, user_info={'some': 'payload'})
+
+        request = ConnectionRequest(
+            path='/ws',
+            headers={'cookie': f'TWISTED_SESSION={token}'},
+            peer='tcp:127.0.0.1:1234',
+            host='localhost',
+            origin='http://localhost',
+            protocols=[],
+            version=13,
+            params={},
+            extensions=[],
+        )
+
+        yield self.proto.onConnect(request)
+        self.master.www.authz.assertUserAllowed.assert_called_once_with(
+            ('masters',), 'get', {}, {'some': 'payload'}
+        )
+
+    @defer.inlineCallbacks
+    def test_on_connect_with_expired_token(self) -> InlineCallbacksType[None]:
+        self.master.www = mock.Mock()
+        self.master.www.site = mock.Mock()
+        self.master.www.site.session_secret = 'secret_with_enough_length_for_jwt'
+        self.master.www.authz = mock.Mock()
+        self.master.www.authz.assertUserAllowed = mock.Mock(return_value=defer.succeed(None))
+
+        token = self.build_token(expired=True, user_info={'some': 'payload'})
+
+        request = ConnectionRequest(
+            path='/ws',
+            headers={'cookie': f'TWISTED_SESSION={token}'},
+            peer='tcp:127.0.0.1:1234',
+            host='localhost',
+            origin='http://localhost',
+            protocols=[],
+            version=13,
+            params={},
+            extensions=[],
+        )
+
+        with self.assertRaises(ConnectionDeny) as cm:
+            yield self.proto.onConnect(request)
+        self.assertEqual(cm.exception.args, (403, 'Forbidden'))
+
+    @defer.inlineCallbacks
+    def test_on_connect_invalid_token(self) -> InlineCallbacksType[None]:
+        self.master.www = mock.Mock()
+        self.master.www.site = mock.Mock()
+        self.master.www.site.session_secret = 'secret_with_enough_length_for_jwt'
+        self.master.www.authz = mock.Mock()
+
+        request = ConnectionRequest(
+            path='/ws',
+            headers={'cookie': 'TWISTED_SESSION=invalid_token'},
+            peer='tcp:127.0.0.1:1234',
+            host='localhost',
+            origin='http://localhost',
+            protocols=[],
+            version=13,
+            params={},
+            extensions=[],
+        )
+
+        with self.assertRaises(ConnectionDeny) as cm:
+            yield self.proto.onConnect(request)
+        self.assertEqual(cm.exception.args, (403, 'Forbidden'))
+        self.assertEqual(len(self.flushLoggedErrors(jwt.exceptions.DecodeError)), 1)
+
+    @defer.inlineCallbacks
+    def test_on_connect_with_ssl(self) -> InlineCallbacksType[None]:
+        self.master.www = mock.Mock()
+        self.master.www.site = mock.Mock()
+        self.master.www.site.session_secret = 'secret_with_enough_length_for_jwt'
+        self.master.www.authz = mock.Mock()
+        self.master.www.authz.assertUserAllowed = mock.Mock(return_value=defer.succeed(None))
+
+        self.proto.is_secure = mock.Mock(return_value=True)
+
+        token = self.build_token(expired=False, user_info={'some': 'payload'})
+        request = ConnectionRequest(
+            path='/ws',
+            headers={'cookie': f'TWISTED_SECURE_SESSION={token}'},
+            peer='tcp:127.0.0.1:1234',
+            host='localhost',
+            origin='http://localhost',
+            protocols=[],
+            version=13,
+            params={},
+            extensions=[],
+        )
+
+        yield self.proto.onConnect(request)
+        self.master.www.authz.assertUserAllowed.assert_called_once_with(
+            ('masters',), 'get', {}, {'some': 'payload'}
+        )
+
+    @defer.inlineCallbacks
+    def test_on_connect_different_path(self) -> InlineCallbacksType[None]:
+        self.master.www = mock.Mock()
+        self.master.www.site = mock.Mock()
+        self.master.www.site.session_secret = 'secret_with_enough_length_for_jwt'
+        self.master.www.authz = mock.Mock()
+        self.master.www.authz.assertUserAllowed = mock.Mock(return_value=defer.succeed(None))
+
+        token = self.build_token(expired=False, user_info={'some': 'payload'})
+
+        request = ConnectionRequest(
+            path='/custom/ws',
+            headers={'cookie': f'TWISTED_SESSION_custom={token}'},
+            peer='tcp:127.0.0.1:1234',
+            host='localhost',
+            origin='http://localhost',
+            protocols=[],
+            version=13,
+            params={},
+            extensions=[],
+        )
+
+        yield self.proto.onConnect(request)
+        self.master.www.authz.assertUserAllowed.assert_called_once_with(
+            ('masters',), 'get', {}, {'some': 'payload'}
+        )
+
+    @defer.inlineCallbacks
+    def test_on_connect_direct_connection_deny(self) -> InlineCallbacksType[None]:
+        self.master.www = mock.Mock()
+        self.master.www.site = mock.Mock()
+        self.master.www.site.session_secret = 'secret_with_enough_length_for_jwt'
+        self.master.www.authz = mock.Mock()
+        self.master.www.authz.assertUserAllowed = mock.Mock(
+            side_effect=ConnectionDeny(403, "Forbidden")
+        )
+
+        request = ConnectionRequest(
+            path='/ws',
+            headers={'cookie': 'auth_token=valid'},
+            peer='tcp:127.0.0.1:1234',
+            host='localhost',
+            origin='http://localhost',
+            protocols=[],
+            version=13,
+            params={},
+            extensions=[],
+        )
+
+        with self.assertRaises(ConnectionDeny) as cm:
+            yield self.proto.onConnect(request)
+        self.assertEqual(cm.exception.args, (403, 'Forbidden'))
+
+
+class TestParseCookies(unittest.TestCase):
+    def test_parse_cookies_single(self) -> None:
+        result = ws.parse_cookies("name=value")
+        self.assertEqual(result, {"name": "value"})
+
+    def test_parse_cookies_multiple_comma(self) -> None:
+        result = ws.parse_cookies("name1=value1,name2=value2")
+        self.assertEqual(result, {"name1": "value1", "name2": "value2"})
+
+    def test_parse_cookies_multiple_semicolon(self) -> None:
+        result = ws.parse_cookies("name1=value1; name2=value2")
+        self.assertEqual(result, {"name1": "value1", "name2": "value2"})
+
+    def test_parse_cookies_mixed_separators(self) -> None:
+        result = ws.parse_cookies("name1=value1,name2=value2; name3=value3")
+        self.assertEqual(result, {"name1": "value1", "name2": "value2", "name3": "value3"})
+
+    def test_parse_cookies_malformed(self) -> None:
+        result = ws.parse_cookies("name1=value1; invalid; name2=value2")
+        self.assertEqual(result, {"name1": "value1", "name2": "value2"})
+
+    def test_parse_cookies_empty(self) -> None:
+        result = ws.parse_cookies("")
+        self.assertEqual(result, {})

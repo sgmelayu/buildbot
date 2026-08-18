@@ -120,9 +120,9 @@ Reuse same image for different workers
 
 Previous simple example hardcodes the worker name into the dockerfile, which will not work if you want to share your docker image between workers.
 
-You can find in buildbot source code in :contrib-src:`master/contrib/docker` one example configurations:
+You can find in buildbot source code in :src:`master/contrib/docker` one example configurations:
 
-:contrib-src:`pythonnode_worker <master/contrib/docker/pythonnode_worker/>`
+:src:`pythonnode_worker <master/contrib/docker/pythonnode_worker/>`
     a worker with Python and node installed, which demonstrate how to reuse the base worker to create variations of build environments.
     It is based on the official ``buildbot/buildbot-worker`` image.
 
@@ -153,13 +153,13 @@ To do this, enter the following lines in a Python prompt where docker-py is inst
 
     >>> import docker
     >>> docker_socket = 'tcp://localhost:2375'
-    >>> client = docker.client.Client(base_url=docker_socket)
+    >>> client = docker.client.DockerClient(base_url=docker_socket)
     >>> worker_image = 'my_project_worker'
-    >>> container = client.create_container(worker_image)
-    >>> client.start(container['Id'])
+    >>> container = client.containers.create_container(worker_image)
+    >>> client.containers.start(container['Id'])
     >>> # Optionally examine the logs of the master
-    >>> client.stop(container['Id'])
-    >>> client.wait(container['Id'])
+    >>> client.containers.stop(container['Id'])
+    >>> client.containers.wait(container['Id'])
     0
 
 It is now time to add the new worker to the master configuration under :bb:cfg:`workers`.
@@ -183,11 +183,11 @@ The following example will add a Docker latent worker for docker running at the 
 In addition to the arguments available for any :ref:`Latent-Workers`, :class:`DockerLatentWorker` will accept the following extra ones:
 
 ``docker_host``
-    (mandatory)
+    (renderable string, mandatory)
     This is the address the master will use to connect with a running Docker instance.
 
 ``image``
-
+    (renderable string, mandatory)
     This is the name of the image that will be started by the build master. It should start a worker.
     This option can be a renderable, like :ref:`Interpolate`, so that it generates from the build request properties.
 
@@ -196,11 +196,17 @@ In addition to the arguments available for any :ref:`Latent-Workers`, :class:`Do
     This will override the command setup during image creation.
 
 ``volumes``
-    (optional)
-    See `Setting up Volumes`_
+    (a renderable list of strings, optional)
+    Allows to share directory between containers, or between a container and the host system.
+    Refer to Docker documentation for more information about Volumes.
+
+    Each string within the ``volumes`` array specify a volume in the following format: :samp:`{volumename}:{bindname}`.
+    The volume name has to be appended with ``:ro`` if the volume should be mounted *read-only*.
+
+    .. note:: This is the same format as when specifying volumes on the command line for docker's own ``-v`` option.
 
 ``dockerfile``
-    (optional if ``image`` is given)
+    (renderable string, optional if ``image`` is given)
     This is the content of the Dockerfile that will be used to build the specified image if the image is not found by Docker.
     It should be a multiline string.
 
@@ -225,9 +231,15 @@ In addition to the arguments available for any :ref:`Latent-Workers`, :class:`Do
     Address of the master the worker should connect to. Use if you master machine does not have proper fqdn.
     This value is passed to the docker image via environment variable ``BUILDMASTER``
 
+``master_protocol``
+    (optional, default to ``pb``)
+    Protocol that the worker should use when connecting to master. Supported values are ``pb`` and
+    ``msgpack_experimental_v7``.
+
 ``hostconfig``
-    (optional)
-    Extra host configuration parameters passed as a dictionary used to create HostConfig object. See `docker-py's HostConfig documentation <https://docker-py.readthedocs.io/en/stable/api.html#docker.api.container.ContainerApiMixin.create_host_config>`_ for all the supported options.
+    (renderable dictionary, optional)
+    Extra host configuration parameters passed as a dictionary used to create HostConfig object.
+    See `docker-py's HostConfig documentation <https://docker-py.readthedocs.io/en/stable/api.html#docker.api.container.ContainerApiMixin.create_host_config>`_ for all the supported options.
 
 ``autopull``
     (optional, defaults to false)
@@ -235,35 +247,28 @@ In addition to the arguments available for any :ref:`Latent-Workers`, :class:`Do
 
 ``alwaysPull``
     (optional, defaults to false)
-    Always pulls image if autopull is set to true.
+    Always pulls (update) image if autopull is set to true.
+    Also affects the base image specified by `FROM ....` if using a dockerfile, autopull is not needed then.
+
+``target``
+    (renderable string, optional)
+    Sets target build stage for multi-stage builds when using a dockerfile.
 
 ``custom_context``
-	(optional)
+    (renderable boolean, optional)
 	Boolean indicating that the user wants to use custom build arguments for the docker environment. Defaults to False.
 
 ``encoding``
-	(optional)
+    (renderable string, optional)
 	String indicating the compression format for the build context. defaults to 'gzip', but 'bzip' can be used as well.
 
 ``buildargs``
-	(optional if ``custom_context`` is True)
+    (renderable dictionary, optional if ``custom_context`` is True)
 	Dictionary, passes information for the docker to build its environment. Eg. {'DISTRO':'ubuntu', 'RELEASE':'11.11'}. Defaults to None.
 
 ``hostname``
-        (optional)
-        This will set container's hostname.
-
-Setting up Volumes
-..................
-
-The ``volume`` parameter allows to share directory between containers, or between a container and the host system.
-Refer to Docker documentation for more information about Volumes.
-
-The format of that variable has to be an array of string.
-Each string specify a volume in the following format: :samp:`{volumename}:{bindname}`.
-The volume name has to be appended with ``:ro`` if the volume should be mounted *read-only*.
-
-.. note:: This is the same format as when specifying volumes on the command line for docker's own ``-v`` option.
+    (renderable string, optional)
+    This will set container's hostname.
 
 Marathon latent worker
 ======================
@@ -271,8 +276,6 @@ Marathon latent worker
 Marathon_ Marathon is a production-grade container orchestration platform for Mesosphere's Data-center Operating System (DC/OS) and Apache ``Mesos``.
 
 Buildbot supports using Marathon_ to host your latent workers.
-It requires either `txrequests`_ or `treq`_ to be installed to allow interaction with http server.
-See :class:`HTTPClientService` for details.
 
 .. py:class:: buildbot.worker.marathon.MarathonLatentWorker
 .. py:class:: buildbot.plugins.worker.MarathonLatentWorker
@@ -319,7 +322,6 @@ In addition to the arguments available for any :ref:`Latent-Workers`, :class:`Ma
 .. _Marathon: https://mesosphere.github.io/marathon/
 .. _Marathon API: http://mesosphere.github.io/marathon/docs/rest-api.html#post-v2-apps
 .. _txrequests: https://pypi.python.org/pypi/txrequests
-.. _treq: https://pypi.python.org/pypi/treq
 .. _requests authentication plugin: https://2.python-requests.org/en/master/user/authentication/
 
 Kubernetes latent worker
@@ -365,6 +367,11 @@ In addition to the arguments available for any :ref:`Latent-Workers`, :class:`Ku
     The default behaviour is to compute address IP of the master. This option works out-of-the box inside kubernetes but don't leverage the load-balancing through service.
     You can pass any callable, such as ``KubeLatentWorker.get_fqdn`` that will set ``masterFQDN=socket.getfqdn()``.
 
+``master_protocol``
+    (optional, default to ``pb``)
+    Protocol that the worker should use when connecting to master. Supported values are ``pb`` and
+    ``msgpack_experimental_v7``.
+
 For more customization, you can subclass :class:`KubeLatentWorker` and override following methods.
 All those methods can optionally return a deferred.
 All those methods take props object which is a L{IProperties} allowing to get some parameters from the build properties
@@ -376,9 +383,95 @@ All those methods take props object which is a L{IProperties} allowing to get so
 
     .. py:method:: getBuildContainerResources(self, props)
 
-        This method compute the `pod resources` part of the container spec (`spec.containers[].resources`.
+        This method compute the `pod resources <https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#resources>`_ part of the container spec (`spec.containers[].resources`).
         This is important to reserve some CPU and memory for your builds, and to trigger node auto-scaling if needed.
         You can also limit the CPU and memory for your container.
+
+        Example:
+
+        .. code-block:: python
+
+            def getBuildContainerResources(self, props):
+                return {
+                    "requests": {
+                        "cpu": "2500m",
+                        "memory": "4G",
+                    }
+                }
+
+    .. py:method:: get_build_container_volume_mounts(self, props)
+
+        This method computes the `volumeMounts <https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#volumes-1>`_ part of the container spec.
+
+        Example:
+
+        .. code-block:: python
+
+            def get_build_container_volume_mounts(self, props):
+                return [
+                    {
+                        "name": "mount-name",
+                        "mountPath": "/cache",
+                    }
+                ]
+
+    .. py:method:: get_volumes(self, props)
+
+        This method computes the `volumes <https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#volumes>`_ part of the pod spec.
+
+        Example:
+
+        .. code-block:: python
+
+            def get_volumes(self, props):
+                return [
+                    {
+                        "name": "mount-name",
+                        "hostPath": {
+                            "path": "/var/log/pods",
+                        }
+                    }
+                ]
+
+    .. py:method:: get_node_selector(self, props)
+
+        This method computes the `nodeSelector <https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling>`_ part of the pod spec.
+
+        Example:
+
+        .. code-block:: python
+
+            def get_node_selector(self, props):
+                return {
+                    "my-label": "my-label-value"
+                }
+
+    .. py:method:: get_affinity(self, props)
+
+        This method computes the `affinity <https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#scheduling>`_ part of the pod spec.
+
+        Example:
+
+        .. code-block:: python
+
+            def get_affinity(self, props):
+                return {
+                    "nodeAffinity": {
+                        "requiredDuringSchedulingIgnoredDuringExecution": {
+                            "nodeSelectorTerms": [
+                                "matchExpressions": [
+                                    {
+                                        "key": "topology.kubernetes.io/zone",
+                                        "operator": "In",
+                                        "values": [
+                                            "antarctica-east1"
+                                        ]
+                                    }
+                                ]
+                            ]
+                        }
+                    }
+                }
 
     .. py:method:: getServicesContainers(self, props)
 
@@ -388,7 +481,6 @@ All those methods take props object which is a L{IProperties} allowing to get so
 
 
 .. _official buildbot image: https://hub.docker.com/r/buildbot/buildbot-worker/
-.. _pod resources: https://kubernetes.io/docs/concepts/configuration/manage-compute-resources-container/#resource-requests-and-limits-of-pod-and-container
 
 Kubernetes config loaders
 -------------------------

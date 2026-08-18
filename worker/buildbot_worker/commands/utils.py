@@ -13,9 +13,7 @@
 #
 # Copyright Buildbot Team Members
 
-from __future__ import absolute_import
-from __future__ import print_function
-from future.utils import text_type
+from __future__ import annotations
 
 import os
 
@@ -24,10 +22,10 @@ from twisted.python import runtime
 from twisted.python.procutils import which
 
 
-def getCommand(name):
-    possibles = which(name)
+def getCommand(name: str) -> str:
+    possibles: list[str] = which(name)
     if not possibles:
-        raise RuntimeError("Couldn't find executable for '{0}'".format(name))
+        raise RuntimeError(f"Couldn't find executable for '{name}'")
     #
     # Under windows, if there is more than one executable "thing"
     # that matches (e.g. *.bat, *.cmd and *.exe), we not just use
@@ -46,11 +44,12 @@ def getCommand(name):
 
 # this just keeps pyflakes happy on non-Windows systems
 if runtime.platformType != 'win32':
-    WindowsError = RuntimeError
+    WindowsError = OSError
 
 
 if runtime.platformType == 'win32':  # pragma: no cover
-    def rmdirRecursive(dir):
+
+    def rmdirRecursive(dir: str) -> None:
         """This is a replacement for shutil.rmtree that works better under
         windows. Thanks to Bear at the OSAF for the code."""
         if not os.path.exists(dir):
@@ -67,17 +66,16 @@ if runtime.platformType == 'win32':  # pragma: no cover
         # Thus, if a non-unicode-named dir contains a unicode filename, that filename will get
         # garbled.
         # So force dir to be unicode.
-        if not isinstance(dir, text_type):
+        if not isinstance(dir, str):
             try:
-                dir = text_type(dir, "utf-8")
+                dir = str(dir, "utf-8")
             except UnicodeDecodeError:
                 log.err("rmdirRecursive: decoding from UTF-8 failed (ignoring)")
 
         try:
             list = os.listdir(dir)
         except WindowsError as e:
-            msg = ("rmdirRecursive: unable to listdir {0} ({1}). Trying to "
-                   "remove like a dir".format(dir, e.strerror.decode('mbcs')))
+            msg = f"rmdirRecursive: unable to listdir {dir} ({e.strerror}). Trying to remove like a dir"
             log.msg(msg.encode('utf-8'))
             os.rmdir(dir)
             return
@@ -102,7 +100,10 @@ if runtime.platformType == 'win32':  # pragma: no cover
                     os.chmod(full_name, 0o700)
                 os.remove(full_name)
         os.rmdir(dir)
+
 else:
     # use rmtree on POSIX
     import shutil
-    rmdirRecursive = shutil.rmtree
+
+    def rmdirRecursive(dir: str) -> None:
+        shutil.rmtree(dir)

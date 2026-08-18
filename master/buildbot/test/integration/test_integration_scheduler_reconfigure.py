@@ -14,67 +14,64 @@
 # Copyright Buildbot Team Members
 
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from twisted.internet import defer
 
 from buildbot.plugins import schedulers
 from buildbot.test.util.integration import RunMasterBase
+
+if TYPE_CHECKING:
+    from typing import Any
+
+    from buildbot.util.twisted import InlineCallbacksType
 
 
 # This integration test creates a master and worker environment,
 # with one builders and a shellcommand step
 # meant to be a template for integration steps
 class ShellMaster(RunMasterBase):
+    def create_config(self) -> dict[str, Any]:
+        c = {}
+        from buildbot.config import BuilderConfig  # noqa: PLC0415
+        from buildbot.plugins import steps  # noqa: PLC0415
+        from buildbot.process.factory import BuildFactory  # noqa: PLC0415
+
+        c['schedulers'] = [
+            schedulers.AnyBranchScheduler(name="sched1", builderNames=["testy1"]),
+            schedulers.ForceScheduler(name="sched2", builderNames=["testy2"]),
+        ]
+        f = BuildFactory()
+        f.addStep(steps.ShellCommand(command='echo hello'))
+        c['builders'] = [
+            BuilderConfig(name=name, workernames=["local1"], factory=f)
+            for name in ['testy1', 'testy2']
+        ]
+        return c
 
     @defer.inlineCallbacks
-    def test_shell(self):
-        cfg = masterConfig()
-        yield self.setupConfig(cfg)
+    def test_shell(self) -> InlineCallbacksType[None]:
+        cfg = self.create_config()
+        yield self.setup_master(cfg)
 
-        change = dict(branch="master",
-                      files=["foo.c"],
-                      author="me@foo.com",
-                      committer="me@foo.com",
-                      comments="good stuff",
-                      revision="HEAD",
-                      project="none"
-                      )
+        change = {
+            "branch": "master",
+            "files": ["foo.c"],
+            "author": "me@foo.com",
+            "committer": "me@foo.com",
+            "comments": "good stuff",
+            "revision": "HEAD",
+            "project": "none",
+        }
         # switch the configuration of the scheduler, and make sure the correct builder is run
         cfg['schedulers'] = [
-            schedulers.AnyBranchScheduler(
-                name="sched1",
-                builderNames=["testy2"]),
-            schedulers.ForceScheduler(
-                name="sched2",
-                builderNames=["testy1"])
+            schedulers.AnyBranchScheduler(name="sched1", builderNames=["testy2"]),
+            schedulers.ForceScheduler(name="sched2", builderNames=["testy1"]),
         ]
         yield self.master.reconfig()
         build = yield self.doForceBuild(wantSteps=True, useChange=change, wantLogs=True)
         self.assertEqual(build['buildid'], 1)
         builder = yield self.master.data.get(('builders', build['builderid']))
         self.assertEqual(builder['name'], 'testy2')
-
-
-# master configuration
-def masterConfig():
-    c = {}
-    from buildbot.config import BuilderConfig
-    from buildbot.process.factory import BuildFactory
-    from buildbot.plugins import steps
-
-    c['schedulers'] = [
-        schedulers.AnyBranchScheduler(
-            name="sched1",
-            builderNames=["testy1"]),
-        schedulers.ForceScheduler(
-            name="sched2",
-            builderNames=["testy2"])
-    ]
-    f = BuildFactory()
-    f.addStep(steps.ShellCommand(command='echo hello'))
-    c['builders'] = [
-        BuilderConfig(name=name,
-                      workernames=["local1"],
-                      factory=f)
-        for name in ['testy1', 'testy2']
-    ]
-    return c

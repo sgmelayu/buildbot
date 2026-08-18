@@ -13,47 +13,53 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
 
 import datetime
 import json
+from typing import TYPE_CHECKING
+from typing import Any
 
+from twisted.internet import defer
 from twisted.trial import unittest
 
+from buildbot.test.reactor import TestReactorMixin
 from buildbot.test.unit.data import test_changes
 from buildbot.test.util import www
-from buildbot.test.util.misc import TestReactorMixin
 from buildbot.util import bytes2unicode
 from buildbot.util import datetime2epoch
 from buildbot.util import unicode2bytes
 from buildbot.www import sse
 
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
+
 
 class EventResource(TestReactorMixin, www.WwwTestMixin, unittest.TestCase):
-
-    def setUp(self):
-        self.setUpTestReactor()
-        self.master = master = self.make_master(url=b'h:/a/b/')
+    @defer.inlineCallbacks
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        self.setup_test_reactor()
+        self.master = master = yield self.make_master(url=b'h:/a/b/')  # type: ignore[arg-type]
         self.sse = sse.EventResource(master)
 
-    def test_simpleapi(self):
+    def test_simpleapi(self) -> None:
         self.render_resource(self.sse, b'/changes/*/*')
         self.readUUID(self.request)
         self.assertReceivesChangeNewMessage(self.request)
         self.assertEqual(self.request.finished, False)
 
-    def test_listen(self):
+    def test_listen(self) -> None:
         self.render_resource(self.sse, b'/listen/changes/*/*')
         self.readUUID(self.request)
         self.assertReceivesChangeNewMessage(self.request)
         self.assertEqual(self.request.finished, False)
 
-    def test_listen_add_then_close(self):
+    def test_listen_add_then_close(self) -> None:
         self.render_resource(self.sse, b'/listen')
         request = self.request
-        self.request = None
+        self.request = None  # type: ignore[assignment]
         uuid = self.readUUID(request)
-        self.render_resource(self.sse, b'/add/' +
-                             unicode2bytes(uuid) + b"/changes/*/*")
+        self.render_resource(self.sse, b'/add/' + unicode2bytes(uuid) + b"/changes/*/*")
         self.assertReceivesChangeNewMessage(request)
         self.assertEqual(self.request.finished, True)
         self.assertEqual(request.finished, False)
@@ -61,20 +67,18 @@ class EventResource(TestReactorMixin, www.WwwTestMixin, unittest.TestCase):
         with self.assertRaises(AssertionError):
             self.assertReceivesChangeNewMessage(request)
 
-    def test_listen_add_then_remove(self):
+    def test_listen_add_then_remove(self) -> None:
         self.render_resource(self.sse, b'/listen')
         request = self.request
         uuid = self.readUUID(request)
-        self.render_resource(self.sse, b'/add/' +
-                             unicode2bytes(uuid) + b"/changes/*/*")
+        self.render_resource(self.sse, b'/add/' + unicode2bytes(uuid) + b"/changes/*/*")
         self.assertReceivesChangeNewMessage(request)
         self.assertEqual(request.finished, False)
-        self.render_resource(self.sse, b'/remove/' +
-                             unicode2bytes(uuid) + b"/changes/*/*")
+        self.render_resource(self.sse, b'/remove/' + unicode2bytes(uuid) + b"/changes/*/*")
         with self.assertRaises(AssertionError):
             self.assertReceivesChangeNewMessage(request)
 
-    def test_listen_add_nouuid(self):
+    def test_listen_add_nouuid(self) -> None:
         self.render_resource(self.sse, b'/listen')
         request = self.request
         self.readUUID(request)
@@ -83,7 +87,7 @@ class EventResource(TestReactorMixin, www.WwwTestMixin, unittest.TestCase):
         self.assertEqual(self.request.responseCode, 400)
         self.assertIn(b"need uuid", self.request.written)
 
-    def test_listen_add_baduuid(self):
+    def test_listen_add_baduuid(self) -> None:
         self.render_resource(self.sse, b'/listen')
         request = self.request
         self.readUUID(request)
@@ -92,14 +96,13 @@ class EventResource(TestReactorMixin, www.WwwTestMixin, unittest.TestCase):
         self.assertEqual(self.request.responseCode, 400)
         self.assertIn(b"unknown uuid", self.request.written)
 
-    def readEvent(self, request):
-        kw = {}
+    def readEvent(self, request: Any) -> dict[bytes, bytes]:
+        kw: dict[bytes, bytes] = {}
         hasEmptyLine = False
         for line in request.written.splitlines():
             if line.find(b":") > 0:
                 k, v = line.split(b": ", 1)
-                self.assertTrue(k not in kw, k + b" in " +
-                                unicode2bytes(str(kw)))
+                self.assertTrue(k not in kw, k + b" in " + unicode2bytes(str(kw)))
                 kw[k] = v
             else:
                 self.assertEqual(line, b"")
@@ -108,22 +111,23 @@ class EventResource(TestReactorMixin, www.WwwTestMixin, unittest.TestCase):
         self.assertTrue(hasEmptyLine)
         return kw
 
-    def readUUID(self, request):
+    def readUUID(self, request: Any) -> bytes:
         kw = self.readEvent(request)
         self.assertEqual(kw[b"event"], b"handshake")
         return kw[b"data"]
 
-    def assertReceivesChangeNewMessage(self, request):
-        self.master.mq.callConsumer(
-            ("changes", "500", "new"), test_changes.Change.changeEvent)
+    def assertReceivesChangeNewMessage(self, request: Any) -> None:
+        self.master.mq.callConsumer(("changes", "500", "new"), test_changes.Change.changeEvent)
         kw = self.readEvent(request)
         self.assertEqual(kw[b"event"], b"event")
         msg = json.loads(bytes2unicode(kw[b"data"]))
         self.assertEqual(msg["key"], ['changes', '500', 'new'])
-        self.assertEqual(msg["message"], json.loads(
-            json.dumps(test_changes.Change.changeEvent, default=self._toJson)))
+        self.assertEqual(
+            msg["message"],
+            json.loads(json.dumps(test_changes.Change.changeEvent, default=self._toJson)),
+        )
 
-    def _toJson(self, obj):
+    def _toJson(self, obj: object) -> int | None:
         if isinstance(obj, datetime.datetime):
             return datetime2epoch(obj)
         return None

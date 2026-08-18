@@ -14,17 +14,30 @@
 # Copyright Buildbot Team Members
 
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from twisted.internet import defer
 
 from buildbot.data import base
 from buildbot.data import types
+from buildbot.warnings import warn_deprecated
+
+if TYPE_CHECKING:
+    from typing import Any
+
+    from buildbot.data.resultspec import ResultSpec
 
 
 class RootEndpoint(base.Endpoint):
-    isCollection = True
-    pathPatterns = "/"
+    kind = base.EndpointKind.COLLECTION
+    pathPatterns = [
+        "/",
+    ]
 
-    def get(self, resultSpec, kwargs):
+    def get(self, resultSpec: ResultSpec, kwargs: dict[str, Any]) -> Any:
+        warn_deprecated('4.3.0', 'the root endpoint with endpoint directory has been deprecated')
         return defer.succeed(self.master.data.rootLinks)
 
 
@@ -35,14 +48,17 @@ class Root(base.ResourceType):
 
     class EntityType(types.Entity):
         name = types.String()
+
     entityType = EntityType(name)
 
 
 class SpecEndpoint(base.Endpoint):
-    isCollection = True
-    pathPatterns = "/application.spec"
+    kind = base.EndpointKind.COLLECTION
+    pathPatterns = [
+        "/application.spec",
+    ]
 
-    def get(self, resultSpec, kwargs):
+    def get(self, resultSpec: ResultSpec, kwargs: dict[str, Any]) -> Any:
         return defer.succeed(self.master.data.allEndpoints())
 
 
@@ -56,4 +72,5 @@ class Spec(base.ResourceType):
         type = types.String()
         plural = types.String()
         type_spec = types.JsonObject()
+
     entityType = EntityType(name)

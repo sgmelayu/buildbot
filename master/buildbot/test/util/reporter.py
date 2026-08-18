@@ -13,15 +13,33 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from typing import Any
+
 from twisted.internet import defer
 
 from buildbot.process.results import SUCCESS
 from buildbot.test import fakedb
 
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
+
 
 class ReporterTestMixin:
+    master: Any
+    reporter_test_project: str
+    reporter_test_repo: str
+    reporter_test_revision: str | None
+    reporter_test_branch: str | None
+    reporter_test_codebase: str
+    reporter_test_change_id: str
+    reporter_test_builder_name: str
+    reporter_test_props: dict[str, Any]
+    reporter_test_thing_url: str
 
-    def setup_reporter_test(self):
+    def setup_reporter_test(self) -> None:
         self.reporter_test_project = 'testProject'
         self.reporter_test_repo = 'https://example.org/repo'
         self.reporter_test_revision = 'd34db33fd43db33f'
@@ -41,36 +59,63 @@ class ReporterTestMixin:
         self.reporter_test_thing_url = 'http://thing.example.com'
 
     @defer.inlineCallbacks
-    def insert_build(self, results, insert_ss=True, parent_plan=False, insert_patch=False):
-        self.insertTestData([results], results, insertSS=insert_ss,
-                            parentPlan=parent_plan, insert_patch=insert_patch)
+    def insert_build(
+        self,
+        results: int | None,
+        insert_ss: bool = True,
+        parent_plan: bool = False,
+        insert_patch: bool = False,
+    ) -> InlineCallbacksType[Any]:
+        yield self.insert_test_data(
+            [results],
+            results,
+            insertSS=insert_ss,
+            parentPlan=parent_plan,
+            insert_patch=insert_patch,
+        )
         build = yield self.master.data.get(("builds", 20))
         return build
 
     @defer.inlineCallbacks
-    def insert_build_finished(self, results=SUCCESS, **kwargs):
+    def insert_buildset_no_builds(
+        self,
+        results: int | None,
+        insert_ss: bool = True,
+        parent_plan: bool = False,
+        insert_patch: bool = False,
+    ) -> InlineCallbacksType[Any]:
+        yield self.insert_test_data(
+            [], results, insertSS=insert_ss, parentPlan=parent_plan, insert_patch=insert_patch
+        )
+        buildset = yield self.master.data.get(("buildsets", 98))
+        return buildset
+
+    @defer.inlineCallbacks
+    def insert_build_finished(
+        self, results: int | None = SUCCESS, **kwargs: Any
+    ) -> InlineCallbacksType[Any]:
         return (yield self.insert_build(results=results, **kwargs))
 
     @defer.inlineCallbacks
-    def insert_build_new(self, **kwargs):
+    def insert_build_new(self, **kwargs: Any) -> InlineCallbacksType[Any]:
         return (yield self.insert_build(results=None, **kwargs))
 
     @defer.inlineCallbacks
-    def insert_buildrequest_new(self, insert_patch=False, **kwargs):
-        self.db = self.master.db
-        self.db.insertTestData([
+    def insert_buildrequest_new(
+        self, insert_patch: bool = False, **kwargs: Any
+    ) -> InlineCallbacksType[Any]:
+        yield self.master.db.insert_test_data([
             fakedb.Master(id=92),
             fakedb.Worker(id=13, name='wrk'),
             fakedb.Builder(id=79, name='Builder0'),
             fakedb.Builder(id=80, name='Builder1'),
-            fakedb.Buildset(id=98, results=None, reason="testReason1",
-                            parent_buildid=None),
-            fakedb.BuildRequest(id=11, buildsetid=98, builderid=79)
+            fakedb.Buildset(id=98, results=None, reason="testReason1", parent_buildid=None),
+            fakedb.BuildRequest(id=11, buildsetid=98, builderid=79),
         ])
 
         patchid = 99 if insert_patch else None
 
-        self.db.insertTestData([
+        yield self.master.db.insert_test_data([
             fakedb.BuildsetSourceStamp(buildsetid=98, sourcestampid=234),
             fakedb.SourceStamp(
                 id=234,
@@ -79,44 +124,64 @@ class ReporterTestMixin:
                 revision=self.reporter_test_revision,
                 repository=self.reporter_test_repo,
                 codebase=self.reporter_test_codebase,
-                patchid=patchid),
-            fakedb.Patch(id=99, patch_base64='aGVsbG8sIHdvcmxk',
-                         patch_author='him@foo', patch_comment='foo', subdir='/foo',
-                         patchlevel=3)
+                patchid=patchid,
+            ),
+            fakedb.Patch(
+                id=99,
+                patch_base64='aGVsbG8sIHdvcmxk',
+                patch_author='him@foo',
+                patch_comment='foo',
+                subdir='/foo',
+                patchlevel=3,
+            ),
         ])
         request = yield self.master.data.get(("buildrequests", 11))
         return request
 
-    def insertTestData(self, buildResults, finalResult, insertSS=True,
-                       parentPlan=False, insert_patch=False):
-        self.db = self.master.db
-        self.db.insertTestData([
+    @defer.inlineCallbacks
+    def insert_test_data(
+        self,
+        buildResults: list[int | None],
+        finalResult: int | None,
+        insertSS: bool = True,
+        parentPlan: bool = False,
+        insert_patch: bool = False,
+    ) -> InlineCallbacksType[None]:
+        rows: list[Any] = [
             fakedb.Master(id=92),
             fakedb.Worker(id=13, name='wrk'),
             fakedb.Builder(id=79, name='Builder0'),
             fakedb.Builder(id=80, name='Builder1'),
-            fakedb.Buildset(id=98, results=finalResult, reason="testReason1",
-                            parent_buildid=19 if parentPlan else None),
-            fakedb.Change(changeid=13, branch=self.reporter_test_branch, revision='9283',
-                          author='me@foo', repository=self.reporter_test_repo,
-                          codebase=self.reporter_test_codebase, project='world-domination',
-                          sourcestampid=234),
-        ])
+            fakedb.Buildset(
+                id=98,
+                results=finalResult,
+                reason="testReason1",
+                parent_buildid=19 if parentPlan else None,
+            ),
+        ]
 
         if parentPlan:
-            self.db.insertTestData([
+            rows += [
                 fakedb.Worker(id=12, name='wrk_parent'),
                 fakedb.Builder(id=78, name='Builder_parent'),
                 fakedb.Buildset(id=97, results=finalResult, reason="testReason0"),
                 fakedb.BuildRequest(id=10, buildsetid=98, builderid=78),
-                fakedb.Build(id=19, number=1, builderid=78, buildrequestid=10, workerid=12,
-                             masterid=92, results=finalResult, state_string="buildText"),
-            ])
+                fakedb.Build(
+                    id=19,
+                    number=1,
+                    builderid=78,
+                    buildrequestid=10,
+                    workerid=12,
+                    masterid=92,
+                    results=finalResult,
+                    state_string="buildText",
+                ),
+            ]
 
         if insertSS:
             patchid = 99 if insert_patch else None
 
-            self.db.insertTestData([
+            rows += [
                 fakedb.BuildsetSourceStamp(buildsetid=98, sourcestampid=234),
                 fakedb.SourceStamp(
                     id=234,
@@ -125,51 +190,82 @@ class ReporterTestMixin:
                     revision=self.reporter_test_revision,
                     repository=self.reporter_test_repo,
                     codebase=self.reporter_test_codebase,
-                    patchid=patchid),
-                fakedb.Patch(id=99, patch_base64='aGVsbG8sIHdvcmxk',
-                             patch_author='him@foo', patch_comment='foo', subdir='/foo',
-                             patchlevel=3),
-            ])
+                    patchid=patchid,
+                ),
+                fakedb.Patch(
+                    id=99,
+                    patch_base64='aGVsbG8sIHdvcmxk',
+                    patch_author='him@foo',
+                    patch_comment='foo',
+                    subdir='/foo',
+                    patchlevel=3,
+                ),
+                fakedb.Change(
+                    changeid=13,
+                    branch=self.reporter_test_branch,
+                    revision='9283',
+                    author='me@foo',
+                    repository=self.reporter_test_repo,
+                    codebase=self.reporter_test_codebase,
+                    project='world-domination',
+                    sourcestampid=234,
+                ),
+            ]
 
         for i, results in enumerate(buildResults):
             started_at = 10000001
             complete_at = None if results is None else 10000005
-            self.db.insertTestData([
-                fakedb.BuildRequest(
-                    id=11 + i, buildsetid=98, builderid=79 + i),
-                fakedb.Build(id=20 + i, number=i, builderid=79 + i, buildrequestid=11 + i,
-                             workerid=13, masterid=92, results=results, state_string="buildText",
-                             started_at=started_at, complete_at=complete_at),
+            rows += [
+                fakedb.BuildRequest(id=11 + i, buildsetid=98, builderid=79 + i),
+                fakedb.Build(
+                    id=20 + i,
+                    number=i,
+                    builderid=79 + i,
+                    buildrequestid=11 + i,
+                    workerid=13,
+                    masterid=92,
+                    results=results,
+                    state_string="buildText",
+                    started_at=started_at,
+                    complete_at=complete_at,
+                ),
                 fakedb.Step(id=50 + i, buildid=20 + i, number=5, name='make'),
-                fakedb.Log(id=60 + i, stepid=50 + i, name='stdio', slug='stdio', type='s',
-                           num_lines=7),
-                fakedb.LogChunk(logid=60 + i, first_line=0, last_line=1, compressed=0,
-                                content='Unicode log with non-ascii (\u00E5\u00E4\u00F6).'),
-                fakedb.BuildProperty(
-                    buildid=20 + i, name="workername", value="wrk"),
-                fakedb.BuildProperty(
-                    buildid=20 + i, name="reason", value="because"),
-                fakedb.BuildProperty(
-                    buildid=20 + i, name="buildername", value="Builder0"),
-                fakedb.BuildProperty(
-                    buildid=20 + i, name="buildnumber", value="{}".format(i)),
+                fakedb.Log(
+                    id=60 + i, stepid=50 + i, name='stdio', slug='stdio', type='s', num_lines=7
+                ),
+                fakedb.LogChunk(
+                    logid=60 + i,
+                    first_line=0,
+                    last_line=1,
+                    compressed=0,
+                    content='Unicode log with non-ascii (\u00e5\u00e4\u00f6).',
+                ),
+                fakedb.BuildProperty(buildid=20 + i, name="workername", value="wrk"),
+                fakedb.BuildProperty(buildid=20 + i, name="reason", value="because"),
+                fakedb.BuildProperty(buildid=20 + i, name="buildername", value="Builder0"),
+                fakedb.BuildProperty(buildid=20 + i, name="buildnumber", value=f"{i}"),
                 fakedb.BuildProperty(buildid=20 + i, name="scheduler", value="checkin"),
-            ])
+            ]
             for k, v in self.reporter_test_props.items():
-                self.db.insertTestData([
-                    fakedb.BuildProperty(buildid=20 + i, name=k, value=v)
-                ])
+                rows += [fakedb.BuildProperty(buildid=20 + i, name=k, value=v)]
+
+        yield self.master.db.insert_test_data(rows)
 
         self.setup_fake_get_changes_for_build()
 
-    def setup_fake_get_changes_for_build(self, has_change=True):
+    def get_inserted_buildset(self) -> defer.Deferred[Any]:
+        return self.master.data.get(("buildsets", 98))
+
+    def setup_fake_get_changes_for_build(self, has_change: bool = True) -> None:
         @defer.inlineCallbacks
-        def getChangesForBuild(buildid):
+        def getChangesForBuild(buildid: int) -> InlineCallbacksType[list[Any]]:
             if not has_change:
                 return []
 
             assert buildid == 20
             ch = yield self.master.db.changes.getChange(13)
+            if ch is None:
+                return []
             return [ch]
 
         self.master.db.changes.getChangesForBuild = getChangesForBuild

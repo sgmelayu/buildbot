@@ -14,7 +14,11 @@
 # Copyright Buildbot Team Members
 
 
+from __future__ import annotations
+
 import subprocess
+from typing import TYPE_CHECKING
+from typing import Any
 
 from twisted.internet import defer
 from twisted.internet import protocol
@@ -22,62 +26,81 @@ from twisted.internet import reactor
 
 from buildbot.util.service import AsyncService
 
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
+
 
 class WorkerProcessProtocol(protocol.ProcessProtocol):
-    def __init__(self):
-        self.finished_deferred = defer.Deferred()
+    def __init__(self) -> None:
+        self.finished_deferred: defer.Deferred[None] = defer.Deferred()
 
-    def outReceived(self, data):
+    def outReceived(self, data: bytes) -> None:
         print(data)
 
-    def errReceived(self, data):
+    def errReceived(self, data: bytes) -> None:
         print(data)
 
-    def processEnded(self, _):
+    def processEnded(self, _: Any) -> None:
         self.finished_deferred.callback(None)
 
-    def waitForFinish(self):
+    def waitForFinish(self) -> defer.Deferred[None]:
         return self.finished_deferred
 
 
 class SandboxedWorker(AsyncService):
-    def __init__(self, masterhost, port, name, passwd, workerdir, sandboxed_worker_path):
+    def __init__(
+        self,
+        masterhost: str,
+        port: int,
+        name: str,
+        passwd: str,
+        workerdir: str,
+        sandboxed_worker_path: str,
+        protocol: str = 'pb',
+    ) -> None:
         self.masterhost = masterhost
         self.port = port
         self.workername = name
         self.workerpasswd = passwd
         self.workerdir = workerdir
         self.sandboxed_worker_path = sandboxed_worker_path
-        self.worker = None
+        self.protocol = protocol
+        self.worker: Any = None
 
-    def startService(self):
-
+    def startService(self) -> None:
         # Note that we create the worker with sync API
         # We don't really care as we are in tests
 
-        res = subprocess.run([self.sandboxed_worker_path, "create-worker", '-q', self.workerdir,
-                             self.masterhost + ":" + str(self.port), self.workername,
-                             self.workerpasswd],
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                             check=False)
+        res = subprocess.run(
+            [
+                self.sandboxed_worker_path,
+                "create-worker",
+                f'--protocol={self.protocol}',
+                '-q',
+                self.workerdir,
+                self.masterhost + ":" + str(self.port),
+                self.workername,
+                self.workerpasswd,
+            ],
+            capture_output=True,
+            check=False,
+        )
         if res.returncode != 0:
             # we do care about finding out why it failed though
-            raise RuntimeError("\n".join([
-                "Unable to create worker!",
-                res.stdout.decode(),
-                res.stderr.decode()
-            ]))
+            raise RuntimeError(
+                "\n".join(["Unable to create worker!", res.stdout.decode(), res.stderr.decode()])
+            )
 
         self.processprotocol = processProtocol = WorkerProcessProtocol()
         # we need to spawn the worker asynchronously though
         args = [self.sandboxed_worker_path, 'start', '--nodaemon', self.workerdir]
-        self.process = reactor.spawnProcess(processProtocol, self.sandboxed_worker_path, args=args)
+        self.process = reactor.spawnProcess(processProtocol, self.sandboxed_worker_path, args=args)  # type: ignore[attr-defined]
 
         self.worker = self.master.workers.getWorkerByName(self.workername)
         return super().startService()
 
     @defer.inlineCallbacks
-    def shutdownWorker(self):
+    def shutdownWorker(self) -> InlineCallbacksType[None]:
         if self.worker is None:
             return
         # on windows, we killing a process does not work well.

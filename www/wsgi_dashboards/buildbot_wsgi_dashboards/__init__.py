@@ -19,11 +19,14 @@ from twisted.web.wsgi import WSGIResource
 
 from buildbot.util import unicode2bytes
 from buildbot.www.plugin import Application
+from buildbot_wsgi_dashboards._version import version
+
+__version__ = version
 
 
 class WSGIDashboardsApplication(Application):
-
     def setConfiguration(self, config):
+        super().setConfiguration(config)
         for dashboard in config:
             dashboard['app'].buildbot_api = self
             resource = WSGIResource(reactor, reactor.getThreadPool(), dashboard['app'])

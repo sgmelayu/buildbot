@@ -29,7 +29,7 @@ Guidelines
   If you have trouble with tests that fail without any of your changes applied, get in touch with the developers for help.
 
 * Pull requests that add features or change existing behavior should include a brief description in the release notes.
-  See the master/buildbot/newsfragments directory and read the `README.txt <https://github.com/buildbot/buildbot/blob/master/master/buildbot/newsfragments/README.txt>`_ file therein.
+  See the `newsfragments` directory and read the `README.txt <https://github.com/buildbot/buildbot/blob/master/newsfragments/README.txt>`_ file therein.
 
 * Git commit messages form the "ChangeLog" for Buildbot, and as such should be as descriptive as possible.
 
@@ -132,7 +132,7 @@ Before each of the commands detailed below, a virtualenv must be setup as descri
     make virtualenv
     . .venv/bin/activate
 
-If you see weird test results after changing branches of the repository, remove the `.venv` directory and repeat above again.
+If you see weird test results after changing branches of the repository, remove the `.venv` directory and repeat the above again.
 Note that `pip install -r <file>.txt` only needs to be run once at the beginning of your testing session.
 
 Master unit tests
@@ -163,28 +163,16 @@ Linter checks
 ~~~~~~~~~~~~~
 
 Tests in this category run simple syntax and style checks on the Python code.
-These tests are represented by **bb/pylint/** and **bb/flake8/** test names in the Buildbot CI.
+These tests are represented by **bb/pylint/** and **bb/ruff/** test names in the Buildbot CI.
 To run locally, execute the following:
 
 .. code-block:: bash
 
     pip install -r requirements-ci.txt
     make pylint
-    make flake8
+    make ruff
 
-If you see spell check errors, but your words are perfectly correct, then you may need to add these words to a whitelist at common/code_spelling_ignore_words.txt.
-
-isort
-~~~~~
-
-Tests in this category sort the imports in the Python code.
-These tests are represented by **bb/isort/** test names in the Buildbot CI.
-To run locally, execute the following:
-
-.. code-block:: bash
-
-    pip install -r requirements-ci.txt
-    isort
+If you see spell check errors, but your words are perfectly correct, then you may need to add these words to a whitelist at `common/code_spelling_ignore_words.txt`.
 
 Documentation
 ~~~~~~~~~~~~~
@@ -199,13 +187,13 @@ To run locally, execute the following:
     pip install -r requirements-cidocs.txt
     make docs
 
-If you see spell check errors, but your words are perfectly correct, then you may need to add these words to a whitelist at master/docs/spelling_wordlist.txt.
+If you see spell check errors, but your words are perfectly correct, then you may need to add these words to a whitelist at `master/docs/spelling_wordlist.txt`.
 
 End-to-end tests
 ~~~~~~~~~~~~~~~~
 
 Tests in this category run the end-to-end tests by launching a full Buildbot instance, clicking on buttons on the web UI and testing the results.
-It is represented by **bb/smokes/** test names in the Buildbot CI.
+It is represented by **bb/e2e**/** test names in the Buildbot CI.
 The tests are sometimes unstable: if you didn't change the front end code and see a failure then it's most likely an instability.
 To run locally, install a Chrome-compatible browser and execute the following:
 
@@ -213,4 +201,4 @@ To run locally, install a Chrome-compatible browser and execute the following:
 
     pip install -r requirements-ci.txt
     make tarballs
-    ./common/smokedist.sh whl
+    ./common/smokedist-react.sh whl

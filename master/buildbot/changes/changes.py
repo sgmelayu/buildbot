@@ -13,8 +13,12 @@
 #
 # Copyright Buildbot Team Members
 
-import html  # py2: via future
+from __future__ import annotations
+
+import html
 import time
+from typing import TYPE_CHECKING
+from typing import Any
 
 from twisted.internet import defer
 from twisted.python import log
@@ -23,64 +27,76 @@ from buildbot import util
 from buildbot.process.properties import Properties
 from buildbot.util import datetime2epoch
 
+if TYPE_CHECKING:
+    from buildbot.db.changes import ChangeModel
+
 
 class Change:
-
     """I represent a single change to the source tree. This may involve several
     files, but they are all changed by the same person, and there is a change
     comment for the group as a whole."""
 
-    number = None
-    branch = None
-    category = None
-    revision = None  # used to create a source-stamp
-    links = []  # links are gone, but upgrade code expects this attribute
+    number: int | None = None
+    branch: str | None = None
+    category: str | None = None
+    revision: str | None = None  # used to create a source-stamp
+    links: list[str] = []  # links are gone, but upgrade code expects this attribute
 
     @classmethod
-    def fromChdict(cls, master, chdict):
+    def fromChdict(cls, master: Any, chdict: ChangeModel) -> Change:
         """
-        Class method to create a L{Change} from a dictionary as returned
+        Class method to create a L{Change} from a L{ChangeModel} as returned
         by L{ChangesConnectorComponent.getChange}.
 
         @param master: build master instance
-        @param ssdict: change dictionary
+        @param chdict: change model
 
         @returns: L{Change} via Deferred
         """
         cache = master.caches.get_cache("Changes", cls._make_ch)
-        return cache.get(chdict['changeid'], chdict=chdict, master=master)
+        return cache.get(chdict.changeid, chdict=chdict, master=master)
 
     @classmethod
-    def _make_ch(cls, changeid, master, chdict):
+    def _make_ch(cls, changeid: int, master: Any, chdict: ChangeModel) -> defer.Deferred[Change]:
         change = cls(None, None, None, _fromChdict=True)
-        change.who = chdict['author']
-        change.committer = chdict['committer']
-        change.comments = chdict['comments']
-        change.revision = chdict['revision']
-        change.branch = chdict['branch']
-        change.category = chdict['category']
-        change.revlink = chdict['revlink']
-        change.repository = chdict['repository']
-        change.codebase = chdict['codebase']
-        change.project = chdict['project']
-        change.number = chdict['changeid']
+        change.who = chdict.author
+        change.committer = chdict.committer
+        change.comments = chdict.comments
+        change.revision = chdict.revision
+        change.branch = chdict.branch
+        change.category = chdict.category
+        change.revlink = chdict.revlink or ""
+        change.repository = chdict.repository
+        change.codebase = chdict.codebase
+        change.project = chdict.project
+        change.number = chdict.changeid
+        change.when = datetime2epoch(chdict.when_timestamp)
 
-        when = chdict['when_timestamp']
-        if when:
-            when = datetime2epoch(when)
-        change.when = when
-
-        change.files = sorted(chdict['files'])
+        change.files = sorted(chdict.files)
 
         change.properties = Properties()
-        for n, (v, s) in chdict['properties'].items():
+        for n, (v, s) in chdict.properties.items():
             change.properties.setProperty(n, v, s)
 
         return defer.succeed(change)
 
-    def __init__(self, who, files, comments, committer=None, revision=None, when=None,
-                 branch=None, category=None, revlink='', properties=None,
-                 repository='', codebase='', project='', _fromChdict=False):
+    def __init__(
+        self,
+        who: str | None,
+        files: list[str] | None,
+        comments: str | None,
+        committer: str | None = None,
+        revision: str | None = None,
+        when: float | None = None,
+        branch: str | None = None,
+        category: str | None = None,
+        revlink: str = '',
+        properties: dict[str, Any] | None = None,
+        repository: str = '',
+        codebase: str = '',
+        project: str = '',
+        _fromChdict: bool = False,
+    ) -> None:
         if properties is None:
             properties = {}
         # skip all this madness if we're being built from the database
@@ -91,7 +107,7 @@ class Change:
         self.committer = committer
         self.comments = comments
 
-        def none_or_unicode(x):
+        def none_or_unicode(x: Any) -> str | None:
             if x is None:
                 return x
             return str(x)
@@ -103,8 +119,7 @@ class Change:
         elif when > now:
             # this happens when the committing system has an incorrect clock, for example.
             # handle it gracefully
-            log.msg(
-                "received a Change with when > now; assuming the change happened now")
+            log.msg("received a Change with when > now; assuming the change happened now")
             self.when = now
         else:
             self.when = when
@@ -120,7 +135,7 @@ class Change:
         # keep a sorted list of the files, for easier display
         self.files = sorted(files or [])
 
-    def __setstate__(self, dict):
+    def __setstate__(self, dict: dict[str, Any]) -> None:
         self.__dict__ = dict
         # Older Changes won't have a 'properties' attribute in them
         if not hasattr(self, 'properties'):
@@ -128,54 +143,95 @@ class Change:
         if not hasattr(self, 'revlink'):
             self.revlink = ""
 
-    def __str__(self):
-        return ("Change(revision=%r, who=%r, committer=%r, branch=%r, comments=%r, " +
-                "when=%r, category=%r, project=%r, repository=%r, " +
-                "codebase=%r)") % (
-            self.revision, self.who, self.committer, self.branch, self.comments,
-            self.when, self.category, self.project, self.repository,
-            self.codebase)
+    def __str__(self) -> str:
+        return (
+            "Change(revision=%r, who=%r, committer=%r, branch=%r, comments=%r, "
+            + "when=%r, category=%r, project=%r, repository=%r, "
+            + "codebase=%r)"
+        ) % (
+            self.revision,
+            self.who,
+            self.committer,
+            self.branch,
+            self.comments,
+            self.when,
+            self.category,
+            self.project,
+            self.repository,
+            self.codebase,
+        )
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Change):
+            raise NotImplementedError
         return self.number == other.number
 
-    def __ne__(self, other):
+    def __hash__(self) -> int:
+        return hash(self.number)
+
+    def __ne__(self, other: object) -> bool:
+        if not isinstance(other, Change):
+            raise NotImplementedError
         return self.number != other.number
 
-    def __lt__(self, other):
+    def __lt__(self, other: object) -> bool:
+        if not isinstance(other, Change):
+            raise NotImplementedError
+        if self.number is None:
+            return False
+        if other.number is None:
+            return False
         return self.number < other.number
 
-    def __le__(self, other):
+    def __le__(self, other: object) -> bool:
+        if not isinstance(other, Change):
+            raise NotImplementedError
+        if self.number is None:
+            return other.number is None
+        if other.number is None:
+            return False
         return self.number <= other.number
 
-    def __gt__(self, other):
+    def __gt__(self, other: object) -> bool:
+        if not isinstance(other, Change):
+            raise NotImplementedError
+        if self.number is None:
+            return False
+        if other.number is None:
+            return False
         return self.number > other.number
 
-    def __ge__(self, other):
+    def __ge__(self, other: object) -> bool:
+        if not isinstance(other, Change):
+            raise NotImplementedError
+        if self.number is None:
+            return other.number is None
+        if other.number is None:
+            return False
         return self.number >= other.number
 
-    def asText(self):
+    def asText(self) -> str:
         data = ""
         data += "Files:\n"
         for f in self.files:
-            data += " {}\n".format(f)
+            data += f" {f}\n"
         if self.repository:
-            data += "On: {}\n".format(self.repository)
+            data += f"On: {self.repository}\n"
         if self.project:
-            data += "For: {}\n".format(self.project)
-        data += "At: {}\n".format(self.getTime())
-        data += "Changed By: {}\n".format(self.who)
-        data += "Committed By: {}\n".format(self.committer)
-        data += "Comments: {}".format(self.comments)
+            data += f"For: {self.project}\n"
+        data += f"At: {self.getTime()}\n"
+        data += f"Changed By: {self.who}\n"
+        data += f"Committed By: {self.committer}\n"
+        data += f"Comments: {self.comments}"
         data += "Properties: \n"
         for prop in self.properties.asList():
-            data += "  {}: {}".format(prop[0], prop[1])
+            data += f"  {prop[0]}: {prop[1]}"
         data += '\n\n'
         return data
 
-    def asDict(self):
-        '''returns a dictionary with suitable info for html/mail rendering'''
-        files = [dict(name=f) for f in self.files]
+    def asDict(self) -> dict[str, Any]:
+        """returns a dictionary with suitable info for html/mail rendering"""
+        files = [{"name": f} for f in self.files]
         files.sort(key=lambda a: a['name'])
 
         result = {
@@ -195,24 +251,23 @@ class Change:
             'properties': self.properties.asList(),
             'repository': getattr(self, 'repository', None),
             'codebase': getattr(self, 'codebase', ''),
-            'project': getattr(self, 'project', None)
+            'project': getattr(self, 'project', None),
         }
         return result
 
-    def getShortAuthor(self):
+    def getShortAuthor(self) -> str | None:
         return self.who
 
-    def getTime(self):
+    def getTime(self) -> str:
         if not self.when:
             return "?"
-        return time.strftime("%a %d %b %Y %H:%M:%S",
-                             time.localtime(self.when))
+        return time.strftime("%a %d %b %Y %H:%M:%S", time.localtime(self.when))
 
-    def getTimes(self):
+    def getTimes(self) -> tuple[float, None]:
         return (self.when, None)
 
-    def getText(self):
-        return [html.escape(self.who)]
+    def getText(self) -> list[str]:
+        return [html.escape(self.who or "")]
 
-    def getLogs(self):
+    def getLogs(self) -> dict[str, Any]:
         return {}

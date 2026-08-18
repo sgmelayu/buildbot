@@ -13,11 +13,17 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
+import hashlib
+from typing import TYPE_CHECKING
+from typing import Any
 from urllib.parse import urlparse
 
 from twisted.internet import defer
 from twisted.python import log
 
+from buildbot import config
 from buildbot.process.properties import Properties
 from buildbot.process.properties import Property
 from buildbot.process.results import SUCCESS
@@ -26,6 +32,9 @@ from buildbot.reporters.generators.build import BuildStartEndStatusGenerator
 from buildbot.reporters.message import MessageFormatter
 from buildbot.util import httpclientservice
 
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
+
 # Magic words understood by Butbucket REST API
 BITBUCKET_INPROGRESS = 'INPROGRESS'
 BITBUCKET_SUCCESSFUL = 'SUCCESSFUL'
@@ -33,29 +42,51 @@ BITBUCKET_FAILED = 'FAILED'
 
 _BASE_URL = 'https://api.bitbucket.org/2.0/repositories'
 _OAUTH_URL = 'https://bitbucket.org/site/oauth2/access_token'
-_GET_TOKEN_DATA = {
-    'grant_type': 'client_credentials'
-}
+_GET_TOKEN_DATA = {'grant_type': 'client_credentials'}
 
 
 class BitbucketStatusPush(ReporterBase):
-    name = "BitbucketStatusPush"
+    name: str | None = "BitbucketStatusPush"
 
-    def checkConfig(self, oauth_key, oauth_secret, base_url=_BASE_URL, oauth_url=_OAUTH_URL,
-                    debug=None, verify=None, status_key=None, status_name=None,
-                    generators=None, **kwargs):
+    def checkConfig(  # type: ignore[override]
+        self,
+        oauth_key: str | None = None,
+        oauth_secret: str | None = None,
+        auth: tuple[str, str] | None = None,
+        base_url: str = _BASE_URL,
+        oauth_url: str = _OAUTH_URL,
+        debug: bool | None = None,
+        verify: bool | None = None,
+        status_key: str | None = None,
+        status_name: str | None = None,
+        generators: list[Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        if auth is not None and (oauth_key is not None or oauth_secret is not None):
+            config.error('Either App Passwords or OAuth can be specified, not both')
 
         if generators is None:
             generators = self._create_default_generators()
 
         super().checkConfig(generators=generators, **kwargs)
-        httpclientservice.HTTPClientService.checkAvailable(self.__class__.__name__)
 
     @defer.inlineCallbacks
-    def reconfigService(self, oauth_key, oauth_secret, base_url=_BASE_URL, oauth_url=_OAUTH_URL,
-                        debug=None, verify=None, status_key=None, status_name=None,
-                        generators=None, **kwargs):
+    def reconfigService(  # type: ignore[override]
+        self,
+        oauth_key: str | None = None,
+        oauth_secret: str | None = None,
+        auth: tuple[str, str] | None = None,
+        base_url: str = _BASE_URL,
+        oauth_url: str = _OAUTH_URL,
+        debug: bool | None = None,
+        verify: bool | None = None,
+        status_key: str | None = None,
+        status_name: str | None = None,
+        generators: list[Any] | None = None,
+        **kwargs: Any,
+    ) -> InlineCallbacksType[None]:
         oauth_key, oauth_secret = yield self.renderSecrets(oauth_key, oauth_secret)
+        self.auth = yield self.renderSecrets(auth)
         self.base_url = base_url
         self.debug = debug
         self.verify = verify
@@ -69,31 +100,39 @@ class BitbucketStatusPush(ReporterBase):
 
         base_url = base_url.rstrip('/')
 
-        self._http = yield httpclientservice.HTTPClientService.getService(
-            self.master, base_url,
-            debug=self.debug, verify=self.verify)
+        self._http = yield httpclientservice.HTTPSession(
+            self.master.httpservice, base_url, debug=self.debug, verify=self.verify, auth=self.auth
+        )
 
-        self.oauthhttp = yield httpclientservice.HTTPClientService.getService(
-            self.master, oauth_url, auth=(oauth_key, oauth_secret),
-            debug=self.debug, verify=self.verify)
+        self.oauthhttp = None
+        if self.auth is None:
+            self.oauthhttp = yield httpclientservice.HTTPSession(
+                self.master.httpservice,
+                oauth_url,
+                auth=(oauth_key, oauth_secret),
+                debug=self.debug,
+                verify=self.verify,
+            )
 
-    def _create_default_generators(self):
+    def _create_default_generators(self) -> list[Any]:
         return [
             BuildStartEndStatusGenerator(
-                start_formatter=MessageFormatter(subject=""),
-                end_formatter=MessageFormatter(subject="")
+                start_formatter=MessageFormatter(subject="", template=''),
+                end_formatter=MessageFormatter(subject="", template=''),
             )
         ]
 
     @defer.inlineCallbacks
-    def sendMessage(self, reports):
-        request = yield self.oauthhttp.post("", data=_GET_TOKEN_DATA)
-        if request.code != 200:
-            content = yield request.content()
-            log.msg(f"{request.code}: unable to authenticate to Bitbucket {content}")
-            return
-        token = (yield request.json())['access_token']
-        self._http.updateHeaders({'Authorization': f'Bearer {token}'})
+    def sendMessage(self, reports: list[Any]) -> InlineCallbacksType[None]:
+        # Only use OAuth if basic auth has not been specified
+        if not self.auth:
+            request = yield self.oauthhttp.post("", data=_GET_TOKEN_DATA)  # type: ignore[union-attr]
+            if request.code != 200:
+                content = yield request.content()
+                log.msg(f"{request.code}: unable to authenticate to Bitbucket {content}")
+                return
+            token = (yield request.json())['access_token']
+            self._http.update_headers({'Authorization': f'Bearer {token}'})
 
         build = reports[0]['builds'][0]
         if build['complete']:
@@ -104,12 +143,19 @@ class BitbucketStatusPush(ReporterBase):
         props = Properties.fromDict(build['properties'])
         props.master = self.master
 
+        def key_hash(key: str) -> str:
+            sha_obj = hashlib.sha1()
+            sha_obj.update(key.encode('utf-8'))
+            return sha_obj.hexdigest()
+
+        status_key = yield props.render(self.status_key)
+
         body = {
             'state': status,
-            'key': (yield props.render(self.status_key)),
+            'key': key_hash(status_key),
             'name': (yield props.render(self.status_name)),
             'description': reports[0]['subject'],
-            'url': build['url']
+            'url': build['url'],
         }
 
         for sourcestamp in build['buildset']['sourcestamps']:
@@ -125,11 +171,11 @@ class BitbucketStatusPush(ReporterBase):
                 log.msg(f"Bitbucket status {bitbucket_uri} {body}")
 
             response = yield self._http.post(bitbucket_uri, json=body)
-            if response.code != 200 and response.code != 201:
+            if response.code not in (200, 201):
                 content = yield response.content()
                 log.msg(f"{response.code}: unable to upload Bitbucket status {content}")
 
-    def get_owner_and_repo(self, repourl):
+    def get_owner_and_repo(self, repourl: str) -> list[str]:
         """
         Takes a git repository URL from Bitbucket and tries to determine the owner and repository
         name

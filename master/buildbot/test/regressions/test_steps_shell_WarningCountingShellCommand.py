@@ -22,16 +22,15 @@ from buildbot.steps.shell import WarningCountingShellCommand
 
 
 class TestWarningCountingShellCommand(unittest.TestCase):
-
     # Makes sure that it is possible to suppress warnings even if the
     # warning extractor does not provide line information
 
-    def testSuppressingLinelessWarningsPossible(self):
+    def testSuppressingLinelessWarningsPossible(self) -> None:
         # Use a warningExtractor that does not provide line
         # information
         w = WarningCountingShellCommand(
-            warningExtractor=WarningCountingShellCommand.warnExtractWholeLine,
-            command="echo")
+            warningExtractor=WarningCountingShellCommand.warnExtractWholeLine, command="echo"
+        )
 
         # Add suppression manually instead of using suppressionFile
         fileRe = None
@@ -42,10 +41,10 @@ class TestWarningCountingShellCommand(unittest.TestCase):
         w.addSuppression([suppression])
 
         # Now call maybeAddWarning
-        warnings = []
+        warnings: list[str] = []
         line = "this warning should be SUPPRESSed"
         match = re.match(".*warning.*", line)
-        w.maybeAddWarning(warnings, line, match)
+        w.maybeAddWarning(warnings, line, match)  # type: ignore[arg-type]
 
         # Finally make the suppressed warning was *not* added to the
         # list of warnings

@@ -13,18 +13,19 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
 import re
 
 
 class RevlinkMatch:
-
-    def __init__(self, repo_urls, revlink):
+    def __init__(self, repo_urls: list[str] | str, revlink: str) -> None:
         if isinstance(repo_urls, str):
             repo_urls = [repo_urls]
         self.repo_urls = [re.compile(url) for url in repo_urls]
         self.revlink = revlink
 
-    def __call__(self, rev, repo):
+    def __call__(self, rev: str, repo: str) -> str | None:
         for url in self.repo_urls:
             m = url.match(repo)
             if m:
@@ -33,33 +34,38 @@ class RevlinkMatch:
 
 
 GithubRevlink = RevlinkMatch(
-    repo_urls=[r'https://github.com/([^/]*)/([^/]*?)(?:\.git)?$',
-               r'git://github.com/([^/]*)/([^/]*?)(?:\.git)?$',
-               r'git@github.com:([^/]*)/([^/]*?)(?:\.git)?$',
-               r'ssh://git@github.com/([^/]*)/([^/]*?)(?:\.git)?$'
-               ],
-    revlink=r'https://github.com/\1/\2/commit/%s')
+    repo_urls=[
+        r'https://github.com/([^/]*)/([^/]*?)(?:\.git)?$',
+        r'git://github.com/([^/]*)/([^/]*?)(?:\.git)?$',
+        r'git@github.com:([^/]*)/([^/]*?)(?:\.git)?$',
+        r'ssh://git@github.com/([^/]*)/([^/]*?)(?:\.git)?$',
+    ],
+    revlink=r'https://github.com/\1/\2/commit/%s',
+)
 
 
 BitbucketRevlink = RevlinkMatch(
-        repo_urls=[r'https://[^@]*@bitbucket.org/([^/]*)/([^/]*?)(?:\.git)?$',
-                   r'git@bitbucket.org:([^/]*)/([^/]*?)(?:\.git)?$'],
-        revlink=r'https://bitbucket.org/\1/\2/commits/%s')
+    repo_urls=[
+        r'https://[^@]*@bitbucket.org/([^/]*)/([^/]*?)(?:\.git)?$',
+        r'git@bitbucket.org:([^/]*)/([^/]*?)(?:\.git)?$',
+    ],
+    revlink=r'https://bitbucket.org/\1/\2/commits/%s',
+)
 
 
 class GitwebMatch(RevlinkMatch):
-
-    def __init__(self, repo_urls, revlink):
-        super().__init__(repo_urls=repo_urls,
-                         revlink=revlink + r'?p=\g<repo>;a=commit;h=%s')
+    def __init__(self, repo_urls: list[str] | str, revlink: str) -> None:
+        super().__init__(repo_urls=repo_urls, revlink=revlink + r'?p=\g<repo>;a=commit;h=%s')
 
 
 SourceforgeGitRevlink = GitwebMatch(
-    repo_urls=[r'^git://([^.]*).git.sourceforge.net/gitroot/(?P<repo>.*)$',
-               r'[^@]*@([^.]*).git.sourceforge.net:gitroot/(?P<repo>.*)$',
-               r'ssh://(?:[^@]*@)?([^.]*).git.sourceforge.net/gitroot/(?P<repo>.*)$',
-               ],
-    revlink=r'http://\1.git.sourceforge.net/git/gitweb.cgi')
+    repo_urls=[
+        r'^git://([^.]*).git.sourceforge.net/gitroot/(?P<repo>.*)$',
+        r'[^@]*@([^.]*).git.sourceforge.net:gitroot/(?P<repo>.*)$',
+        r'ssh://(?:[^@]*@)?([^.]*).git.sourceforge.net/gitroot/(?P<repo>.*)$',
+    ],
+    revlink=r'http://\1.git.sourceforge.net/git/gitweb.cgi',
+)
 
 # SourceForge recently upgraded to another platform called Allura
 # See introduction:
@@ -67,19 +73,20 @@ SourceforgeGitRevlink = GitwebMatch(
 # And as reference:
 # https://sourceforge.net/p/forge/community-docs/SVN%20and%20project%20upgrades/
 SourceforgeGitRevlink_AlluraPlatform = RevlinkMatch(
-    repo_urls=[r'git://git.code.sf.net/p/(?P<repo>.*)$',
-               r'http://git.code.sf.net/p/(?P<repo>.*)$',
-               r'ssh://(?:[^@]*@)?git.code.sf.net/p/(?P<repo>.*)$'
-               ],
-    revlink=r'https://sourceforge.net/p/\1/ci/%s/')
+    repo_urls=[
+        r'git://git.code.sf.net/p/(?P<repo>.*)$',
+        r'http://git.code.sf.net/p/(?P<repo>.*)$',
+        r'ssh://(?:[^@]*@)?git.code.sf.net/p/(?P<repo>.*)$',
+    ],
+    revlink=r'https://sourceforge.net/p/\1/ci/%s/',
+)
 
 
 class RevlinkMultiplexer:
-
-    def __init__(self, *revlinks):
+    def __init__(self, *revlinks: RevlinkMatch) -> None:
         self.revlinks = revlinks
 
-    def __call__(self, rev, repo):
+    def __call__(self, rev: str, repo: str) -> str | None:
         for revlink in self.revlinks:
             url = revlink(rev, repo)
             if url:
@@ -87,7 +94,6 @@ class RevlinkMultiplexer:
         return None
 
 
-default_revlink_matcher = RevlinkMultiplexer(GithubRevlink,
-                                             BitbucketRevlink,
-                                             SourceforgeGitRevlink,
-                                             SourceforgeGitRevlink_AlluraPlatform)
+default_revlink_matcher = RevlinkMultiplexer(
+    GithubRevlink, BitbucketRevlink, SourceforgeGitRevlink, SourceforgeGitRevlink_AlluraPlatform
+)

@@ -11,60 +11,88 @@
 # this program; if not, write to the Free Software Foundation, Inc., 51
 # Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
-# Copyright Buildbot Team Members
+# Copyright Buildbot Team Member
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from typing import Any
 
 from twisted.internet import defer
+from twisted.logger import Logger
 
 from buildbot import config
 from buildbot.reporters.base import ReporterBase
 from buildbot.reporters.generators.build import BuildStartEndStatusGenerator
 from buildbot.util import httpclientservice
-from buildbot.util.logger import Logger
+
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
 
 log = Logger()
 
 
 class ZulipStatusPush(ReporterBase):
-    name = "ZulipStatusPush"
+    name: str | None = "ZulipStatusPush"
 
-    def checkConfig(self, endpoint, token, stream=None, debug=None, verify=None):
+    def checkConfig(  # type: ignore[override]
+        self,
+        endpoint: str,
+        token: str,
+        stream: str | None = None,
+        debug: bool | None = None,
+        verify: bool | None = None,
+    ) -> None:
         if not isinstance(endpoint, str):
             config.error("Endpoint must be a string")
         if not isinstance(token, str):
             config.error("Token must be a string")
 
         super().checkConfig(generators=[BuildStartEndStatusGenerator()])
-        httpclientservice.HTTPClientService.checkAvailable(self.__class__.__name__)
 
     @defer.inlineCallbacks
-    def reconfigService(self, endpoint, token, stream=None, debug=None, verify=None):
+    def reconfigService(  # type: ignore[override]
+        self,
+        endpoint: str,
+        token: str,
+        stream: str | None = None,
+        debug: bool | None = None,
+        verify: bool | None = None,
+    ) -> InlineCallbacksType[None]:
         self.debug = debug
         self.verify = verify
         yield super().reconfigService(generators=[BuildStartEndStatusGenerator()])
-        self._http = yield httpclientservice.HTTPClientService.getService(
-            self.master, endpoint,
-            debug=self.debug, verify=self.verify)
+        self._http = yield httpclientservice.HTTPSession(
+            self.master.httpservice, endpoint, debug=self.debug, verify=self.verify
+        )
         self.token = token
         self.stream = stream
 
     @defer.inlineCallbacks
-    def sendMessage(self, reports):
+    def sendMessage(self, reports: list[Any]) -> InlineCallbacksType[None]:
         build = reports[0]['builds'][0]
         event = ("new", "finished")[0 if build["complete"] is False else 1]
-        jsondata = dict(event=event, buildid=build["buildid"], buildername=build["builder"]["name"],
-                        url=build["url"], project=build["properties"]["project"][0])
+        jsondata = {
+            "event": event,
+            "buildid": build["buildid"],
+            "buildername": build["builder"]["name"],
+            "url": build["url"],
+            "project": build["properties"]["project"][0],
+        }
         if event == "new":
             jsondata["timestamp"] = int(build["started_at"].timestamp())
         elif event == "finished":
             jsondata["timestamp"] = int(build["complete_at"].timestamp())
             jsondata["results"] = build["results"]
         if self.stream is not None:
-            url = "/api/v1/external/buildbot?api_key={}&stream={}".format(self.token, self.stream)
+            url = f"/api/v1/external/buildbot?api_key={self.token}&stream={self.stream}"
         else:
-            url = "/api/v1/external/buildbot?api_key={}".format(self.token)
+            url = f"/api/v1/external/buildbot?api_key={self.token}"
         response = yield self._http.post(url, json=jsondata)
         if response.code != 200:
             content = yield response.content()
-            log.error("{code}: Error pushing build status to Zulip: {content}", code=response.code,
-                      content=content)
+            log.error(
+                "{code}: Error pushing build status to Zulip: {content}",
+                code=response.code,
+                content=content,
+            )

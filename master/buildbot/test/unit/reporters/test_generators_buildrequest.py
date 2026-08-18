@@ -14,31 +14,38 @@
 # Copyright Buildbot Team Members
 
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from typing import Any
+from unittest.mock import Mock
+
 from parameterized import parameterized
-
-from mock import Mock
-
 from twisted.internet import defer
 from twisted.trial import unittest
 
 from buildbot.process.builder import Builder
+from buildbot.process.results import CANCELLED
 from buildbot.reporters.generators.buildrequest import BuildRequestGenerator
 from buildbot.test.fake import fakemaster
+from buildbot.test.reactor import TestReactorMixin
 from buildbot.test.util.config import ConfigErrorsMixin
-from buildbot.test.util.misc import TestReactorMixin
 from buildbot.test.util.reporter import ReporterTestMixin
 
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
 
-class TestBuildRequestGenerator(ConfigErrorsMixin, TestReactorMixin,
-                                unittest.TestCase, ReporterTestMixin):
 
+class TestBuildRequestGenerator(
+    ConfigErrorsMixin, TestReactorMixin, unittest.TestCase, ReporterTestMixin
+):
     all_messages = ('failing', 'passing', 'warnings', 'exception', 'cancelled')
 
-    def setUp(self):
-        self.setUpTestReactor()
+    @defer.inlineCallbacks
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        self.setup_test_reactor()
         self.setup_reporter_test()
-        self.master = fakemaster.make_master(self, wantData=True, wantDb=True,
-                                             wantMq=True)
+        self.master = yield fakemaster.make_master(self, wantData=True, wantDb=True, wantMq=True)
 
         builder = Mock(spec=Builder)
         builder.master = self.master
@@ -54,51 +61,61 @@ class TestBuildRequestGenerator(ConfigErrorsMixin, TestReactorMixin,
         ('branches', 'branch'),
         ('branches', 1),
     ])
-    def test_list_params_check_raises(self, arg_name, arg_value):
+    def test_list_params_check_raises(self, arg_name: str, arg_value: str | int) -> None:
         kwargs = {arg_name: arg_value}
-        g = BuildRequestGenerator(**kwargs)
+        g = BuildRequestGenerator(**kwargs)  # type: ignore[arg-type]
         with self.assertRaisesConfigError('must be a list or None'):
             g.check()
 
-    def setup_generator(self, message=None, **kwargs):
+    def setup_generator(
+        self, message: dict[str, Any] | None = None, **kwargs: Any
+    ) -> BuildRequestGenerator:
         if message is None:
             message = {
                 "body": "start body",
                 "type": "plain",
-                "subject": "start subject"
+                "subject": "start subject",
+                "extra_info": None,
             }
 
         g = BuildRequestGenerator(**kwargs)
 
         g.formatter = Mock(spec=g.formatter)
+        g.formatter.want_logs_content = False
         g.formatter.format_message_for_build.return_value = message
 
         return g
 
     @defer.inlineCallbacks
-    def test_build_message_start_no_result(self):
+    def test_build_message_start_no_result(self) -> InlineCallbacksType[None]:
         g = yield self.setup_generator()
         buildrequest = yield self.insert_buildrequest_new()
+        buildset = yield self.get_inserted_buildset()
         build = yield g.partial_build_dict(self.master, buildrequest)
         report = yield g.buildrequest_message(self.master, build)
 
-        g.formatter.format_message_for_build.assert_called_with(self.master, build,
-                                                                mode=self.all_messages,
-                                                                users=[])
+        g.formatter.format_message_for_build.assert_called_with(
+            self.master, build, is_buildset=True, mode=self.all_messages, users=[]
+        )
 
-        self.assertEqual(report, {
-            'body': 'start body',
-            'subject': 'start subject',
-            'type': 'plain',
-            'results': None,
-            'builds': [build],
-            'users': [],
-            'patches': [],
-            'logs': []
-        })
+        self.assertEqual(
+            report,
+            {
+                'body': 'start body',
+                'subject': 'start subject',
+                'type': 'plain',
+                "extra_info": None,
+                'results': None,
+                'builds': [build],
+                "buildset": buildset,
+                'users': [],
+                'patches': [],
+                'logs': [],
+            },
+        )
 
     @defer.inlineCallbacks
-    def test_build_message_add_patch(self):
+    def test_build_message_add_patch(self) -> InlineCallbacksType[None]:
         g = yield self.setup_generator(add_patch=True)
         buildrequest = yield self.insert_buildrequest_new(insert_patch=True)
         build = yield g.partial_build_dict(self.master, buildrequest)
@@ -110,12 +127,12 @@ class TestBuildRequestGenerator(ConfigErrorsMixin, TestReactorMixin,
             'comment': 'foo',
             'level': 3,
             'patchid': 99,
-            'subdir': '/foo'
+            'subdir': '/foo',
         }
         self.assertEqual(report['patches'], [patch_dict])
 
     @defer.inlineCallbacks
-    def test_build_message_add_patch_no_patch(self):
+    def test_build_message_add_patch_no_patch(self) -> InlineCallbacksType[None]:
         g = yield self.setup_generator(add_patch=True)
         buildrequest = yield self.insert_buildrequest_new(insert_patch=False)
         build = yield g.partial_build_dict(self.master, buildrequest)
@@ -123,25 +140,59 @@ class TestBuildRequestGenerator(ConfigErrorsMixin, TestReactorMixin,
         self.assertEqual(report['patches'], [])
 
     @defer.inlineCallbacks
-    def test_generate_new(self):
+    def test_generate_new(self) -> InlineCallbacksType[None]:
         g = yield self.setup_generator(add_patch=True)
         buildrequest = yield self.insert_buildrequest_new(insert_patch=False)
+        buildset = yield self.get_inserted_buildset()
         build = yield g.partial_build_dict(self.master, buildrequest)
         report = yield g.generate(self.master, None, ('buildrequests', 11, 'new'), buildrequest)
 
-        self.assertEqual(report, {
-            'body': 'start body',
-            'subject': 'start subject',
-            'type': 'plain',
-            'results': None,
-            'builds': [build],
-            'users': [],
-            'patches': [],
-            'logs': []
-        })
+        self.assertEqual(
+            report,
+            {
+                'body': 'start body',
+                'subject': 'start subject',
+                'type': 'plain',
+                "extra_info": None,
+                'results': None,
+                'builds': [build],
+                "buildset": buildset,
+                'users': [],
+                'patches': [],
+                'logs': [],
+            },
+        )
 
     @defer.inlineCallbacks
-    def test_generate_none(self):
+    def test_generate_cancel(self) -> InlineCallbacksType[None]:
+        self.maxDiff = None
+        g = yield self.setup_generator(add_patch=True)
+        buildrequest = yield self.insert_buildrequest_new(insert_patch=False)
+        buildset = yield self.get_inserted_buildset()
+        build = yield g.partial_build_dict(self.master, buildrequest)
+        report = yield g.generate(self.master, None, ('buildrequests', 11, 'cancel'), buildrequest)
+
+        build['complete'] = True
+        build['results'] = CANCELLED
+
+        self.assertEqual(
+            report,
+            {
+                'body': 'start body',
+                'subject': 'start subject',
+                'type': 'plain',
+                "extra_info": None,
+                'results': CANCELLED,
+                'builds': [build],
+                "buildset": buildset,
+                'users': [],
+                'patches': [],
+                'logs': [],
+            },
+        )
+
+    @defer.inlineCallbacks
+    def test_generate_none(self) -> InlineCallbacksType[None]:
         g = BuildRequestGenerator(builders=['not_existing_builder'])
         buildrequest = yield self.insert_buildrequest_new()
         report = yield g.generate(self.master, None, ('buildrequests', 11, 'new'), buildrequest)

@@ -28,8 +28,13 @@ Build
 
     .. py:method:: getUrl()
 
-        :returns: Url as string
+        :returns: URL as string
 
         Returns url of the build in the UI.
         Build must be started.
-        This is useful for customs steps.
+        This is useful for custom steps.
+
+    .. py:attribute:: env
+
+        Initialized from :py:class:`BuilderConfig`'s env by deep copy.
+        This attribute is mutable, steps can update it to change the environment of subsequent steps.

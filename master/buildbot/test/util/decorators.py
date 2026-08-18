@@ -16,30 +16,39 @@
 Various decorators for test cases
 """
 
+from __future__ import annotations
 
 import os
 import sys
+from typing import Any
+from typing import Callable
+from typing import TypeVar
 
 from twisted.python import runtime
 
 _FLAKY_ENV_VAR = 'RUN_FLAKY_TESTS'
+_F = TypeVar('_F', bound=Callable[..., Any])
 
 
-def todo(message):
+def todo(message: str) -> Callable[[_F], _F]:
     """
     decorator to mark a todo test
     """
-    def wrap(func):
+
+    def wrap(func: _F) -> _F:
         """
         just mark the test
         """
-        func.todo = message
+        func.todo = message  # type: ignore[attr-defined]
         return func
+
     return wrap
 
 
-def flaky(bugNumber=None, issueNumber=None, onPlatform=None):
-    def wrap(fn):
+def flaky(
+    bugNumber: int | None = None, issueNumber: int | None = None, onPlatform: str | None = None
+) -> Callable[[_F], _F]:
+    def wrap(fn: _F) -> _F:
         if onPlatform is not None and sys.platform != onPlatform:
             return fn
 
@@ -47,28 +56,35 @@ def flaky(bugNumber=None, issueNumber=None, onPlatform=None):
             return fn
 
         if bugNumber is not None:
-            fn.skip = (("Flaky test (http://trac.buildbot.net/ticket/{}) "
-                        "- set ${} to run anyway").format(bugNumber, _FLAKY_ENV_VAR))
+            fn.skip = (  # type: ignore[attr-defined]
+                f"Flaky test (http://trac.buildbot.net/ticket/{bugNumber}) "
+                f"- set ${_FLAKY_ENV_VAR} to run anyway"
+            )
         if issueNumber is not None:
-            fn.skip = (("Flaky test (https://github.com/buildbot/buildbot/issues/{}) "
-                        "- set ${} to run anyway").format(issueNumber, _FLAKY_ENV_VAR))
+            fn.skip = (  # type: ignore[attr-defined]
+                f"Flaky test (https://github.com/buildbot/buildbot/issues/{issueNumber}) "
+                f"- set ${_FLAKY_ENV_VAR} to run anyway"
+            )
         return fn
+
     return wrap
 
 
-def skipUnlessPlatformIs(platform):
-    def closure(test):
+def skipUnlessPlatformIs(platform: str) -> Callable[[_F], _F]:
+    def closure(test: _F) -> _F:
         if runtime.platformType != platform:
-            test.skip = "not a {} platform".format(platform)
+            test.skip = f"not a {platform} platform"  # type: ignore[attr-defined]
         return test
+
     return closure
 
 
-def skipIfPythonVersionIsLess(min_version_info):
+def skipIfPythonVersionIsLess(min_version_info: tuple[int, ...]) -> Callable[[_F], _F]:
     assert isinstance(min_version_info, tuple)
 
-    def closure(test):
+    def closure(test: _F) -> _F:
         if sys.version_info < min_version_info:
-            test.skip = "requires Python >= {0}".format(min_version_info)
+            test.skip = f"requires Python >= {min_version_info}"  # type: ignore[attr-defined]
         return test
+
     return closure

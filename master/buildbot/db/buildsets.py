@@ -16,20 +16,27 @@
 Support for buildsets in the database
 """
 
+from __future__ import annotations
+
 import json
+from dataclasses import dataclass
+from dataclasses import field
+from typing import TYPE_CHECKING
+from typing import Any
 
 import sqlalchemy as sa
-
 from twisted.internet import defer
 
 from buildbot.db import NULL
 from buildbot.db import base
 from buildbot.util import datetime2epoch
 from buildbot.util import epoch2datetime
+from buildbot.warnings import warn_deprecated
 
+if TYPE_CHECKING:
+    import datetime
 
-class BsDict(dict):
-    pass
+    from buildbot.util.twisted import InlineCallbacksType
 
 
 class BsProps(dict):
@@ -40,81 +47,145 @@ class AlreadyCompleteError(RuntimeError):
     pass
 
 
-class BuildsetsConnectorComponent(base.DBConnectorComponent):
-    # Documentation is in developer/db.rst
+@dataclass
+class BuildSetModel:
+    bsid: int
+    external_idstring: str | None
+    reason: str | None
+    submitted_at: datetime.datetime
+    complete: bool = False
+    complete_at: datetime.datetime | None = None
+    results: int | None = None
+    parent_buildid: int | None = None
+    parent_relationship: str | None = None
+    rebuilt_buildid: int | None = None
 
+    sourcestamps: list[int] = field(default_factory=list)
+
+    # For backward compatibility
+    def __getitem__(self, key: str) -> Any:
+        warn_deprecated(
+            '4.1.0',
+            (
+                'BuildsetsConnectorComponent '
+                'getBuildset, getBuildsets, and getRecentBuildsets '
+                'no longer return BuildSet as dictionnaries. '
+                'Usage of [] accessor is deprecated: please access the member directly'
+            ),
+        )
+
+        if hasattr(self, key):
+            return getattr(self, key)
+
+        raise KeyError(key)
+
+
+class BuildsetsConnectorComponent(base.DBConnectorComponent):
     @defer.inlineCallbacks
-    def addBuildset(self, sourcestamps, reason, properties, builderids,
-                    waited_for, external_idstring=None, submitted_at=None,
-                    parent_buildid=None, parent_relationship=None):
+    def addBuildset(
+        self,
+        sourcestamps: list[Any],
+        reason: str,
+        properties: dict[str, Any],
+        builderids: list[int],
+        waited_for: bool,
+        external_idstring: str | None = None,
+        submitted_at: datetime.datetime | None = None,
+        rebuilt_buildid: int | None = None,
+        parent_buildid: int | None = None,
+        parent_relationship: str | None = None,
+        priority: int = 0,
+    ) -> InlineCallbacksType[tuple[int, dict[int, int]]]:
+        # We've gotten this wrong a couple times.
+        assert isinstance(waited_for, bool), f'waited_for should be boolean: {waited_for!r}'
+
         if submitted_at is not None:
-            submitted_at = datetime2epoch(submitted_at)
+            submitted_at_epoch = datetime2epoch(submitted_at)
         else:
-            submitted_at = int(self.master.reactor.seconds())
+            submitted_at_epoch = int(self.master.reactor.seconds())
 
         # convert to sourcestamp IDs first, as necessary
-        def toSsid(sourcestamp):
+        def toSsid(sourcestamp: int | dict[str, Any]) -> defer.Deferred[int]:
             if isinstance(sourcestamp, int):
                 return defer.succeed(sourcestamp)
             ssConnector = self.master.db.sourcestamps
             return ssConnector.findSourceStampId(**sourcestamp)
+
         sourcestamps = yield defer.DeferredList(
-            [toSsid(ss) for ss in sourcestamps],
-            fireOnOneErrback=True, consumeErrors=True)
+            [toSsid(ss) for ss in sourcestamps], fireOnOneErrback=True, consumeErrors=True
+        )
         sourcestampids = [r[1] for r in sourcestamps]
 
-        def thd(conn):
+        def thd(conn: sa.engine.Connection) -> tuple[int, dict[int, int]]:
             buildsets_tbl = self.db.model.buildsets
 
             self.checkLength(buildsets_tbl.c.reason, reason)
-            self.checkLength(buildsets_tbl.c.external_idstring,
-                             external_idstring)
+            self.checkLength(buildsets_tbl.c.external_idstring, external_idstring)
 
             transaction = conn.begin()
 
             # insert the buildset itself
-            r = conn.execute(buildsets_tbl.insert(), dict(
-                submitted_at=submitted_at, reason=reason, complete=0,
-                complete_at=None, results=-1,
-                external_idstring=external_idstring,
-                parent_buildid=parent_buildid, parent_relationship=parent_relationship))
-            bsid = r.inserted_primary_key[0]
+            r = conn.execute(
+                buildsets_tbl.insert(),
+                {
+                    "submitted_at": submitted_at_epoch,
+                    "reason": reason,
+                    "rebuilt_buildid": rebuilt_buildid,
+                    "complete": 0,
+                    "complete_at": None,
+                    "results": -1,
+                    "external_idstring": external_idstring,
+                    "parent_buildid": parent_buildid,
+                    "parent_relationship": parent_relationship,
+                },
+            )
+            bsid = r.inserted_primary_key[0]  # type: ignore[index]
 
             # add any properties
             if properties:
                 bs_props_tbl = self.db.model.buildset_properties
 
                 inserts = [
-                    dict(buildsetid=bsid, property_name=k,
-                         property_value=json.dumps([v, s]))
-                    for k, (v, s) in properties.items()]
+                    {"buildsetid": bsid, "property_name": k, "property_value": json.dumps([v, s])}
+                    for k, (v, s) in properties.items()
+                ]
                 for i in inserts:
-                    self.checkLength(bs_props_tbl.c.property_name,
-                                     i['property_name'])
+                    self.checkLength(bs_props_tbl.c.property_name, i['property_name'])
 
                 conn.execute(bs_props_tbl.insert(), inserts)
 
             # add sourcestamp ids
-            r = conn.execute(self.db.model.buildset_sourcestamps.insert(),
-                             [dict(buildsetid=bsid, sourcestampid=ssid)
-                              for ssid in sourcestampids])
+            r = conn.execute(
+                self.db.model.buildset_sourcestamps.insert(),
+                [{"buildsetid": bsid, "sourcestampid": ssid} for ssid in sourcestampids],
+            )
 
             # and finish with a build request for each builder.  Note that
             # sqlalchemy and the Python DBAPI do not provide a way to recover
             # inserted IDs from a multi-row insert, so this is done one row at
             # a time.
-            brids = {}
+            brids: dict[int, int] = {}
             br_tbl = self.db.model.buildrequests
             ins = br_tbl.insert()
             for builderid in builderids:
-                r = conn.execute(ins,
-                                 dict(buildsetid=bsid, builderid=builderid, priority=0,
-                                      claimed_at=0, claimed_by_name=None,
-                                      claimed_by_incarnation=None, complete=0, results=-1,
-                                      submitted_at=submitted_at, complete_at=None,
-                                      waited_for=1 if waited_for else 0))
+                r = conn.execute(
+                    ins,
+                    {
+                        "buildsetid": bsid,
+                        "builderid": builderid,
+                        "priority": priority,
+                        "claimed_at": 0,
+                        "claimed_by_name": None,
+                        "claimed_by_incarnation": None,
+                        "complete": 0,
+                        "results": -1,
+                        "submitted_at": submitted_at_epoch,
+                        "complete_at": None,
+                        "waited_for": 1 if waited_for else 0,
+                    },
+                )
 
-                brids[builderid] = r.inserted_primary_key[0]
+                brids[builderid] = r.inserted_primary_key[0]  # type: ignore[index]
 
             transaction.commit()
 
@@ -123,74 +194,84 @@ class BuildsetsConnectorComponent(base.DBConnectorComponent):
         bsid, brids = yield self.db.pool.do(thd)
 
         # Seed the buildset property cache.
-        self.getBuildsetProperties.cache.put(bsid, BsProps(properties))
+        self.getBuildsetProperties.cache.put(bsid, BsProps(properties))  # type: ignore[attr-defined]
 
         return (bsid, brids)
 
     @defer.inlineCallbacks
-    def completeBuildset(self, bsid, results, complete_at=None):
+    def completeBuildset(
+        self,
+        bsid: int,
+        results: int,
+        complete_at: datetime.datetime | None = None,
+    ) -> InlineCallbacksType[None]:
         if complete_at is not None:
-            complete_at = datetime2epoch(complete_at)
+            complete_at_epoch = datetime2epoch(complete_at)
         else:
-            complete_at = int(self.master.reactor.seconds())
+            complete_at_epoch = int(self.master.reactor.seconds())
 
-        def thd(conn):
+        def thd(conn: sa.engine.Connection) -> None:
             tbl = self.db.model.buildsets
 
-            q = tbl.update(whereclause=(
-                (tbl.c.id == bsid) &
-                ((tbl.c.complete == NULL) | (tbl.c.complete != 1))))
-            res = conn.execute(q,
-                               complete=1,
-                               results=results,
-                               complete_at=complete_at)
+            q = tbl.update().where(
+                (tbl.c.id == bsid) & ((tbl.c.complete == NULL) | (tbl.c.complete != 1))
+            )
+            res = conn.execute(q.values(complete=1, results=results, complete_at=complete_at_epoch))
+            conn.commit()
 
             if res.rowcount != 1:
                 # happens when two buildrequests finish at the same time
                 raise AlreadyCompleteError()
+
         yield self.db.pool.do(thd)
 
-    # returns a Deferred that returns a value
-    def getBuildset(self, bsid):
-        def thd(conn):
+    def getBuildset(self, bsid: int) -> defer.Deferred[BuildSetModel | None]:
+        def thd(conn: sa.engine.Connection) -> BuildSetModel | None:
             bs_tbl = self.db.model.buildsets
-            q = bs_tbl.select(whereclause=(bs_tbl.c.id == bsid))
+            q = bs_tbl.select().where(bs_tbl.c.id == bsid)
             res = conn.execute(q)
             row = res.fetchone()
             if not row:
                 return None
-            return self._thd_row2dict(conn, row)
+            return self._thd_model_from_row(conn, row)
+
         return self.db.pool.do(thd)
 
     @defer.inlineCallbacks
-    def getBuildsets(self, complete=None, resultSpec=None):
-        def thd(conn):
+    def getBuildsets(
+        self,
+        complete: bool | None = None,
+        resultSpec: Any = None,
+    ) -> InlineCallbacksType[list[BuildSetModel]]:
+        def thd(conn: sa.engine.Connection) -> list[BuildSetModel]:
             bs_tbl = self.db.model.buildsets
             q = bs_tbl.select()
             if complete is not None:
                 if complete:
                     q = q.where(bs_tbl.c.complete != 0)
                 else:
-                    q = q.where((bs_tbl.c.complete == 0) |
-                                (bs_tbl.c.complete == NULL))
+                    q = q.where((bs_tbl.c.complete == 0) | (bs_tbl.c.complete == NULL))
             if resultSpec is not None:
-                return resultSpec.thd_execute(conn, q, lambda x: self._thd_row2dict(conn, x))
+                return resultSpec.thd_execute(conn, q, lambda x: self._thd_model_from_row(conn, x))
             res = conn.execute(q)
-            return [self._thd_row2dict(conn, row) for row in res.fetchall()]
+            return [self._thd_model_from_row(conn, row) for row in res.fetchall()]
+
         res = yield self.db.pool.do(thd)
         return res
 
-    # returns a Deferred that returns a value
-    def getRecentBuildsets(self, count=None, branch=None, repository=None,
-                           complete=None):
-        def thd(conn):
+    def getRecentBuildsets(
+        self,
+        count: int | None = None,
+        branch: str | None = None,
+        repository: str | None = None,
+        complete: bool | None = None,
+    ) -> defer.Deferred[list[BuildSetModel]]:
+        def thd(conn: sa.engine.Connection) -> list[BuildSetModel]:
             bs_tbl = self.db.model.buildsets
             ss_tbl = self.db.model.sourcestamps
-            j = self.db.model.buildsets
-            j = j.join(self.db.model.buildset_sourcestamps)
+            j = self.db.model.buildsets.join(self.db.model.buildset_sourcestamps)
             j = j.join(self.db.model.sourcestamps)
-            q = sa.select(columns=[bs_tbl], from_obj=[j],
-                          distinct=True)
+            q = sa.select(bs_tbl).select_from(j).distinct()
             q = q.order_by(sa.desc(bs_tbl.c.submitted_at))
             q = q.limit(count)
 
@@ -198,49 +279,55 @@ class BuildsetsConnectorComponent(base.DBConnectorComponent):
                 if complete:
                     q = q.where(bs_tbl.c.complete != 0)
                 else:
-                    q = q.where((bs_tbl.c.complete == 0) |
-                                (bs_tbl.c.complete == NULL))
+                    q = q.where((bs_tbl.c.complete == 0) | (bs_tbl.c.complete == NULL))
             if branch:
                 q = q.where(ss_tbl.c.branch == branch)
             if repository:
                 q = q.where(ss_tbl.c.repository == repository)
             res = conn.execute(q)
-            return list(reversed([self._thd_row2dict(conn, row)
-                                  for row in res.fetchall()]))
+            return list(reversed([self._thd_model_from_row(conn, row) for row in res.fetchall()]))
+
         return self.db.pool.do(thd)
 
-    # returns a Deferred that returns a value
     @base.cached("BuildsetProperties")
-    def getBuildsetProperties(self, bsid):
-        def thd(conn):
+    def getBuildsetProperties(self, bsid: int) -> defer.Deferred[BsProps]:
+        def thd(conn: sa.engine.Connection) -> BsProps:
             bsp_tbl = self.db.model.buildset_properties
             q = sa.select(
-                [bsp_tbl.c.property_name, bsp_tbl.c.property_value],
-                whereclause=(bsp_tbl.c.buildsetid == bsid))
+                bsp_tbl.c.property_name,
+                bsp_tbl.c.property_value,
+            ).where(bsp_tbl.c.buildsetid == bsid)
             ret = []
             for row in conn.execute(q):
                 try:
                     properties = json.loads(row.property_value)
-                    ret.append((row.property_name,
-                              tuple(properties)))
+                    ret.append((row.property_name, tuple(properties)))
                 except ValueError:
                     pass
             return BsProps(ret)
+
         return self.db.pool.do(thd)
 
-    def _thd_row2dict(self, conn, row):
+    def _thd_model_from_row(self, conn: sa.engine.Connection, row: Any) -> BuildSetModel:
         # get sourcestamps
         tbl = self.db.model.buildset_sourcestamps
-        sourcestamps = [r.sourcestampid for r in
-                        conn.execute(sa.select([tbl.c.sourcestampid],
-                                               (tbl.c.buildsetid == row.id))).fetchall()]
+        sourcestamps = [
+            r.sourcestampid
+            for r in conn.execute(
+                sa.select(tbl.c.sourcestampid).where(tbl.c.buildsetid == row.id)
+            ).fetchall()
+        ]
 
-        return BsDict(external_idstring=row.external_idstring,
-                      reason=row.reason,
-                      submitted_at=epoch2datetime(row.submitted_at),
-                      complete=bool(row.complete),
-                      complete_at=epoch2datetime(row.complete_at),
-                      results=row.results,
-                      bsid=row.id, sourcestamps=sourcestamps,
-                      parent_buildid=row.parent_buildid,
-                      parent_relationship=row.parent_relationship)
+        return BuildSetModel(
+            bsid=row.id,
+            external_idstring=row.external_idstring,
+            reason=row.reason,
+            submitted_at=epoch2datetime(row.submitted_at),
+            complete=bool(row.complete),
+            complete_at=epoch2datetime(row.complete_at),
+            results=row.results,
+            parent_buildid=row.parent_buildid,
+            parent_relationship=row.parent_relationship,
+            rebuilt_buildid=row.rebuilt_buildid,
+            sourcestamps=sourcestamps,
+        )

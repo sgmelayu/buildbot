@@ -11,8 +11,12 @@
 # this program; if not, write to the Free Software Foundation, Inc., 51
 # Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
-# Copyright Buildbot Team Members
+# Copyright Buildbot Team Member
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from typing import Any
 from urllib.parse import quote_plus as urlquote_plus
 
 from twisted.internet import defer
@@ -34,27 +38,43 @@ from buildbot.reporters.message import MessageFormatterRenderable
 from buildbot.util import giturlparse
 from buildbot.util import httpclientservice
 
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
+
 HOSTED_BASE_URL = 'https://gitlab.com'
 
 
 class GitLabStatusPush(ReporterBase):
-    name = "GitLabStatusPush"
+    name: str | None = "GitLabStatusPush"
 
-    def checkConfig(self, token, context=None, baseURL=None, verbose=False,
-                    debug=None, verify=None, generators=None,
-                    **kwargs):
-
+    def checkConfig(  # type: ignore[override]
+        self,
+        token: Any,
+        context: Any = None,
+        baseURL: str | None = None,
+        verbose: bool = False,
+        debug: bool | None = None,
+        verify: bool | None = None,
+        generators: list[Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
         if generators is None:
             generators = self._create_default_generators()
 
         super().checkConfig(generators=generators, **kwargs)
-        httpclientservice.HTTPClientService.checkAvailable(self.__class__.__name__)
 
     @defer.inlineCallbacks
-    def reconfigService(self, token, context=None, baseURL=None, verbose=False,
-                        debug=None, verify=None, generators=None,
-                        **kwargs):
-
+    def reconfigService(  # type: ignore[override]
+        self,
+        token: Any,
+        context: Any = None,
+        baseURL: str | None = None,
+        verbose: bool = False,
+        debug: bool | None = None,
+        verify: bool | None = None,
+        generators: list[Any] | None = None,
+        **kwargs: Any,
+    ) -> InlineCallbacksType[None]:
         token = yield self.renderSecrets(token)
         self.debug = debug
         self.verify = verify
@@ -71,38 +91,50 @@ class GitLabStatusPush(ReporterBase):
         if baseURL.endswith('/'):
             baseURL = baseURL[:-1]
         self.baseURL = baseURL
-        self._http = yield httpclientservice.HTTPClientService.getService(
-            self.master, baseURL, headers={'PRIVATE-TOKEN': token},
-            debug=self.debug, verify=self.verify)
-        self.project_ids = {}
+        self._http = yield httpclientservice.HTTPSession(
+            self.master.httpservice,
+            baseURL,
+            headers={'PRIVATE-TOKEN': token},
+            debug=self.debug,
+            verify=self.verify,
+        )
+        self.project_ids: dict[str, Any] = {}
 
-    def _create_default_generators(self):
+    def _create_default_generators(self) -> list[Any]:
         start_formatter = MessageFormatterRenderable('Build started.')
         end_formatter = MessageFormatterRenderable('Build done.')
         pending_formatter = MessageFormatterRenderable('Build pending.')
 
         return [
             BuildRequestGenerator(formatter=pending_formatter),
-            BuildStartEndStatusGenerator(start_formatter=start_formatter,
-                                         end_formatter=end_formatter)
+            BuildStartEndStatusGenerator(
+                start_formatter=start_formatter, end_formatter=end_formatter
+            ),
         ]
 
-    def createStatus(self,
-                     project_id, branch, sha, state, target_url=None,
-                     description=None, context=None):
+    def createStatus(
+        self,
+        project_id: Any,
+        branch: str,
+        sha: str,
+        state: str,
+        target_url: str | None = None,
+        description: str | None = None,
+        context: str | None = None,
+    ) -> Any:
         """
         :param project_id: Project ID from GitLab
         :param branch: Branch name to create the status for.
         :param sha: Full sha to create the status for.
         :param state: one of the following 'pending', 'success', 'failed'
-                      or 'cancelled'.
+                      or 'canceled'.
         :param target_url: Target url to associate with this status.
         :param description: Short description of the status.
         :param context: Context of the result
         :return: A deferred with the result from GitLab.
 
         """
-        payload = {'state': state, 'ref': branch}
+        payload: dict[str, Any] = {'state': state, 'ref': branch}
 
         if description is not None:
             payload['description'] = description
@@ -113,34 +145,32 @@ class GitLabStatusPush(ReporterBase):
         if context is not None:
             payload['name'] = context
 
-        return self._http.post('/api/v4/projects/{}/statuses/{}'.format(project_id, sha),
-                json=payload)
+        return self._http.post(f'/api/v4/projects/{project_id}/statuses/{sha}', json=payload)
 
     @defer.inlineCallbacks
-    def getProjectId(self, sourcestamp):
+    def getProjectId(self, sourcestamp: dict[str, Any]) -> InlineCallbacksType[Any]:
         # retrieve project id via cache
         url = giturlparse(sourcestamp['repository'])
         if url is None:
             return None
-        project_full_name = "{}/{}".format(url.owner, url.repo)
+        project_full_name = f"{url.owner}/{url.repo}"
         # gitlab needs project name to be fully url quoted to get the project id
         project_full_name = urlquote_plus(project_full_name)
 
         if project_full_name not in self.project_ids:
-            response = yield self._http.get('/api/v4/projects/{}'.format(project_full_name))
+            response = yield self._http.get(f'/api/v4/projects/{project_full_name}')
             proj = yield response.json()
-            if response.code not in (200, ):
+            if response.code not in (200,):
                 log.msg(
-                    'Unknown (or hidden) gitlab project'
-                    '{repo}: {message}'.format(
-                        repo=project_full_name, **proj))
+                    f'Unknown (or hidden) gitlab project{project_full_name}: {proj.get("message")}'
+                )
                 return None
             self.project_ids[project_full_name] = proj['id']
 
         return self.project_ids[project_full_name]
 
     @defer.inlineCallbacks
-    def sendMessage(self, reports):
+    def sendMessage(self, reports: list[Any]) -> InlineCallbacksType[None]:
         report = reports[0]
         build = reports[0]['builds'][0]
 
@@ -157,10 +187,12 @@ class GitLabStatusPush(ReporterBase):
                 SKIPPED: 'success',
                 EXCEPTION: 'failed',
                 RETRY: 'pending',
-                CANCELLED: 'cancelled'
+                CANCELLED: 'canceled',
             }.get(build['results'], 'failed')
-        else:
+        elif build.get('started_at'):
             state = 'running'
+        else:
+            state = 'pending'
 
         context = yield props.render(self.context)
 
@@ -188,27 +220,19 @@ class GitLabStatusPush(ReporterBase):
                     state=state,
                     target_url=target_url,
                     context=context,
-                    description=description
+                    description=description,
                 )
                 if res.code not in (200, 201, 204):
                     message = yield res.json()
                     message = message.get('message', 'unspecified error')
                     log.msg(
-                        'Could not send status "{state}" for '
-                        '{repo} at {sha}: {message}'.format(
-                            state=state,
-                            repo=sourcestamp['repository'], sha=sha,
-                            message=message))
+                        f'Could not send status "{state}" for '
+                        f'{sourcestamp["repository"]} at {sha}: {message}'
+                    )
                 elif self.verbose:
-                    log.msg(
-                        'Status "{state}" sent for '
-                        '{repo} at {sha}.'.format(
-                            state=state, repo=sourcestamp['repository'], sha=sha))
+                    log.msg(f'Status "{state}" sent for {sourcestamp["repository"]} at {sha}.')
             except Exception as e:
                 log.err(
                     e,
-                    'Failed to send status "{state}" for '
-                    '{repo} at {sha}'.format(
-                        state=state,
-                        repo=sourcestamp['repository'], sha=sha
-                    ))
+                    (f'Failed to send status "{state}" for {sourcestamp["repository"]} at {sha}'),
+                )

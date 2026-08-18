@@ -16,6 +16,8 @@
 file based provider
 """
 
+from __future__ import annotations
+
 import os
 import stat
 
@@ -27,55 +29,60 @@ class SecretInAFile(SecretProviderBase):
     """
     secret is stored in a separate file under the given directory name
     """
-    name = "SecretInAFile"
 
-    def checkFileIsReadOnly(self, dirname, secretfile):
+    name: str | None = "SecretInAFile"  # type: ignore[assignment]
+
+    def checkFileIsReadOnly(self, dirname: str, secretfile: str) -> None:
         filepath = os.path.join(dirname, secretfile)
         obs_stat = stat.S_IMODE(os.stat(filepath).st_mode)
-        if (obs_stat & 0o77) != 0 and os.name == "posix":
-            config.error(("Permissions {} on file {} are too open."
-                          " It is required that your secret files are NOT"
-                          " accessible by others!").format(oct(obs_stat), secretfile))
+        if (obs_stat & 0o7) != 0 and os.name == "posix":
+            config.error(
+                f"Permissions {oct(obs_stat)} on file {secretfile} are too open."
+                " It is required that your secret files are NOT"
+                " accessible by others!"
+            )
 
-    def checkSecretDirectoryIsAvailableAndReadable(self, dirname, suffixes):
+    def checkSecretDirectoryIsAvailableAndReadable(self, dirname: str, suffixes: list[str]) -> None:
         if not os.access(dirname, os.F_OK):
-            config.error("directory {} does not exists".format(dirname))
+            config.error(f"directory {dirname} does not exists")
         for secretfile in os.listdir(dirname):
             for suffix in suffixes:
                 if secretfile.endswith(suffix):
                     self.checkFileIsReadOnly(dirname, secretfile)
 
-    def loadSecrets(self, dirname, suffixes, strip):
-        secrets = {}
+    def loadSecrets(self, dirname: str, suffixes: list[str], strip: bool) -> dict[str, str]:
+        secrets: dict[str, str] = {}
         for secretfile in os.listdir(dirname):
             secretvalue = None
             for suffix in suffixes:
                 if secretfile.endswith(suffix):
-                    with open(os.path.join(dirname, secretfile)) as source:
+                    with open(os.path.join(dirname, secretfile), encoding='utf-8') as source:
                         secretvalue = source.read()
                     if suffix:
-                        secretfile = secretfile[:-len(suffix)]
+                        secretfile = secretfile[: -len(suffix)]
                     if strip:
                         secretvalue = secretvalue.rstrip("\r\n")
                     secrets[secretfile] = secretvalue
         return secrets
 
-    def checkConfig(self, dirname, suffixes=None, strip=True):
+    def checkConfig(  # type: ignore[override]
+        self, dirname: str, suffixes: list[str] | None = None, strip: bool = True
+    ) -> None:
         self._dirname = dirname
         if suffixes is None:
             suffixes = [""]
-        self.checkSecretDirectoryIsAvailableAndReadable(dirname,
-                                                        suffixes=suffixes)
+        self.checkSecretDirectoryIsAvailableAndReadable(dirname, suffixes=suffixes)
 
-    def reconfigService(self, dirname, suffixes=None, strip=True):
+    def reconfigService(  # type: ignore[override]
+        self, dirname: str, suffixes: list[str] | None = None, strip: bool = True
+    ) -> None:
         self._dirname = dirname
-        self.secrets = {}
+        self.secrets: dict[str, str] = {}
         if suffixes is None:
             suffixes = [""]
-        self.secrets = self.loadSecrets(self._dirname, suffixes=suffixes,
-                                        strip=strip)
+        self.secrets = self.loadSecrets(self._dirname, suffixes=suffixes, strip=strip)
 
-    def get(self, entry):
+    def get(self, entry: str) -> str | None:
         """
         get the value from the file identified by 'entry'
         """

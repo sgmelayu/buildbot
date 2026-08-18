@@ -13,71 +13,78 @@
 #
 # Copyright Buildbot Team Members
 
-import mock
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from unittest import mock
 
 from twisted.internet import defer
 from twisted.trial import unittest
 
 from buildbot.mq import simple
 from buildbot.test.fake import fakemaster
-from buildbot.test.util.misc import TestReactorMixin
+from buildbot.test.reactor import TestReactorMixin
+
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
 
 
 class SimpleMQ(TestReactorMixin, unittest.TestCase):
-
     @defer.inlineCallbacks
-    def setUp(self):
-        self.setUpTestReactor()
-        self.master = fakemaster.make_master(self)
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        self.setup_test_reactor()
+        self.master = yield fakemaster.make_master(self)
         self.mq = simple.SimpleMQ()
         self.mq.setServiceParent(self.master)
         yield self.mq.startService()
 
-    @defer.inlineCallbacks
-    def tearDown(self):
-        if self.mq.running:
-            yield self.mq.stopService()
+        @defer.inlineCallbacks
+        def cleanup() -> InlineCallbacksType[None]:
+            if self.mq.running:
+                yield self.mq.stopService()
+
+        self.addCleanup(cleanup)
 
     @defer.inlineCallbacks
-    def test_forward_data(self):
+    def test_forward_data(self) -> InlineCallbacksType[None]:
         callback = mock.Mock()
         yield self.mq.startConsuming(callback, ('a', 'b'))
         # _produce returns a deferred
-        yield self.mq.produce(('a', 'b'), 'foo')
+        yield self.mq.produce(('a', 'b'), 'foo')  # type: ignore[func-returns-value,arg-type]
         # calling produce should eventually call the callback with decoding of
         # topic
         callback.assert_called_with(('a', 'b'), 'foo')
 
     @defer.inlineCallbacks
-    def test_forward_data_wildcard(self):
+    def test_forward_data_wildcard(self) -> InlineCallbacksType[None]:
         callback = mock.Mock()
         yield self.mq.startConsuming(callback, ('a', None))
         # _produce returns a deferred
-        yield self.mq.produce(('a', 'b'), 'foo')
+        yield self.mq.produce(('a', 'b'), 'foo')  # type: ignore[func-returns-value,arg-type]
         # calling produce should eventually call the callback with decoding of
         # topic
         callback.assert_called_with(('a', 'b'), 'foo')
 
     @defer.inlineCallbacks
-    def test_waits_for_called_callback(self):
-        def callback(_, __):
+    def test_waits_for_called_callback(self) -> InlineCallbacksType[None]:
+        def callback(_: object, __: object) -> defer.Deferred[None]:
             return defer.succeed(None)
 
         yield self.mq.startConsuming(callback, ('a', None))
-        yield self.mq.produce(('a', 'b'), 'foo')
+        yield self.mq.produce(('a', 'b'), 'foo')  # type: ignore[func-returns-value,arg-type]
 
         d = self.mq.stopService()
         self.assertTrue(d.called)
 
     @defer.inlineCallbacks
-    def test_waits_for_non_called_callback(self):
-        d1 = defer.Deferred()
+    def test_waits_for_non_called_callback(self) -> InlineCallbacksType[None]:
+        d1: defer.Deferred[None] = defer.Deferred()
 
-        def callback(_, __):
+        def callback(_: object, __: object) -> defer.Deferred[None]:
             return d1
 
         yield self.mq.startConsuming(callback, ('a', None))
-        yield self.mq.produce(('a', 'b'), 'foo')
+        yield self.mq.produce(('a', 'b'), 'foo')  # type: ignore[func-returns-value,arg-type]
 
         d = self.mq.stopService()
         self.assertFalse(d.called)

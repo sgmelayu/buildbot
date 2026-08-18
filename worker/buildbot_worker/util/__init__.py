@@ -12,27 +12,41 @@
 # Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
 # Copyright Buildbot Team Members
-
-from future.utils import text_type
+from __future__ import annotations
 
 import itertools
 import textwrap
 import time
+from typing import TYPE_CHECKING
+from typing import Generic
+from typing import TypeVar
+from typing import Union
+from typing import overload
 
 from ._hangcheck import HangCheckFactory
 from ._notifier import Notifier
 
+if TYPE_CHECKING:
+    from typing import Any
+
+    from twisted.internet.interfaces import IReactorTime
+
+    _T = TypeVar('_T')
+
+StrOrBytesType = TypeVar("StrOrBytesType", bound=Union[str, bytes])
+
+
 __all__ = [
-    "remove_userpassword",
-    "now",
-    "Obfuscated",
-    "rewrap",
     "HangCheckFactory",
     "Notifier",
+    "Obfuscated",
+    "now",
+    "remove_userpassword",
+    "rewrap",
 ]
 
 
-def remove_userpassword(url):
+def remove_userpassword(url: str) -> str:
     if '@' not in url:
         return url
     if '://' not in url:
@@ -45,39 +59,61 @@ def remove_userpassword(url):
     return protocol + '://' + repo_url
 
 
-def now(_reactor=None):
-    if _reactor and hasattr(_reactor, "seconds"):
+def now(_reactor: IReactorTime | None = None) -> float:
+    if _reactor is not None and hasattr(_reactor, "seconds"):
         return _reactor.seconds()
     return time.time()
 
 
-class Obfuscated(object):
-
+class Obfuscated(Generic[StrOrBytesType]):
     """An obfuscated string in a command"""
 
-    def __init__(self, real, fake):
+    def __init__(self, real: StrOrBytesType, fake: StrOrBytesType) -> None:
         self.real = real
         self.fake = fake
 
-    def __str__(self):
-        return self.fake
+    def __str__(self) -> str:
+        return str(self.fake)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return repr(self.fake)
 
-    def __eq__(self, other):
-        return other.__class__ is self.__class__ and \
-            other.real == self.real and \
-            other.fake == self.fake
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, self.__class__):
+            return False
+        return (
+            other.__class__ is self.__class__
+            and other.real == self.real
+            and other.fake == self.fake
+        )
+
+    def __hash__(self) -> int:
+        return hash((self.real, self.fake))
+
+    @overload
+    @staticmethod
+    def to_text(s: bytes) -> bytes: ...
+
+    @overload
+    @staticmethod
+    def to_text(s: Any) -> str: ...
 
     @staticmethod
-    def to_text(s):
-        if isinstance(s, (text_type, bytes)):
+    def to_text(s: Any) -> str | bytes:
+        if isinstance(s, (str, bytes)):
             return s
         return str(s)
 
+    @overload
     @staticmethod
-    def get_real(command):
+    def get_real(command: list[Obfuscated | _T]) -> list[str | _T]: ...
+
+    @overload
+    @staticmethod
+    def get_real(command: _T) -> _T: ...
+
+    @staticmethod
+    def get_real(command: list[Obfuscated | Any] | Any) -> list[Any] | Any:
         rv = command
         if isinstance(command, list):
             rv = []
@@ -88,8 +124,16 @@ class Obfuscated(object):
                     rv.append(Obfuscated.to_text(elt))
         return rv
 
+    @overload
     @staticmethod
-    def get_fake(command):
+    def get_fake(command: list[Obfuscated | _T]) -> list[str | _T]: ...
+
+    @overload
+    @staticmethod
+    def get_fake(command: _T) -> _T: ...
+
+    @staticmethod
+    def get_fake(command: list[Obfuscated | Any] | Any) -> list[Any] | Any:
         rv = command
         if isinstance(command, list):
             rv = []
@@ -101,7 +145,7 @@ class Obfuscated(object):
         return rv
 
 
-def rewrap(text, width=None):
+def rewrap(text: str, width: int | None = None) -> str:
     """
     Rewrap text for output to the console.
 
@@ -119,14 +163,13 @@ def rewrap(text, width=None):
     # Remove common indentation.
     text = textwrap.dedent(text)
 
-    def needs_wrapping(line):
+    def needs_wrapping(line: str) -> bool:
         # Line always non-empty.
         return not line[0].isspace()
 
     # Split text by lines and group lines that comprise paragraphs.
     wrapped_text = ""
-    for do_wrap, lines in itertools.groupby(text.splitlines(True),
-                                            key=needs_wrapping):
+    for do_wrap, lines in itertools.groupby(text.splitlines(True), key=needs_wrapping):
         paragraph = ''.join(lines)
 
         if do_wrap:
@@ -135,3 +178,32 @@ def rewrap(text, width=None):
         wrapped_text += paragraph
 
     return wrapped_text
+
+
+def twisted_connection_string_to_ws_url(description: str) -> str:
+    from twisted.internet.endpoints import _parse  # noqa: PLC0415
+
+    args, kwargs = _parse(description)
+    protocol = args.pop(0).upper()
+
+    host = kwargs.get('host', None)
+    port = kwargs.get('port', None)
+
+    if protocol == 'TCP':
+        port = kwargs.get('port', 80)
+
+        if len(args) == 2:
+            host = args[0]
+            port = args[1]
+        elif len(args) == 1:
+            if "host" in kwargs:
+                host = kwargs['host']
+                port = args[0]
+            else:
+                host = args[0]
+                port = kwargs.get('port', port)
+
+    if host is None or host == '' or port is None:
+        raise ValueError('Host and port must be specified in connection string')
+
+    return f"ws://{host}:{port}"

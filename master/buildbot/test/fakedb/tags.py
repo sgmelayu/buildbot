@@ -13,43 +13,18 @@
 #
 # Copyright Buildbot Team Members
 
-from twisted.internet import defer
+from __future__ import annotations
 
-from buildbot.test.fakedb.base import FakeDBComponent
 from buildbot.test.fakedb.row import Row
 
 
 class Tag(Row):
     table = "tags"
 
-    defaults = dict(
-        id=None,
-        name='some:tag',
-        name_hash=None,
-    )
-
     id_column = 'id'
     hashedColumns = [('name_hash', ('name',))]
 
-
-class FakeTagsComponent(FakeDBComponent):
-
-    def setUp(self):
-        self.tags = {}
-
-    def insertTestData(self, rows):
-        for row in rows:
-            if isinstance(row, Tag):
-                self.tags[row.id] = dict(
-                    id=row.id,
-                    name=row.name)
-
-    def findTagId(self, name):
-        for m in self.tags.values():
-            if m['name'] == name:
-                return defer.succeed(m['id'])
-        id = len(self.tags) + 1
-        self.tags[id] = dict(
-            id=id,
-            name=name)
-        return defer.succeed(id)
+    def __init__(
+        self, id: int | None = None, name: str | None = 'some:tag', name_hash: str | None = None
+    ) -> None:
+        super().__init__(id=id, name=name, name_hash=name_hash)

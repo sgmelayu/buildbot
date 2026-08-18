@@ -8,17 +8,18 @@ Workers connector
 .. py:class:: WorkersConnectorComponent
 
     This class handles Buildbot's notion of workers.
-    The worker information is returned as a dictionary:
+    The worker information is returned as a :class:`WorkerModel` dataclass with the following fields:
 
     * ``id``
     * ``name`` - the name of the worker
     * ``workerinfo`` - worker information as dictionary
     * ``paused`` - boolean indicating worker is paused and shall not take new builds
+    * ``pause_reason`` - string indicating the reason for working being paused
     * ``graceful`` - boolean indicating worker will be shutdown as soon as build finished
     * ``connected_to`` - a list of masters, by ID, to which this worker is currently connected.
-      This list will typically contain only one master, but in unusual circumstances the same worker may appear to be connected to multiple masters simultaneously.
+      This list will typically contain only one master, but in unusual circumstances the same worker may appear to be connected to multiple masters simultaneously
     * ``configured_on`` - a list of master-builder pairs, on which this worker is configured.
-      Each pair is represented by a dictionary with keys ``buliderid`` and ``masterid``.
+      Each pair is represented by a :class:`BuilderMasterModel` with fields ``buliderid`` and ``masterid``
 
     The worker information can be any JSON-able object.
     See :bb:rtype:`worker` for more detail.
@@ -36,7 +37,7 @@ Workers connector
 
         :param integer masterid: limit to workers configured on this master
         :param integer builderid: limit to workers configured on this builder
-        :returns: list of worker dictionaries, via Deferred
+        :returns: list of :class:`WorkerModel`, via Deferred
 
         Get a list of workers.
         If either or both of the filtering parameters either specified, then the result is limited to workers configured to run on that master or builder.
@@ -49,7 +50,7 @@ Workers connector
         :param integer workerid: the ID of the worker to retrieve
         :param integer masterid: limit to workers configured on this master
         :param integer builderid: limit to workers configured on this builder
-        :returns: info dictionary or None, via Deferred
+        :returns: :class:`WorkerModel` or None, via Deferred
 
         Looks up the worker with the given name or ID, returning ``None`` if no matching worker is found.
         The ``masterid`` and ``builderid`` arguments function as they do for :py:meth:`getWorkers`.
@@ -90,13 +91,23 @@ Workers connector
         :returns: Deferred
 
         Unregister all the workers configured to a master for given builders.
-        This shall happen when master disabled or before reconfiguration
+        This shall happen when master is disabled or before reconfiguration.
 
-    .. py:method:: setWorkerState(workerid, paused, graceful)
+
+    .. py:method:: set_worker_paused(workerid, paused, pause_reason=None)
 
         :param integer workerid: the ID of the worker whose state is being changed
         :param integer paused: the paused state
+        :param string pause_reason: the reason for pausing the worker.
+        :returns: Deferred
+
+        Changes the ``paused`` state of the worker (see definition of states above in worker dict description).
+
+    .. py:method:: set_worker_graceful(workerid, graceful)
+
+        :param integer workerid: the ID of the worker whose state is being changed
         :param integer graceful: the graceful state
         :returns: Deferred
 
-        Change the state of a worker (see definition of states above in worker dict description)
+        Changes the ``graceful`` state of the worker (see definition of states above in worker dict description).
+

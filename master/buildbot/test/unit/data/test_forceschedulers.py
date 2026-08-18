@@ -14,173 +14,230 @@
 # Copyright Buildbot Team Members
 
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from twisted.internet import defer
 from twisted.trial import unittest
 
 from buildbot.data import forceschedulers
 from buildbot.schedulers.forcesched import ForceScheduler
+from buildbot.test import fakedb
 from buildbot.test.util import endpoint
 
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
+
 expected_default = {
-    'all_fields': [{'columns': 1,
-                    'autopopulate': None,
+    'all_fields': [
+        {
+            'columns': 1,
+            'autopopulate': None,
+            'default': '',
+            'fields': [
+                {
                     'default': '',
-                    'fields': [{'default': '',
-                                'autopopulate': None,
-                                'fullName': 'username',
-                                'hide': False,
-                                'label': 'Your name:',
-                                'maxsize': None,
-                                'multiple': False,
-                                'name': 'username',
-                                'need_email': True,
-                                'regex': None,
-                                'required': False,
-                                'size': 30,
-                                'tablabel': 'Your name:',
-                                'type': 'username'},
-                               {'default': 'force build',
-                                'autopopulate': None,
-                                'fullName': 'reason',
-                                'hide': False,
-                                'label': 'reason',
-                                'maxsize': None,
-                                'multiple': False,
-                                'name': 'reason',
-                                'regex': None,
-                                'required': False,
-                                'size': 20,
-                                'tablabel': 'reason',
-                                'type': 'text'}],
-                    'fullName': None,
+                    'autopopulate': None,
+                    'fullName': 'username',
                     'hide': False,
-                    'label': '',
-                    'layout': 'vertical',
+                    'label': 'Your name:',
                     'maxsize': None,
                     'multiple': False,
-                    'name': '',
+                    'name': 'username',
+                    'need_email': True,
                     'regex': None,
                     'required': False,
-                    'tablabel': '',
-                    'type': 'nested'},
-                   {'columns': 2,
-                    'default': '',
-                    'fields': [{'default': '',
-                                'autopopulate': None,
-                                'fullName': 'branch',
-                                'hide': False,
-                                'label': 'Branch:',
-                                'multiple': False,
-                                'maxsize': None,
-                                'name': 'branch',
-                                'regex': None,
-                                'required': False,
-                                'size': 10,
-                                'tablabel': 'Branch:',
-                                'type': 'text'},
-                               {'default': '',
-                                'autopopulate': None,
-                                'fullName': 'project',
-                                'hide': False,
-                                'label': 'Project:',
-                                'maxsize': None,
-                                'multiple': False,
-                                'name': 'project',
-                                'regex': None,
-                                'required': False,
-                                'size': 10,
-                                'tablabel': 'Project:',
-                                'type': 'text'},
-                               {'default': '',
-                                'autopopulate': None,
-                                'fullName': 'repository',
-                                'hide': False,
-                                'label': 'Repository:',
-                                'maxsize': None,
-                                'multiple': False,
-                                'name': 'repository',
-                                'regex': None,
-                                'required': False,
-                                'size': 10,
-                                'tablabel': 'Repository:',
-                                'type': 'text'},
-                               {'default': '',
-                                'autopopulate': None,
-                                'fullName': 'revision',
-                                'hide': False,
-                                'label': 'Revision:',
-                                'maxsize': None,
-                                'multiple': False,
-                                'name': 'revision',
-                                'regex': None,
-                                'required': False,
-                                'size': 10,
-                                'tablabel': 'Revision:',
-                                'type': 'text'}],
+                    'size': 30,
+                    'tablabel': 'Your name:',
+                    'type': 'username',
+                    'tooltip': '',
+                },
+                {
+                    'default': 'force build',
                     'autopopulate': None,
-                    'fullName': None,
+                    'fullName': 'reason',
                     'hide': False,
-                    'label': '',
-                    'layout': 'vertical',
+                    'label': 'reason',
                     'maxsize': None,
                     'multiple': False,
-                    'name': '',
+                    'name': 'reason',
                     'regex': None,
                     'required': False,
-                    'tablabel': '',
-                    'type': 'nested'}],
+                    'size': 20,
+                    'tablabel': 'reason',
+                    'type': 'text',
+                    'tooltip': '',
+                },
+                {
+                    'default': 0,
+                    'autopopulate': None,
+                    'fullName': 'priority',
+                    'hide': False,
+                    'label': 'priority',
+                    'maxsize': None,
+                    'multiple': False,
+                    'name': 'priority',
+                    'regex': None,
+                    'required': False,
+                    'size': 10,
+                    'tablabel': 'priority',
+                    'type': 'int',
+                    'tooltip': '',
+                },
+            ],
+            'fullName': None,
+            'hide': False,
+            'label': '',
+            'layout': 'vertical',
+            'maxsize': None,
+            'multiple': False,
+            'name': '',
+            'regex': None,
+            'required': False,
+            'tablabel': '',
+            'type': 'nested',
+            'tooltip': '',
+        },
+        {
+            'columns': 2,
+            'default': '',
+            'fields': [
+                {
+                    'default': '',
+                    'autopopulate': None,
+                    'fullName': 'branch',
+                    'hide': False,
+                    'label': 'Branch:',
+                    'multiple': False,
+                    'maxsize': None,
+                    'name': 'branch',
+                    'regex': None,
+                    'required': False,
+                    'size': 10,
+                    'tablabel': 'Branch:',
+                    'type': 'text',
+                    'tooltip': '',
+                },
+                {
+                    'default': '',
+                    'autopopulate': None,
+                    'fullName': 'project',
+                    'hide': False,
+                    'label': 'Project:',
+                    'maxsize': None,
+                    'multiple': False,
+                    'name': 'project',
+                    'regex': None,
+                    'required': False,
+                    'size': 10,
+                    'tablabel': 'Project:',
+                    'type': 'text',
+                    'tooltip': '',
+                },
+                {
+                    'default': '',
+                    'autopopulate': None,
+                    'fullName': 'repository',
+                    'hide': False,
+                    'label': 'Repository:',
+                    'maxsize': None,
+                    'multiple': False,
+                    'name': 'repository',
+                    'regex': None,
+                    'required': False,
+                    'size': 10,
+                    'tablabel': 'Repository:',
+                    'type': 'text',
+                    'tooltip': '',
+                },
+                {
+                    'default': '',
+                    'autopopulate': None,
+                    'fullName': 'revision',
+                    'hide': False,
+                    'label': 'Revision:',
+                    'maxsize': None,
+                    'multiple': False,
+                    'name': 'revision',
+                    'regex': None,
+                    'required': False,
+                    'size': 10,
+                    'tablabel': 'Revision:',
+                    'type': 'text',
+                    'tooltip': '',
+                },
+            ],
+            'autopopulate': None,
+            'fullName': None,
+            'hide': False,
+            'label': '',
+            'layout': 'vertical',
+            'maxsize': None,
+            'multiple': False,
+            'name': '',
+            'regex': None,
+            'required': False,
+            'tablabel': '',
+            'type': 'nested',
+            'tooltip': '',
+        },
+    ],
     'builder_names': ['builder'],
     'button_name': 'defaultforce',
     'label': 'defaultforce',
     'name': 'defaultforce',
-    'enabled': True}
+    'enabled': True,
+}
 
 
 class ForceschedulerEndpoint(endpoint.EndpointMixin, unittest.TestCase):
-
     endpointClass = forceschedulers.ForceSchedulerEndpoint
     resourceTypeClass = forceschedulers.ForceScheduler
     maxDiff = None
 
-    def setUp(self):
-        self.setUpEndpoint()
-        scheds = [ForceScheduler(
-            name="defaultforce",
-            builderNames=["builder"])]
+    @defer.inlineCallbacks
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        yield self.setUpEndpoint()
+        scheds = [ForceScheduler(name="defaultforce", builderNames=["builder"])]
         self.master.allSchedulers = lambda: scheds
-
-    def tearDown(self):
-        self.tearDownEndpoint()
+        for sched in scheds:
+            yield sched.setServiceParent(self.master)
+        yield self.master.db.insert_test_data([
+            fakedb.Master(id=fakedb.FakeDBConnector.MASTER_ID),
+        ])
+        yield self.master.startService()
 
     @defer.inlineCallbacks
-    def test_get_existing(self):
+    def test_get_existing(self) -> InlineCallbacksType[None]:
         res = yield self.callGet(('forceschedulers', "defaultforce"))
         self.validateData(res)
         self.assertEqual(res, expected_default)
 
     @defer.inlineCallbacks
-    def test_get_missing(self):
+    def test_get_missing(self) -> InlineCallbacksType[None]:
         res = yield self.callGet(('forceschedulers', 'foo'))
         self.assertEqual(res, None)
 
 
 class ForceSchedulersEndpoint(endpoint.EndpointMixin, unittest.TestCase):
-
     endpointClass = forceschedulers.ForceSchedulersEndpoint
     resourceTypeClass = forceschedulers.ForceScheduler
     maxDiff = None
 
-    def setUp(self):
-        self.setUpEndpoint()
-        scheds = [ForceScheduler(
-            name="defaultforce",
-            builderNames=["builder"])]
+    @defer.inlineCallbacks
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        yield self.setUpEndpoint()
+        scheds = [ForceScheduler(name="defaultforce", builderNames=["builder"])]
         self.master.allSchedulers = lambda: scheds
-
-    def tearDown(self):
-        self.tearDownEndpoint()
+        for sched in scheds:
+            yield sched.setServiceParent(self.master)
+        yield self.master.db.insert_test_data([
+            fakedb.Master(id=fakedb.FakeDBConnector.MASTER_ID),
+        ])
+        yield self.master.startService()
 
     @defer.inlineCallbacks
-    def test_get_existing(self):
-        res = yield self.callGet(('forceschedulers', ))
+    def test_get_existing(self) -> InlineCallbacksType[None]:
+        res = yield self.callGet(('forceschedulers',))
         self.assertEqual(res, [expected_default])

@@ -13,15 +13,27 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from typing import Any
 
 from twisted.internet import defer
-from twisted.internet import task
 
+from buildbot.test import fakedb
 from buildbot.test.fake import fakemaster
 
+if TYPE_CHECKING:
+    from twisted.trial import unittest
 
-class ChangeSourceMixin:
+    from buildbot.util.twisted import InlineCallbacksType
 
+    _ChangeSourceMixinBase = unittest.TestCase
+else:
+    _ChangeSourceMixinBase = object
+
+
+class ChangeSourceMixin(_ChangeSourceMixinBase):
     """
     This class is used for testing change sources, and handles a few things:
 
@@ -29,72 +41,58 @@ class ChangeSourceMixin:
      - a fake master with a data API implementation
     """
 
-    changesource = None
+    changesource: Any = None
     started = False
 
     DUMMY_CHANGESOURCE_ID = 20
     OTHER_MASTER_ID = 93
     DEFAULT_NAME = "ChangeSource"
 
-    def setUpChangeSource(self):
+    @defer.inlineCallbacks
+    def setUpChangeSource(self, want_real_reactor: bool = False) -> InlineCallbacksType[None]:
         "Set up the mixin - returns a deferred."
-        self.master = fakemaster.make_master(self, wantDb=True, wantData=True)
-        assert not hasattr(self.master, 'addChange')  # just checking..
-        return defer.succeed(None)
+        self.master = yield fakemaster.make_master(
+            self, wantDb=True, wantData=True, wantRealReactor=want_real_reactor
+        )
+
+        self.master.db.insert_test_data([
+            fakedb.Master(id=fakedb.FakeDBConnector.MASTER_ID),
+            fakedb.Master(id=self.OTHER_MASTER_ID, active=1),
+            fakedb.ChangeSource(id=self.DUMMY_CHANGESOURCE_ID, name=self.DEFAULT_NAME),
+        ])
+
+        @defer.inlineCallbacks
+        def cleanup() -> InlineCallbacksType[None]:
+            if not self.started:
+                return
+            if self.changesource.running:
+                yield self.changesource.stopService()
+            yield self.changesource.disownServiceParent()
+
+        self.addCleanup(cleanup)
 
     @defer.inlineCallbacks
-    def tearDownChangeSource(self):
-        "Tear down the mixin - returns a deferred."
-        if not self.started:
-            return
-        if self.changesource.running:
-            yield self.changesource.stopService()
-        yield self.changesource.disownServiceParent()
-        return
-
-    def attachChangeSource(self, cs):
-        "Set up a change source for testing; sets its .master attribute"
+    def attachChangeSource(self, cs: Any) -> InlineCallbacksType[Any]:
         self.changesource = cs
-        # FIXME some changesource does not have master property yet but
-        # mailchangesource has :-/
-        try:
-            self.changesource.master = self.master
-        except AttributeError:
-            self.changesource.setServiceParent(self.master)
+        yield self.changesource.setServiceParent(self.master)
+        yield self.changesource.configureService()
+        return cs
 
-        # configure the service to let secret manager render the secrets
-        d = self.changesource.configureService()
-        d.addErrback(lambda _: None)
-        # also, now that changesources are ClusteredServices, setting up
-        # the clock here helps in the unit tests that check that behavior
-        self.changesource.clock = task.Clock()
-
-    def startChangeSource(self):
+    def startChangeSource(self) -> defer.Deferred[None]:
         "start the change source as a service"
         self.started = True
         return self.changesource.startService()
 
     @defer.inlineCallbacks
-    def stopChangeSource(self):
+    def stopChangeSource(self) -> InlineCallbacksType[None]:
         "stop the change source again; returns a deferred"
         yield self.changesource.stopService()
 
         self.started = False
 
-    def setChangeSourceToMaster(self, otherMaster):
-        # some tests build the CS late, so for those tests we will require that
-        # they use the default name in order to run tests that require master
-        # assignments
-        if self.changesource is not None:
-            name = self.changesource.name
-        else:
-            name = self.DEFAULT_NAME
-
-        self.master.data.updates.changesourceIds[
-            name] = self.DUMMY_CHANGESOURCE_ID
-        if otherMaster:
-            self.master.data.updates.changesourceMasters[
-                self.DUMMY_CHANGESOURCE_ID] = otherMaster
-        else:
-            del self.master.data.updates.changesourceMasters[
-                self.DUMMY_CHANGESOURCE_ID]
+    @defer.inlineCallbacks
+    def setChangeSourceToMaster(self, otherMaster: int | None) -> InlineCallbacksType[Any]:
+        ret = yield self.master.data.updates.trySetChangeSourceMaster(
+            self.DUMMY_CHANGESOURCE_ID, otherMaster
+        )
+        return ret

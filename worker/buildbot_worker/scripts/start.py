@@ -12,43 +12,53 @@
 # Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
 # Copyright Buildbot Team Members
-
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
+from __future__ import annotations
 
 import os
 import sys
 import time
+from typing import TYPE_CHECKING
+from typing import cast
 
 from buildbot_worker.scripts import base
 from buildbot_worker.util import rewrap
 
+if TYPE_CHECKING:
+    from typing import Any
 
-class Follower(object):
+    from twisted.internet.interfaces import IReactorCore
+    from twisted.python.failure import Failure
 
-    def follow(self):
-        from twisted.internet import reactor
-        from buildbot_worker.scripts.logwatcher import LogWatcher
+
+class Follower:
+    def follow(self) -> int:
+        from twisted.internet import reactor  # noqa: PLC0415
+
+        from buildbot_worker.scripts.logwatcher import LogWatcher  # noqa: PLC0415
+
         self.rc = 0
         print("Following twistd.log until startup finished..")
         lw = LogWatcher("twistd.log")
         d = lw.start()
         d.addCallbacks(self._success, self._failure)
-        reactor.run()
+        cast("IReactorCore", reactor).run()
         return self.rc
 
-    def _success(self, processtype):
-        from twisted.internet import reactor
-        print("The {0} appears to have (re)started correctly.".format(processtype))
-        self.rc = 0
-        reactor.stop()
+    def _success(self, processtype: str) -> None:
+        from twisted.internet import reactor  # noqa: PLC0415
 
-    def _failure(self, why):
-        from twisted.internet import reactor
-        from buildbot_worker.scripts.logwatcher import WorkerTimeoutError
+        print(f"The {processtype} appears to have (re)started correctly.")
+        self.rc = 0
+        cast("IReactorCore", reactor).stop()
+
+    def _failure(self, why: Failure) -> None:
+        from twisted.internet import reactor  # noqa: PLC0415
+
+        from buildbot_worker.scripts.logwatcher import WorkerTimeoutError  # noqa: PLC0415
+
         if why.check(WorkerTimeoutError):
-            print(rewrap("""\
+            print(
+                rewrap("""\
                 The worker took more than 10 seconds to start and/or connect
                 to the buildmaster, so we were unable to confirm that it
                 started and connected correctly.
@@ -61,18 +71,21 @@ class Follower(object):
                    'Failure: twisted.cred.error.UnauthorizedLogin'
                 then your worker might be using the wrong botname or password.
                 Please correct these problems and then restart the worker.
-                """))
+                """)
+            )
         else:
-            print(rewrap("""\
+            print(
+                rewrap("""\
                 Unable to confirm that the worker started correctly.
                 You may need to stop it, fix the config file, and restart.
-                """))
+                """)
+            )
             print(why)
         self.rc = 1
-        reactor.stop()
+        cast("IReactorCore", reactor).stop()
 
 
-def startCommand(config):
+def startCommand(config: dict[str, Any]) -> int:
     basedir = config['basedir']
     if not base.isWorkerDir(basedir):
         return 1
@@ -80,7 +93,7 @@ def startCommand(config):
     return startWorker(basedir, config['quiet'], config['nodaemon'])
 
 
-def startWorker(basedir, quiet, nodaemon):
+def startWorker(basedir: str, quiet: bool, nodaemon: bool) -> int:
     """
     Start worker process.
 
@@ -103,8 +116,7 @@ def startWorker(basedir, quiet, nodaemon):
         return launch(nodaemon)
 
     # we probably can't do this os.fork under windows
-    from twisted.python.runtime import platformType
-    if platformType == "win32":
+    if sys.platform == "win32":
         return launch(nodaemon)
 
     # fork a child to launch the daemon, while the parent process tails the
@@ -116,22 +128,24 @@ def startWorker(basedir, quiet, nodaemon):
     # this is the child: give the logfile-watching parent a chance to start
     # watching it before we start the daemon
     time.sleep(0.2)
-    launch(nodaemon)
-    return None
+    return launch(nodaemon)
 
 
-def launch(nodaemon):
+def launch(nodaemon: bool) -> int:
     sys.path.insert(0, os.path.abspath(os.getcwd()))
 
     # see if we can launch the application without actually having to
     # spawn twistd, since spawning processes correctly is a real hassle
     # on windows.
-    from twisted.python.runtime import platformType
-    from twisted.scripts.twistd import run
-    argv = ["twistd",
-            "--no_save",
-            "--logfile=twistd.log",  # windows doesn't use the same default
-            "--python=buildbot.tac"]
+    from twisted.python.runtime import platformType  # noqa: PLC0415
+    from twisted.scripts.twistd import run  # noqa: PLC0415
+
+    argv = [
+        "twistd",
+        "--no_save",
+        "--logfile=twistd.log",  # windows doesn't use the same default
+        "--python=buildbot.tac",
+    ]
     if nodaemon:
         argv.extend(["--nodaemon"])
         if platformType != 'win32':
@@ -140,3 +154,4 @@ def launch(nodaemon):
 
     sys.argv = argv
     run()
+    return 0

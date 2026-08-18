@@ -1,4 +1,3 @@
-
 # This file is part of Buildbot.  Buildbot is free software: you can
 # redistribute it and/or modify it under the terms of the GNU General Public
 # License as published by the Free Software Foundation, version 2.
@@ -14,18 +13,38 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
 
 from random import randint
+from typing import TYPE_CHECKING
+from typing import Any
+from typing import Generic
+from typing import TypeVar
 
 from twisted.internet import defer
 from twisted.python import log
 
-_poller_instances = None
+if TYPE_CHECKING:
+    from collections.abc import Awaitable
+    from collections.abc import Callable
+
+    from twisted.internet.base import DelayedCall
+    from twisted.internet.interfaces import IReactorTime
+
+    from buildbot.util.twisted import InlineCallbacksType
+
+_T = TypeVar('_T')
+
+_poller_instances: list[tuple[Any, str]] | None = None
 
 
-class Poller:
-
-    def __init__(self, fn, instance, reactor):
+class Poller(Generic[_T]):
+    def __init__(
+        self,
+        fn: Callable[[_T], Awaitable[None] | None],
+        instance: _T,
+        reactor: IReactorTime,
+    ) -> None:
         self.fn = fn
         self.instance = instance
 
@@ -39,26 +58,26 @@ class Poller:
         #   - If self._call is not None then _run will be executed at some point, but it's not being
         #     executed now.
         self._currently_executing = False
-        self._call = None
-        self._next_call_time = None  # valid when self._call is not None
+        self._call: DelayedCall | None = None
+        self._next_call_time: float | None = None  # valid when self._call is not None
 
-        self._start_time = 0
-        self._interval = 0
-        self._random_delay_min = 0
-        self._random_delay_max = 0
-        self._run_complete_deferreds = []
+        self._start_time: float = 0
+        self._interval: float = 0
+        self._random_delay_min: int = 0
+        self._random_delay_max: int = 0
+        self._run_complete_deferreds: list[defer.Deferred[None]] = []
 
         self._reactor = reactor
 
     @defer.inlineCallbacks
-    def _run(self):
+    def _run(self) -> InlineCallbacksType[None]:
         self._call = None
         self._currently_executing = True
 
         try:
             yield self.fn(self.instance)
         except Exception as e:
-            log.err(e, 'while executing {}'.format(self.fn))
+            log.err(e, f'while executing {self.fn}')
         finally:
             self._currently_executing = False
 
@@ -71,7 +90,9 @@ class Poller:
         while self._run_complete_deferreds:
             self._run_complete_deferreds.pop(0).callback(None)
 
-    def _get_wait_time(self, curr_time, force_now=False, force_initial_now=False):
+    def _get_wait_time(
+        self, curr_time: float, force_now: bool = False, force_initial_now: bool = False
+    ) -> float:
         if force_now:
             return 0
 
@@ -85,10 +106,11 @@ class Poller:
         running_time = curr_time - self._start_time
         return self._interval - (running_time % self._interval) + extra_wait
 
-    def _schedule(self, force_now=False, force_initial_now=False):
+    def _schedule(self, force_now: bool = False, force_initial_now: bool = False) -> None:
         curr_time = self._reactor.seconds()
-        wait_time = self._get_wait_time(curr_time, force_now=force_now,
-                                        force_initial_now=force_initial_now)
+        wait_time = self._get_wait_time(
+            curr_time, force_now=force_now, force_initial_now=force_initial_now
+        )
         next_call_time = curr_time + wait_time
 
         if self._call is not None:
@@ -96,9 +118,9 @@ class Poller:
             self._call.cancel()
 
         self._next_call_time = next_call_time
-        self._call = self._reactor.callLater(wait_time, self._run)
+        self._call = self._reactor.callLater(wait_time, self._run)  # type: ignore[assignment]
 
-    def __call__(self):
+    def __call__(self) -> None:
         if not self.running:
             return
         if self._currently_executing:
@@ -106,7 +128,13 @@ class Poller:
         else:
             self._schedule(force_now=True)
 
-    def start(self, interval, now=False, random_delay_min=0, random_delay_max=0):
+    def start(
+        self,
+        interval: float,
+        now: bool = False,
+        random_delay_min: int = 0,
+        random_delay_max: int = 0,
+    ) -> None:
         assert not self.running
         self._interval = interval
         self._random_delay_min = random_delay_min
@@ -117,27 +145,31 @@ class Poller:
         self._schedule(force_initial_now=now)
 
     @defer.inlineCallbacks
-    def stop(self):
+    def stop(self) -> InlineCallbacksType[None]:
         self.running = False
         if self._call is not None:
             self._call.cancel()
             self._call = None
         if self._currently_executing:
-            d = defer.Deferred()
+            d: defer.Deferred[None] = defer.Deferred()
             self._run_complete_deferreds.append(d)
             yield d
 
 
-class _Descriptor:
-    def __init__(self, fn, attrName):
+class _Descriptor(Generic[_T]):
+    def __init__(self, fn: Callable[[_T], Awaitable[None] | None], attrName: str) -> None:
         self.fn = fn
         self.attrName = attrName
 
-    def __get__(self, instance, cls):
+    def __get__(self, instance: _T, cls: type[Any]) -> Poller:
         try:
             poller = getattr(instance, self.attrName)
         except AttributeError:
-            poller = Poller(self.fn, instance, instance.master.reactor)
+            poller = Poller(
+                self.fn,
+                instance,
+                instance.master.reactor,  # type: ignore[attr-defined]
+            )
             setattr(instance, self.attrName, poller)
             # track instances when testing
             if _poller_instances is not None:
@@ -145,18 +177,18 @@ class _Descriptor:
         return poller
 
 
-def method(fn):
+def method(fn: Callable[[_T], Awaitable[None] | None]) -> _Descriptor[_T]:
     stateName = "__poll_" + fn.__name__ + "__"
     return _Descriptor(fn, stateName)
 
 
-def track_poll_methods():
+def track_poll_methods() -> None:
     global _poller_instances
     _poller_instances = []
 
 
-def reset_poll_methods():
+def reset_poll_methods() -> None:
     global _poller_instances
-    for instance, attrname in _poller_instances:  # pylint: disable=not-an-iterable
+    for instance, attrname in _poller_instances:  # type: ignore[union-attr]  # pylint: disable=not-an-iterable
         delattr(instance, attrname)
     _poller_instances = None

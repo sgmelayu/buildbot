@@ -13,12 +13,16 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
 import json
+from typing import TYPE_CHECKING
+from typing import Any
 
 from twisted.internet import defer
 from twisted.trial import unittest
 
-from buildbot import config
+from buildbot.config.master import MasterConfig
 from buildbot.schedulers.forcesched import AnyPropertyParameter
 from buildbot.schedulers.forcesched import BaseParameter
 from buildbot.schedulers.forcesched import BooleanParameter
@@ -34,35 +38,40 @@ from buildbot.schedulers.forcesched import PatchParameter
 from buildbot.schedulers.forcesched import StringParameter
 from buildbot.schedulers.forcesched import UserNameParameter
 from buildbot.schedulers.forcesched import oneCodebase
+from buildbot.test.reactor import TestReactorMixin
 from buildbot.test.util import scheduler
 from buildbot.test.util.config import ConfigErrorsMixin
-from buildbot.test.util.misc import TestReactorMixin
+
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
 
 
-class TestForceScheduler(scheduler.SchedulerMixin, ConfigErrorsMixin,
-                         TestReactorMixin, unittest.TestCase):
-
+class TestForceScheduler(
+    scheduler.SchedulerMixin, ConfigErrorsMixin, TestReactorMixin, unittest.TestCase
+):
     OBJECTID = 19
     SCHEDULERID = 9
     maxDiff = None
 
-    def setUp(self):
-        self.setUpTestReactor()
-        self.setUpScheduler()
+    @defer.inlineCallbacks
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        self.setup_test_reactor()
+        yield self.setUpScheduler()
 
-    def tearDown(self):
-        self.tearDownScheduler()
-
-    def makeScheduler(self, name='testsched', builderNames=None,
-                      **kw):
+    @defer.inlineCallbacks
+    def makeScheduler(
+        self, name: str = 'testsched', builderNames: list[str] | None = None, **kw: Any
+    ) -> InlineCallbacksType[ForceScheduler]:
         if builderNames is None:
             builderNames = ['a', 'b']
-        sched = self.attachScheduler(
+        sched = yield self.attachScheduler(
             ForceScheduler(name=name, builderNames=builderNames, **kw),
-            self.OBJECTID, self.SCHEDULERID,
+            self.OBJECTID,
+            self.SCHEDULERID,
             overrideBuildsetMethods=True,
-            createBuilderDB=True)
-        sched.master.config = config.MasterConfig()
+            createBuilderDB=True,
+        )
+        sched.master.config = MasterConfig()
 
         self.assertEqual(sched.name, name)
 
@@ -70,279 +79,434 @@ class TestForceScheduler(scheduler.SchedulerMixin, ConfigErrorsMixin,
 
     # tests
 
-    def test_compare_branch(self):
+    def test_compare_branch(self) -> None:
         self.assertNotEqual(
             ForceScheduler(name="testched", builderNames=[]),
             ForceScheduler(
-                name="testched", builderNames=[],
-                codebases=oneCodebase(
-                    branch=FixedParameter("branch", "fishing/pole"))))
+                name="testched",
+                builderNames=[],
+                codebases=oneCodebase(branch=FixedParameter("branch", "fishing/pole")),
+            ),
+        )
 
-    def test_compare_reason(self):
-        self.assertNotEqual(
-            ForceScheduler(name="testched", builderNames=[],
-                           reason=FixedParameter("reason", "no fish for you!")),
-            ForceScheduler(name="testched", builderNames=[],
-                           reason=FixedParameter("reason", "thanks for the fish!")))
-
-    def test_compare_revision(self):
+    def test_compare_reason(self) -> None:
         self.assertNotEqual(
             ForceScheduler(
-                name="testched", builderNames=[],
-                codebases=oneCodebase(
-                    revision=FixedParameter("revision", "fish-v1"))),
+                name="testched",
+                builderNames=[],
+                reason=FixedParameter("reason", "no fish for you!"),
+            ),
             ForceScheduler(
-                name="testched", builderNames=[],
-                codebases=oneCodebase(
-                    revision=FixedParameter("revision", "fish-v2"))))
+                name="testched",
+                builderNames=[],
+                reason=FixedParameter("reason", "thanks for the fish!"),
+            ),
+        )
 
-    def test_compare_repository(self):
+    def test_compare_revision(self) -> None:
         self.assertNotEqual(
             ForceScheduler(
-                name="testched", builderNames=[],
-                codebases=oneCodebase(
-                    repository=FixedParameter("repository", "git://pond.org/fisher.git"))),
+                name="testched",
+                builderNames=[],
+                codebases=oneCodebase(revision=FixedParameter("revision", "fish-v1")),
+            ),
             ForceScheduler(
-                name="testched", builderNames=[],
-                codebases=oneCodebase(
-                    repository=FixedParameter("repository", "svn://ocean.com/trawler/"))))
+                name="testched",
+                builderNames=[],
+                codebases=oneCodebase(revision=FixedParameter("revision", "fish-v2")),
+            ),
+        )
 
-    def test_compare_project(self):
+    def test_compare_repository(self) -> None:
         self.assertNotEqual(
             ForceScheduler(
-                name="testched", builderNames=[],
+                name="testched",
+                builderNames=[],
                 codebases=oneCodebase(
-                    project=FixedParameter("project", "fisher"))),
+                    repository=FixedParameter("repository", "git://pond.org/fisher.git")
+                ),
+            ),
             ForceScheduler(
-                name="testched", builderNames=[],
+                name="testched",
+                builderNames=[],
                 codebases=oneCodebase(
-                    project=FixedParameter("project", "trawler"))))
+                    repository=FixedParameter("repository", "svn://ocean.com/trawler/")
+                ),
+            ),
+        )
 
-    def test_compare_username(self):
+    def test_compare_project(self) -> None:
+        self.assertNotEqual(
+            ForceScheduler(
+                name="testched",
+                builderNames=[],
+                codebases=oneCodebase(project=FixedParameter("project", "fisher")),
+            ),
+            ForceScheduler(
+                name="testched",
+                builderNames=[],
+                codebases=oneCodebase(project=FixedParameter("project", "trawler")),
+            ),
+        )
+
+    def test_compare_username(self) -> None:
         self.assertNotEqual(
             ForceScheduler(name="testched", builderNames=[]),
-            ForceScheduler(name="testched", builderNames=[],
-                           username=FixedParameter("username",
-                                                   "The Fisher King <avallach@atlantis.al>")))
+            ForceScheduler(
+                name="testched",
+                builderNames=[],
+                username=FixedParameter("username", "The Fisher King <avallach@atlantis.al>"),
+            ),
+        )
 
-    def test_compare_properties(self):
+    def test_compare_properties(self) -> None:
         self.assertNotEqual(
-            ForceScheduler(name="testched", builderNames=[],
-                           properties=[]),
-            ForceScheduler(name="testched", builderNames=[],
-                           properties=[FixedParameter("prop", "thanks for the fish!")]))
+            ForceScheduler(name="testched", builderNames=[], properties=[]),
+            ForceScheduler(
+                name="testched",
+                builderNames=[],
+                properties=[FixedParameter("prop", "thanks for the fish!")],
+            ),
+        )
 
-    def test_compare_codebases(self):
+    def test_compare_codebases(self) -> None:
         self.assertNotEqual(
-            ForceScheduler(name="testched", builderNames=[],
-                           codebases=['bar']),
-            ForceScheduler(name="testched", builderNames=[],
-                           codebases=['foo']))
+            ForceScheduler(name="testched", builderNames=[], codebases=['bar']),
+            ForceScheduler(name="testched", builderNames=[], codebases=['foo']),
+        )
 
     @defer.inlineCallbacks
-    def test_basicForce(self):
-        sched = self.makeScheduler()
+    def test_basicForce(self) -> InlineCallbacksType[None]:
+        sched = yield self.makeScheduler()
+        yield self.master.startService()
 
-        res = yield sched.force('user', builderNames=['a'], branch='a', reason='because',
-                                revision='c', repository='d', project='p')
+        res = yield sched.force(
+            'user',
+            builderNames=['a'],
+            branch='a',
+            reason='because',
+            revision='c',
+            repository='d',
+            project='p',
+        )
 
         # only one builder forced, so there should only be one brid
-        self.assertEqual(res, (500, {1000: 100}))
-        self.assertEqual(self.addBuildsetCalls, [
-            ('addBuildsetForSourceStampsWithDefaults', dict(
-                builderNames=['a'],
-                waited_for=False,
-                properties={
-                    'owner': ('user', 'Force Build Form'),
-                    'reason': ('because', 'Force Build Form'),
-                },
-                reason="A build was forced by 'user': because",
-                sourcestamps=[
-                    {'codebase': '', 'branch': 'a', 'revision': 'c',
-                     'repository': 'd', 'project': 'p'},
-                ])),
-        ])
+        self.assertEqual(res, (500, {300: 100}))
+        self.assertEqual(
+            self.addBuildsetCalls,
+            [
+                (
+                    'addBuildsetForSourceStampsWithDefaults',
+                    {
+                        "builderNames": ['a'],
+                        "waited_for": False,
+                        "priority": 0,
+                        "properties": {
+                            'owner': ('user', 'Force Build Form'),
+                            'reason': ('because', 'Force Build Form'),
+                        },
+                        "reason": "A build was forced by 'user': because",
+                        "sourcestamps": [
+                            {
+                                'codebase': '',
+                                'branch': 'a',
+                                'revision': 'c',
+                                'repository': 'd',
+                                'project': 'p',
+                            },
+                        ],
+                    },
+                ),
+            ],
+        )
 
     @defer.inlineCallbacks
-    def test_basicForce_reasonString(self):
+    def test_basicForce_reasonString(self) -> InlineCallbacksType[None]:
         """Same as above, but with a reasonString"""
-        sched = self.makeScheduler(
-            reasonString='%(owner)s wants it %(reason)s')
+        sched = yield self.makeScheduler(reasonString='%(owner)s wants it %(reason)s')
+        yield self.master.startService()
 
-        res = yield sched.force('user', builderNames=['a'], branch='a', reason='because',
-                                revision='c', repository='d', project='p')
-        bsid, brids = res
+        res = yield sched.force(
+            'user',
+            builderNames=['a'],
+            branch='a',
+            reason='because',
+            revision='c',
+            repository='d',
+            project='p',
+        )
+        _, brids = res
 
         # only one builder forced, so there should only be one brid
         self.assertEqual(len(brids), 1)
 
-        self.assertEqual(self.addBuildsetCalls, [
-            ('addBuildsetForSourceStampsWithDefaults', {
-                'builderNames': ['a'],
-                'properties': {'owner': ('user', 'Force Build Form'),
-                               'reason': ('because', 'Force Build Form')},
-                'reason': 'user wants it because',
-                'sourcestamps': [{'branch': 'a',
-                                  'codebase': '',
-                                  'project': 'p',
-                                  'repository': 'd',
-                                  'revision': 'c'}],
-                'waited_for': False}),
-        ])
-        (bsid,
-         dict(reason="user wants it because",
-              brids=brids,
-              external_idstring=None,
-              properties=[('owner', ('user', 'Force Build Form')),
-                          ('reason', ('because', 'Force Build Form')),
-                          ('scheduler', ('testsched', 'Scheduler')),
-                          ],
-              sourcestampsetid=100),
-         {'':
-          dict(branch='a', revision='c', repository='d', codebase='',
-               project='p', sourcestampsetid=100)
-          })
+        self.assertEqual(
+            self.addBuildsetCalls,
+            [
+                (
+                    'addBuildsetForSourceStampsWithDefaults',
+                    {
+                        'builderNames': ['a'],
+                        'priority': 0,
+                        'properties': {
+                            'owner': ('user', 'Force Build Form'),
+                            'reason': ('because', 'Force Build Form'),
+                        },
+                        'reason': 'user wants it because',
+                        'sourcestamps': [
+                            {
+                                'branch': 'a',
+                                'codebase': '',
+                                'project': 'p',
+                                'repository': 'd',
+                                'revision': 'c',
+                            }
+                        ],
+                        'waited_for': False,
+                    },
+                ),
+            ],
+        )
 
     @defer.inlineCallbacks
-    def test_force_allBuilders(self):
-        sched = self.makeScheduler()
+    def test_force_allBuilders(self) -> InlineCallbacksType[None]:
+        sched = yield self.makeScheduler()
+        yield self.master.startService()
 
-        res = yield sched.force('user', branch='a', reason='because', revision='c',
-                                repository='d', project='p',
-                                )
-        self.assertEqual(res, (500, {1000: 100, 1001: 101}))
-        self.assertEqual(self.addBuildsetCalls, [
-            ('addBuildsetForSourceStampsWithDefaults', dict(
-                builderNames=['a', 'b'],
-                waited_for=False,
-                properties={
-                    'owner': ('user', 'Force Build Form'),
-                    'reason': ('because', 'Force Build Form'),
-                },
-                reason="A build was forced by 'user': because",
-                sourcestamps=[
-                    {'codebase': '', 'branch': 'a', 'revision': 'c',
-                     'repository': 'd', 'project': 'p'},
-                ])),
-        ])
+        res = yield sched.force(
+            'user',
+            branch='a',
+            reason='because',
+            revision='c',
+            repository='d',
+            project='p',
+        )
+        self.assertEqual(res, (500, {300: 100, 301: 101}))
+        self.assertEqual(
+            self.addBuildsetCalls,
+            [
+                (
+                    'addBuildsetForSourceStampsWithDefaults',
+                    {
+                        "builderNames": ['a', 'b'],
+                        "waited_for": False,
+                        "priority": 0,
+                        "properties": {
+                            'owner': ('user', 'Force Build Form'),
+                            'reason': ('because', 'Force Build Form'),
+                        },
+                        "reason": "A build was forced by 'user': because",
+                        "sourcestamps": [
+                            {
+                                'codebase': '',
+                                'branch': 'a',
+                                'revision': 'c',
+                                'repository': 'd',
+                                'project': 'p',
+                            },
+                        ],
+                    },
+                ),
+            ],
+        )
 
     @defer.inlineCallbacks
-    def test_force_someBuilders(self):
-        sched = self.makeScheduler(builderNames=['a', 'b', 'c'])
+    def test_force_someBuilders(self) -> InlineCallbacksType[None]:
+        sched = yield self.makeScheduler(builderNames=['a', 'b', 'c'])
+        yield self.master.startService()
 
-        res = yield sched.force('user', builderNames=['a', 'b'],
-                                branch='a', reason='because', revision='c',
-                                repository='d', project='p',
-                                )
-        self.assertEqual(res, (500, {1000: 100, 1001: 101}))
-        self.assertEqual(self.addBuildsetCalls, [
-            ('addBuildsetForSourceStampsWithDefaults', dict(
-                builderNames=['a', 'b'],
-                waited_for=False,
-                properties={
-                    'owner': ('user', 'Force Build Form'),
-                    'reason': ('because', 'Force Build Form'),
-                },
-                reason="A build was forced by 'user': because",
-                sourcestamps=[
-                    {'codebase': '', 'branch': 'a', 'revision': 'c',
-                     'repository': 'd', 'project': 'p'},
-                ])),
-        ])
+        res = yield sched.force(
+            'user',
+            builderNames=['a', 'b'],
+            branch='a',
+            reason='because',
+            revision='c',
+            repository='d',
+            project='p',
+        )
+        self.assertEqual(res, (500, {300: 100, 301: 101}))
+        self.assertEqual(
+            self.addBuildsetCalls,
+            [
+                (
+                    'addBuildsetForSourceStampsWithDefaults',
+                    {
+                        "builderNames": ['a', 'b'],
+                        "waited_for": False,
+                        "priority": 0,
+                        "properties": {
+                            'owner': ('user', 'Force Build Form'),
+                            'reason': ('because', 'Force Build Form'),
+                        },
+                        "reason": "A build was forced by 'user': because",
+                        "sourcestamps": [
+                            {
+                                'codebase': '',
+                                'branch': 'a',
+                                'revision': 'c',
+                                'repository': 'd',
+                                'project': 'p',
+                            },
+                        ],
+                    },
+                ),
+            ],
+        )
 
-    def test_bad_codebases(self):
-
+    def test_bad_codebases(self) -> None:
         # codebases must be a list of either string or BaseParameter types
         with self.assertRaisesConfigError(
-                "ForceScheduler 'foo': 'codebases' must be a "
-                "list of strings or CodebaseParameter objects:"):
-            ForceScheduler(name='foo', builderNames=['bar'], codebases=[123],)
+            "ForceScheduler 'foo': 'codebases' must be a "
+            "list of strings or CodebaseParameter objects:"
+        ):
+            ForceScheduler(
+                name='foo',
+                builderNames=['bar'],
+                codebases=[123],
+            )
 
         with self.assertRaisesConfigError(
-                "ForceScheduler 'foo': 'codebases' must be a "
-                "list of strings or CodebaseParameter objects:"):
-            ForceScheduler(name='foo', builderNames=['bar'],
-                           codebases=[IntParameter('foo')])
+            "ForceScheduler 'foo': 'codebases' must be a "
+            "list of strings or CodebaseParameter objects:"
+        ):
+            ForceScheduler(name='foo', builderNames=['bar'], codebases=[IntParameter('foo')])
 
         # codebases cannot be empty
         with self.assertRaisesConfigError(
-                "ForceScheduler 'foo': 'codebases' cannot be "
-                "empty; use [CodebaseParameter(codebase='', hide=True)] if needed:"):
+            "ForceScheduler 'foo': 'codebases' cannot be "
+            "empty; use [CodebaseParameter(codebase='', hide=True)] if needed:"
+        ):
             ForceScheduler(name='foo', builderNames=['bar'], codebases=[])
 
         # codebases cannot be a dictionary
         # dictType on Python 3 is: "<class 'dict'>"
         # dictType on Python 2 is: "<type 'dict'>"
         dictType = str(type({}))
-        errMsg = ("ForceScheduler 'foo': 'codebases' should be a list "
-                  "of strings or CodebaseParameter, "
-                  "not {}".format(dictType))
+        errMsg = (
+            "ForceScheduler 'foo': 'codebases' should be a list "
+            "of strings or CodebaseParameter, "
+            f"not {dictType}"
+        )
         with self.assertRaisesConfigError(errMsg):
-            ForceScheduler(name='foo', builderNames=['bar'],
-                           codebases={'cb': {'branch': 'trunk'}})
+            ForceScheduler(name='foo', builderNames=['bar'], codebases={'cb': {'branch': 'trunk'}})
 
     @defer.inlineCallbacks
-    def test_good_codebases(self):
-        sched = self.makeScheduler(codebases=['foo', CodebaseParameter('bar')])
-        res = yield sched.force('user', builderNames=['a'], reason='because',
-                                foo_branch='a', foo_revision='c', foo_repository='d',
-                                foo_project='p',
-                                bar_branch='a2', bar_revision='c2', bar_repository='d2',
-                                bar_project='p2'
-                                )
+    def test_good_codebases(self) -> InlineCallbacksType[None]:
+        sched = yield self.makeScheduler(codebases=['foo', CodebaseParameter('bar')])
+        yield self.master.startService()
+        yield sched.force(
+            'user',
+            builderNames=['a'],
+            reason='because',
+            foo_branch='a',
+            foo_revision='c',
+            foo_repository='d',
+            foo_project='p',
+            bar_branch='a2',
+            bar_revision='c2',
+            bar_repository='d2',
+            bar_project='p2',
+        )
 
-        bsid, brids = res
         expProperties = {
             'owner': ('user', 'Force Build Form'),
             'reason': ('because', 'Force Build Form'),
         }
-        self.assertEqual(self.addBuildsetCalls, [
-            ('addBuildsetForSourceStampsWithDefaults', dict(
-                builderNames=['a'],
-                waited_for=False,
-                properties=expProperties,
-                reason="A build was forced by 'user': because",
-                sourcestamps=[
-                    {'branch': 'a2', 'project': 'p2', 'repository': 'd2',
-                        'revision': 'c2', 'codebase': 'bar'},
-                    {'branch': 'a', 'project': 'p', 'repository': 'd',
-                        'revision': 'c', 'codebase': 'foo'},
-                ])),
-        ])
+        self.assertEqual(
+            self.addBuildsetCalls,
+            [
+                (
+                    'addBuildsetForSourceStampsWithDefaults',
+                    {
+                        "builderNames": ['a'],
+                        "waited_for": False,
+                        "priority": 0,
+                        "properties": expProperties,
+                        "reason": "A build was forced by 'user': because",
+                        "sourcestamps": [
+                            {
+                                'branch': 'a2',
+                                'project': 'p2',
+                                'repository': 'd2',
+                                'revision': 'c2',
+                                'codebase': 'bar',
+                            },
+                            {
+                                'branch': 'a',
+                                'project': 'p',
+                                'repository': 'd',
+                                'revision': 'c',
+                                'codebase': 'foo',
+                            },
+                        ],
+                    },
+                ),
+            ],
+        )
 
     @defer.inlineCallbacks
-    def test_codebase_with_patch(self):
-        sched = self.makeScheduler(codebases=['foo', CodebaseParameter('bar',
-                                                                       patch=PatchParameter())])
-        res = yield sched.force('user', builderNames=['a'], reason='because',
-                                foo_branch='a', foo_revision='c', foo_repository='d',
-                                foo_project='p',
-                                bar_branch='a2', bar_revision='c2', bar_repository='d2',
-                                bar_project='p2', bar_patch_body="xxx")
-
-        bsid, brids = res
+    def test_codebase_with_patch(self) -> InlineCallbacksType[None]:
+        sched = yield self.makeScheduler(
+            codebases=['foo', CodebaseParameter('bar', patch=PatchParameter())]
+        )
+        yield self.master.startService()
+        yield sched.force(
+            'user',
+            builderNames=['a'],
+            reason='because',
+            foo_branch='a',
+            foo_revision='c',
+            foo_repository='d',
+            foo_project='p',
+            bar_branch='a2',
+            bar_revision='c2',
+            bar_repository='d2',
+            bar_project='p2',
+            bar_patch_body=b"xxx",
+        )
         expProperties = {
             'owner': ('user', 'Force Build Form'),
             'reason': ('because', 'Force Build Form'),
         }
 
-        self.assertEqual(self.addBuildsetCalls, [
-            ('addBuildsetForSourceStampsWithDefaults', dict(
-                builderNames=['a'],
-                waited_for=False,
-                properties=expProperties,
-                reason="A build was forced by 'user': because",
-                sourcestamps=[
-                    {'branch': 'a2', 'project': 'p2', 'repository': 'd2',
-                        'revision': 'c2', 'codebase': 'bar',
-                        'patch_body': 'xxx', 'patch_author': '', 'patch_subdir': '.',
-                        'patch_comment': '', 'patch_level': 1},
-                    {'branch': 'a', 'project': 'p', 'repository': 'd',
-                        'revision': 'c', 'codebase': 'foo'},
-                ])),
-        ])
+        self.assertEqual(
+            self.addBuildsetCalls,
+            [
+                (
+                    'addBuildsetForSourceStampsWithDefaults',
+                    {
+                        "builderNames": ['a'],
+                        "waited_for": False,
+                        "priority": 0,
+                        "properties": expProperties,
+                        "reason": "A build was forced by 'user': because",
+                        "sourcestamps": [
+                            {
+                                'branch': 'a2',
+                                'project': 'p2',
+                                'repository': 'd2',
+                                'revision': 'c2',
+                                'codebase': 'bar',
+                                'patch_body': b'xxx',
+                                'patch_author': '',
+                                'patch_subdir': '.',
+                                'patch_comment': '',
+                                'patch_level': 1,
+                            },
+                            {
+                                'branch': 'a',
+                                'project': 'p',
+                                'repository': 'd',
+                                'revision': 'c',
+                                'codebase': 'foo',
+                            },
+                        ],
+                    },
+                ),
+            ],
+        )
 
-    def formatJsonForTest(self, gotJson):
+    def formatJsonForTest(self, gotJson: str) -> str:
         ret = ""
         linestart = "expectJson='"
         spaces = 7 * 4 + 2
@@ -362,16 +526,18 @@ class TestForceScheduler(scheduler.SchedulerMixin, ConfigErrorsMixin,
     # klass = the parameter class type
     # req = use this request instead of the auto-generated one based on value
     @defer.inlineCallbacks
-    def do_ParameterTest(self,
-                         expect,
-                         klass,
-                         # None=one prop, Exception=exception, dict=many props
-                         expectKind=None,
-                         owner='user',
-                         value=None, req=None,
-                         expectJson=None,
-                         **kwargs):
-
+    def do_ParameterTest(
+        self,
+        expect: str | int | bool | list[str] | dict[str, Any] | type[Exception],
+        klass: type[BaseParameter] | BaseParameter,
+        # None=one prop, Exception=exception, dict=many props
+        expectKind: type[Exception] | type[dict] | None = None,
+        owner: str = 'user',
+        value: str | bytes | bool | list[str] | None = None,
+        req: dict[str, Any] | None = None,
+        expectJson: str | None = None,
+        **kwargs: Any,
+    ) -> InlineCallbacksType[None]:
         name = kwargs.setdefault('name', 'p1')
 
         # construct one if needed
@@ -388,17 +554,18 @@ class TestForceScheduler(scheduler.SchedulerMixin, ConfigErrorsMixin,
             expectSpec = json.loads(expectJson)
             if gotSpec != expectSpec:
                 try:
-                    import xerox  # pylint: disable=import-outside-toplevel
+                    import xerox  # noqa: PLC0415
+
                     formatted = self.formatJsonForTest(gotJson)
-                    print(
-                        "You may update the test with (copied to clipboard):\n" + formatted)
+                    print("You may update the test with (copied to clipboard):\n" + formatted)
                     xerox.copy(formatted)
                     input()
                 except ImportError:
                     print("Note: for quick fix, pip install xerox")
             self.assertEqual(gotSpec, expectSpec)
 
-        sched = self.makeScheduler(properties=[prop])
+        sched = yield self.makeScheduler(properties=[prop])
+        yield self.master.startService()
 
         if not req:
             req = {name: value, 'reason': 'because'}
@@ -408,7 +575,7 @@ class TestForceScheduler(scheduler.SchedulerMixin, ConfigErrorsMixin,
             if expectKind is not Exception:
                 # an exception is not expected
                 raise
-            if not isinstance(e, expect):
+            if not isinstance(e, expect):  # type: ignore[arg-type]
                 # the exception is the wrong kind
                 raise
             return None  # success
@@ -419,343 +586,405 @@ class TestForceScheduler(scheduler.SchedulerMixin, ConfigErrorsMixin,
         }
 
         if expectKind is None:
-            expect_props[name] = (expect, 'Force Build Form')
+            expect_props[name] = (expect, 'Force Build Form')  # type: ignore[assignment]
         elif expectKind is dict:
-            for k, v in expect.items():
+            for k, v in expect.items():  # type: ignore[union-attr]
                 expect_props[k] = (v, 'Force Build Form')
         else:
             self.fail("expectKind is wrong type!")
 
         # only forced on 'a'
-        self.assertEqual((bsid, brids), (500, {1000: 100}))
-        self.assertEqual(self.addBuildsetCalls, [
-            ('addBuildsetForSourceStampsWithDefaults', dict(
-                builderNames=['a'],
-                waited_for=False,
-                properties=expect_props,
-                reason="A build was forced by 'user': because",
-                sourcestamps=[
-                    {'branch': '', 'project': '', 'repository': '',
-                     'revision': '', 'codebase': ''},
-                ])),
-        ])
+        self.assertEqual((bsid, brids), (500, {300: 100}))
+        self.assertEqual(
+            self.addBuildsetCalls,
+            [
+                (
+                    'addBuildsetForSourceStampsWithDefaults',
+                    {
+                        "builderNames": ['a'],
+                        "waited_for": False,
+                        "priority": 0,
+                        "properties": expect_props,
+                        "reason": "A build was forced by 'user': because",
+                        "sourcestamps": [
+                            {
+                                'branch': '',
+                                'project': '',
+                                'repository': '',
+                                'revision': '',
+                                'codebase': '',
+                            },
+                        ],
+                    },
+                ),
+            ],
+        )
         return None
 
-    def test_StringParameter(self):
-        self.do_ParameterTest(value="testedvalue", expect="testedvalue",
-                              klass=StringParameter,
-                              expectJson='{"name": "p1", "fullName": "p1", "label": "p1", '
-                              '"tablabel": "p1", "type": "text", "default": "", "required": false, '
-                              '"multiple": false, "regex": null, "hide": false, "maxsize": null, '
-                              '"size": 10, "autopopulate": null}')
+    def test_StringParameter(self) -> defer.Deferred[None]:
+        return self.do_ParameterTest(
+            value="testedvalue",
+            expect="testedvalue",
+            klass=StringParameter,
+            expectJson='{"name": "p1", "fullName": "p1", "label": "p1", '
+            '"tablabel": "p1", "type": "text", "default": "", "required": false, '
+            '"multiple": false, "regex": null, "hide": false, "maxsize": null, '
+            '"size": 10, "autopopulate": null, "tooltip": ""}',
+        )
 
-    def test_StringParameter_Required(self):
-        self.do_ParameterTest(value=" ", expect=CollectedValidationError,
-                              expectKind=Exception,
-                              klass=StringParameter, required=True)
+    def test_StringParameter_Required(self) -> defer.Deferred[None]:
+        return self.do_ParameterTest(
+            value=" ",
+            expect=CollectedValidationError,
+            expectKind=Exception,
+            klass=StringParameter,
+            required=True,
+        )
 
-    def test_StringParameter_maxsize(self):
-        self.do_ParameterTest(value="xx" * 20, expect=CollectedValidationError,
-                              expectKind=Exception,
-                              klass=StringParameter, maxsize=10)
+    def test_StringParameter_maxsize(self) -> defer.Deferred[None]:
+        return self.do_ParameterTest(
+            value="xx" * 20,
+            expect=CollectedValidationError,
+            expectKind=Exception,
+            klass=StringParameter,
+            maxsize=10,
+        )
 
-    def test_FileParameter_maxsize(self):
-        self.do_ParameterTest(value="xx" * 20, expect=CollectedValidationError,
-                              expectKind=Exception,
-                              klass=FileParameter, maxsize=10)
+    def test_FileParameter_maxsize(self) -> defer.Deferred[None]:
+        return self.do_ParameterTest(
+            value="xx" * 20,
+            expect=CollectedValidationError,
+            expectKind=Exception,
+            klass=FileParameter,
+            maxsize=10,
+        )
 
-    def test_FileParameter(self):
-        self.do_ParameterTest(value="xx", expect="xx",
-                              klass=FileParameter,
-                              expectJson='{"name": "p1", "fullName": "p1", "label": "p1", '
-                              '"tablabel": "p1", "type": "file", "default": "", "required": false, '
-                              '"multiple": false, "regex": null, "hide": false, '
-                              '"maxsize": 10485760, "autopopulate": null}')
+    def test_FileParameter(self) -> defer.Deferred[None]:
+        return self.do_ParameterTest(
+            value="xx",
+            expect="xx",
+            klass=FileParameter,
+            expectJson='{"name": "p1", "fullName": "p1", "label": "p1", '
+            '"tablabel": "p1", "type": "file", "default": "", "required": false, '
+            '"multiple": false, "regex": null, "hide": false, '
+            '"maxsize": 10485760, "autopopulate": null, "tooltip": ""}',
+        )
 
-    def test_PatchParameter(self):
+    def test_PatchParameter(self) -> defer.Deferred[None]:
         expect_json = (
             '{"name": "p1", "fullName": "p1", "label": "p1", "autopopulate": null, '
             '"tablabel": "p1", "type": "nested", "default": "", "required": false, '
             '"multiple": false, "regex": null, "hide": false, "maxsize": null, '
-            '"layout": "vertical", "columns": 1, "fields": [{"name": "body", '
+            '"layout": "vertical", "columns": 1, "tooltip": "", "fields": [{"name": "body", '
             '"fullName": "p1_body", "label": "body", "tablabel": "body", "autopopulate": null, '
             '"type": "file", "default": "", "required": false, "multiple": false, '
-            '"regex": null, "hide": false, "maxsize": 10485760}, {"name": "level", '
+            '"regex": null, "hide": false, "maxsize": 10485760, "tooltip": ""}, {"name": "level", '
             '"fullName": "p1_level", "label": "level", "tablabel": "level", '
             '"type": "int", "default": 1, "required": false, "multiple": false, '
-            '"regex": null, "hide": false, "maxsize": null, "size": 10, "autopopulate": null}, '
+            '"regex": null, "hide": false, "maxsize": null, "size": 10, "autopopulate": null, "tooltip": ""}, '
             '{"name": "author", "fullName": "p1_author", "label": "author", '
             '"tablabel": "author", "type": "text", "default": "", "autopopulate": null, '
             '"required": false, "multiple": false, "regex": null, "hide": false, '
-            '"maxsize": null, "size": 10}, {"name": "comment", "autopopulate": null, '
+            '"maxsize": null, "size": 10, "tooltip": ""}, {"name": "comment", "autopopulate": null, '
             '"fullName": "p1_comment", "label": "comment", "tablabel": "comment", '
             '"type": "text", "default": "", "required": false, "multiple": false, '
-            '"regex": null, "hide": false, "maxsize": null, "size": 10}, '
+            '"regex": null, "hide": false, "maxsize": null, "size": 10, "tooltip": ""}, '
             '{"name": "subdir", "fullName": "p1_subdir", "label": "subdir", '
             '"tablabel": "subdir", "type": "text", "default": ".", "autopopulate": null, '
             '"required": false, "multiple": false, "regex": null, "hide": false, '
-            '"maxsize": null, "size": 10}]}'
+            '"maxsize": null, "size": 10, "tooltip": ""}]}'
         )
 
-        self.do_ParameterTest(req=dict(p1_author='me', reason="because"), expect={
-                                   'author': 'me',
-                                   'body': '',
-                                   'comment': '',
-                                   'level': 1,
-                                   'subdir': '.'},
-                              klass=PatchParameter,
-                              expectJson=expect_json)
+        return self.do_ParameterTest(
+            req={"p1_author": 'me', "reason": 'because'},
+            expect={'author': 'me', 'body': '', 'comment': '', 'level': 1, 'subdir': '.'},
+            klass=PatchParameter,
+            expectJson=expect_json,
+        )
 
-    def test_IntParameter(self):
-        self.do_ParameterTest(value="123", expect=123, klass=IntParameter,
-                              expectJson='{"name": "p1", "fullName": "p1", "label": "p1", '
-                              '"tablabel": "p1", "type": "int", "default": 0, "required": false, '
-                              '"multiple": false, "regex": null, "hide": false, "maxsize": null, '
-                              '"size": 10, "autopopulate": null}')
+    def test_IntParameter(self) -> defer.Deferred[None]:
+        return self.do_ParameterTest(
+            value="123",
+            expect=123,
+            klass=IntParameter,
+            expectJson='{"name": "p1", "fullName": "p1", "label": "p1", '
+            '"tablabel": "p1", "type": "int", "default": 0, "required": false, '
+            '"multiple": false, "regex": null, "hide": false, "maxsize": null, '
+            '"size": 10, "autopopulate": null, "tooltip": ""}',
+        )
 
-    def test_FixedParameter(self):
-        self.do_ParameterTest(value="123", expect="321", klass=FixedParameter,
-                              default="321",
-                              expectJson='{"name": "p1", "fullName": "p1", "label": "p1", '
-                              '"tablabel": "p1", "type": "fixed", "default": "321", '
-                              '"required": false, "multiple": false, "regex": null, "hide": true, '
-                              '"maxsize": null, "autopopulate": null}')
+    def test_FixedParameter(self) -> defer.Deferred[None]:
+        return self.do_ParameterTest(
+            value="123",
+            expect="321",
+            klass=FixedParameter,
+            default="321",
+            expectJson='{"name": "p1", "fullName": "p1", "label": "p1", '
+            '"tablabel": "p1", "type": "fixed", "default": "321", '
+            '"required": false, "multiple": false, "regex": null, "hide": true, '
+            '"maxsize": null, "autopopulate": null, "tooltip": ""}',
+        )
 
-    def test_BooleanParameter_True(self):
-        req = dict(p1=True, reason='because')
-        self.do_ParameterTest(value="123", expect=True, klass=BooleanParameter,
-                              req=req,
-                              expectJson='{"name": "p1", "fullName": "p1", "label": "p1", '
-                              '"tablabel": "p1", "type": "bool", "default": "", "required": false, '
-                              '"multiple": false, "regex": null, "hide": false, '
-                              '"maxsize": null, "autopopulate": null}')
+    def test_BooleanParameter_True(self) -> defer.Deferred[None]:
+        req = {"p1": True, "reason": 'because'}
+        return self.do_ParameterTest(
+            value="123",
+            expect=True,
+            klass=BooleanParameter,
+            req=req,
+            expectJson='{"name": "p1", "fullName": "p1", "label": "p1", '
+            '"tablabel": "p1", "type": "bool", "default": "", "required": false, '
+            '"multiple": false, "regex": null, "hide": false, '
+            '"maxsize": null, "autopopulate": null, "tooltip": ""}',
+        )
 
-    def test_BooleanParameter_False(self):
-        req = dict(p2=True, reason='because')
-        self.do_ParameterTest(value="123", expect=False,
-                              klass=BooleanParameter, req=req)
+    def test_BooleanParameter_False(self) -> defer.Deferred[None]:
+        req = {"p2": True, "reason": 'because'}
+        return self.do_ParameterTest(value="123", expect=False, klass=BooleanParameter, req=req)
 
-    def test_UserNameParameter(self):
+    def test_UserNameParameter(self) -> defer.Deferred[None]:
         email = "test <test@buildbot.net>"
         expect_json = (
             '{"name": "username", "fullName": "username", '
             '"label": "Your name:", "tablabel": "Your name:", "type": "username", '
             '"default": "", "required": false, "multiple": false, "regex": null, '
             '"hide": false, "maxsize": null, "size": 30, '
-            '"need_email": true, "autopopulate": null}'
+            '"need_email": true, "autopopulate": null, "tooltip": ""}'
         )
-        self.do_ParameterTest(value=email, expect=email,
-                              klass=UserNameParameter(),
-                              name="username", label="Your name:",
-                              expectJson=expect_json)
+        return self.do_ParameterTest(
+            value=email,
+            expect=email,
+            klass=UserNameParameter(),
+            name="username",
+            label="Your name:",
+            expectJson=expect_json,
+        )
 
-    def test_UserNameParameterIsValidMail(self):
+    def test_UserNameParameterIsValidMail(self) -> defer.Deferred[None]:
         email = "test@buildbot.net"
         expect_json = (
             '{"name": "username", "fullName": "username", '
             '"label": "Your name:", "tablabel": "Your name:", "type": "username", '
             '"default": "", "required": false, "multiple": false, "regex": null, '
             '"hide": false, "maxsize": null, "size": 30, '
-            '"need_email": true, "autopopulate": null}'
+            '"need_email": true, "autopopulate": null, "tooltip": ""}'
         )
-        self.do_ParameterTest(value=email, expect=email,
-                              klass=UserNameParameter(),
-                              name="username", label="Your name:",
-                              expectJson=expect_json)
+        return self.do_ParameterTest(
+            value=email,
+            expect=email,
+            klass=UserNameParameter(),
+            name="username",
+            label="Your name:",
+            expectJson=expect_json,
+        )
 
-    def test_UserNameParameterIsValidMailBis(self):
+    def test_UserNameParameterIsValidMailBis(self) -> defer.Deferred[None]:
         email = "<test@buildbot.net>"
         expect_json = (
             '{"name": "username", "fullName": "username", '
             '"label": "Your name:", "tablabel": "Your name:", "type": "username", '
             '"default": "", "required": false, "multiple": false, "regex": null, '
             '"hide": false, "maxsize": null, "size": 30, '
-            '"need_email": true, "autopopulate": null}'
+            '"need_email": true, "autopopulate": null, "tooltip": ""}'
         )
-        self.do_ParameterTest(value=email, expect=email,
-                              klass=UserNameParameter(),
-                              name="username", label="Your name:",
-                              expectJson=expect_json)
+        return self.do_ParameterTest(
+            value=email,
+            expect=email,
+            klass=UserNameParameter(),
+            name="username",
+            label="Your name:",
+            expectJson=expect_json,
+        )
 
-    def test_ChoiceParameter(self):
-        self.do_ParameterTest(value='t1', expect='t1',
-                              klass=ChoiceStringParameter, choices=[
-                                  't1', 't2'],
-                              expectJson='{"name": "p1", "fullName": "p1", "label": "p1", '
-                              '"tablabel": "p1", "type": "list", "default": "", "required": false, '
-                              '"multiple": false, "regex": null, "hide": false, "maxsize": null, '
-                              '"choices": ["t1", "t2"], "strict": true, "autopopulate": null}')
+    def test_ChoiceParameter(self) -> defer.Deferred[None]:
+        return self.do_ParameterTest(
+            value='t1',
+            expect='t1',
+            klass=ChoiceStringParameter,
+            choices=['t1', 't2'],
+            expectJson='{"name": "p1", "fullName": "p1", "label": "p1", '
+            '"tablabel": "p1", "type": "list", "default": "", "required": false, '
+            '"multiple": false, "regex": null, "hide": false, "maxsize": null, '
+            '"choices": ["t1", "t2"], "strict": true, "autopopulate": null, "tooltip": ""}',
+        )
 
-    def test_ChoiceParameterError(self):
-        self.do_ParameterTest(value='t3',
-                              expect=CollectedValidationError,
-                              expectKind=Exception,
-                              klass=ChoiceStringParameter, choices=[
-                                  't1', 't2'],
-                              debug=False)
+    def test_ChoiceParameterError(self) -> defer.Deferred[None]:
+        return self.do_ParameterTest(
+            value='t3',
+            expect=CollectedValidationError,
+            expectKind=Exception,
+            klass=ChoiceStringParameter,
+            choices=['t1', 't2'],
+            debug=False,
+        )
 
-    def test_ChoiceParameterError_notStrict(self):
-        self.do_ParameterTest(value='t1', expect='t1',
-                              strict=False,
-                              klass=ChoiceStringParameter, choices=['t1', 't2'])
+    def test_ChoiceParameterError_notStrict(self) -> defer.Deferred[None]:
+        return self.do_ParameterTest(
+            value='t1', expect='t1', strict=False, klass=ChoiceStringParameter, choices=['t1', 't2']
+        )
 
-    def test_ChoiceParameterMultiple(self):
-        self.do_ParameterTest(value=['t1', 't2'], expect=['t1', 't2'],
-                              klass=ChoiceStringParameter, choices=['t1', 't2'], multiple=True,
-                              expectJson='{"name": "p1", "fullName": "p1", "label": "p1", '
-                              '"tablabel": "p1", "type": "list", "default": "", "required": false, '
-                              '"multiple": true, "regex": null, "hide": false, "maxsize": null, '
-                              '"choices": ["t1", "t2"], "strict": true, "autopopulate": null}')
+    def test_ChoiceParameterMultiple(self) -> defer.Deferred[None]:
+        return self.do_ParameterTest(
+            value=['t1', 't2'],
+            expect=['t1', 't2'],
+            klass=ChoiceStringParameter,
+            choices=['t1', 't2'],
+            multiple=True,
+            expectJson='{"name": "p1", "fullName": "p1", "label": "p1", '
+            '"tablabel": "p1", "type": "list", "default": "", "required": false, '
+            '"multiple": true, "regex": null, "hide": false, "maxsize": null, '
+            '"choices": ["t1", "t2"], "strict": true, "autopopulate": null, "tooltip": ""}',
+        )
 
-    def test_ChoiceParameterMultipleError(self):
-        self.do_ParameterTest(value=['t1', 't3'],
-                              expect=CollectedValidationError,
-                              expectKind=Exception,
-                              klass=ChoiceStringParameter, choices=[
-                                  't1', 't2'],
-                              multiple=True, debug=False)
+    def test_ChoiceParameterMultipleError(self) -> defer.Deferred[None]:
+        return self.do_ParameterTest(
+            value=['t1', 't3'],
+            expect=CollectedValidationError,
+            expectKind=Exception,
+            klass=ChoiceStringParameter,
+            choices=['t1', 't2'],
+            multiple=True,
+            debug=False,
+        )
 
-    def test_NestedParameter(self):
-        fields = [
-            IntParameter(name="foo")
-        ]
+    def test_NestedParameter(self) -> defer.Deferred[None]:
+        fields = [IntParameter(name="foo")]
         expect_json = (
             '{"name": "p1", "fullName": "p1", "label": "p1", "autopopulate": null, '
             '"tablabel": "p1", "type": "nested", "default": "", "required": false, '
             '"multiple": false, "regex": null, "hide": false, "maxsize": null, '
-            '"layout": "vertical", "columns": 1, "fields": [{"name": "foo", '
+            '"layout": "vertical", "columns": 1, "tooltip": "", "fields": [{"name": "foo", '
             '"fullName": "p1_foo", "label": "foo", "tablabel": "foo", "autopopulate": null, '
             '"type": "int", "default": 0, "required": false, "multiple": false, '
-            '"regex": null, "hide": false, "maxsize": null, "size": 10}]}'
+            '"regex": null, "hide": false, "maxsize": null, "size": 10, "tooltip": ""}]}'
         )
-        self.do_ParameterTest(req=dict(p1_foo='123', reason="because"),
-                              expect=dict(foo=123),
-                              klass=NestedParameter, fields=fields,
-                              expectJson=expect_json)
+        return self.do_ParameterTest(
+            req={"p1_foo": '123', "reason": 'because'},
+            expect={"foo": 123},
+            klass=NestedParameter,
+            fields=fields,
+            expectJson=expect_json,
+        )
 
-    def test_NestedNestedParameter(self):
+    def test_NestedNestedParameter(self) -> defer.Deferred[None]:
         fields = [
-            NestedParameter(name="inner", fields=[
-                StringParameter(name='str'),
-                AnyPropertyParameter(name='any')
-            ]),
-            IntParameter(name="foo")
+            NestedParameter(
+                name="inner", fields=[StringParameter(name='str'), AnyPropertyParameter(name='any')]
+            ),
+            IntParameter(name="foo"),
         ]
-        self.do_ParameterTest(req=dict(p1_foo='123',
-                                       p1_inner_str="bar",
-                                       p1_inner_any_name="hello",
-                                       p1_inner_any_value="world",
-                                       reason="because"),
-                              expect=dict(
-                                  foo=123, inner=dict(str="bar", hello="world")),
-                              klass=NestedParameter, fields=fields)
+        return self.do_ParameterTest(
+            req={
+                "p1_foo": '123',
+                "p1_inner_str": "bar",
+                "p1_inner_any_name": "hello",
+                "p1_inner_any_value": "world",
+                "reason": "because",
+            },
+            expect={"foo": 123, "inner": {"str": 'bar', "hello": 'world'}},
+            klass=NestedParameter,
+            fields=fields,
+        )
 
-    def test_NestedParameter_nullname(self):
+    def test_NestedParameter_nullname(self) -> defer.Deferred[None]:
         # same as above except "p1" and "any" are skipped
         fields = [
-            NestedParameter(name="inner", fields=[
-                StringParameter(name='str'),
-                AnyPropertyParameter(name='')
-            ]),
+            NestedParameter(
+                name="inner", fields=[StringParameter(name='str'), AnyPropertyParameter(name='')]
+            ),
             IntParameter(name="foo"),
-            NestedParameter(name='bar', fields=[
-                NestedParameter(
-                    name='', fields=[AnyPropertyParameter(name='a')]),
-                NestedParameter(
-                    name='', fields=[AnyPropertyParameter(name='b')])
-            ])
+            NestedParameter(
+                name='bar',
+                fields=[
+                    NestedParameter(name='', fields=[AnyPropertyParameter(name='a')]),
+                    NestedParameter(name='', fields=[AnyPropertyParameter(name='b')]),
+                ],
+            ),
         ]
-        self.do_ParameterTest(req=dict(foo='123',
-                                       inner_str="bar",
-                                       inner_name="hello",
-                                       inner_value="world",
-                                       reason="because",
-                                       bar_a_name="a",
-                                       bar_a_value="7",
-                                       bar_b_name="b",
-                                       bar_b_value="8"),
-                              expect=dict(foo=123,
-                                          inner=dict(str="bar", hello="world"),
-                                          bar={'a': '7', 'b': '8'}),
-                              expectKind=dict,
-                              klass=NestedParameter, fields=fields, name='')
+        return self.do_ParameterTest(
+            req={
+                "foo": '123',
+                "inner_str": "bar",
+                "inner_name": "hello",
+                "inner_value": "world",
+                "reason": "because",
+                "bar_a_name": "a",
+                "bar_a_value": "7",
+                "bar_b_name": "b",
+                "bar_b_value": "8",
+            },
+            expect={
+                "foo": 123,
+                "inner": {"str": 'bar', "hello": 'world'},
+                "bar": {'a': '7', 'b': '8'},
+            },
+            expectKind=dict,
+            klass=NestedParameter,
+            fields=fields,
+            name='',
+        )
 
-    def test_bad_reason(self):
+    def test_bad_reason(self) -> None:
         with self.assertRaisesConfigError(
-                "ForceScheduler 'testsched': reason must be a StringParameter"):
-            ForceScheduler(name='testsched', builderNames=[],
-                           codebases=['bar'], reason="foo")
+            "ForceScheduler 'testsched': reason must be a StringParameter"
+        ):
+            ForceScheduler(name='testsched', builderNames=[], codebases=['bar'], reason="foo")
 
-    def test_bad_username(self):
+    def test_bad_username(self) -> None:
         with self.assertRaisesConfigError(
-                "ForceScheduler 'testsched': username must be a StringParameter"):
-            ForceScheduler(name='testsched', builderNames=[],
-                           codebases=['bar'], username="foo")
+            "ForceScheduler 'testsched': username must be a StringParameter"
+        ):
+            ForceScheduler(name='testsched', builderNames=[], codebases=['bar'], username="foo")
 
-    def test_notstring_name(self):
-        with self.assertRaisesConfigError(
-                "ForceScheduler name must be a unicode string:"):
-            ForceScheduler(name=1234, builderNames=[], codebases=['bar'],
-                           username="foo")
-
-    def test_notidentifier_name(self):
+    def test_notidentifier_name(self) -> None:
         # FIXME: this test should be removed eventually when bug 3460 gets a
         # real fix
         with self.assertRaisesConfigError(
-                "ForceScheduler name must be an identifier: 'my scheduler'"):
-            ForceScheduler(name='my scheduler', builderNames=[],
-                           codebases=['bar'], username="foo")
+            "ForceScheduler name must be an identifier: 'my scheduler'"
+        ):
+            ForceScheduler(name='my scheduler', builderNames=[], codebases=['bar'], username="foo")
 
-    def test_emptystring_name(self):
+    def test_emptystring_name(self) -> None:
+        with self.assertRaisesConfigError("ForceScheduler name must not be empty:"):
+            ForceScheduler(name='', builderNames=[], codebases=['bar'], username="foo")
+
+    def test_integer_properties(self) -> None:
         with self.assertRaisesConfigError(
-                "ForceScheduler name must not be empty:"):
-            ForceScheduler(name='', builderNames=[], codebases=['bar'],
-                           username="foo")
+            "ForceScheduler 'testsched': properties must be a list of BaseParameters:"
+        ):
+            ForceScheduler(
+                name='testsched',
+                builderNames=[],
+                properties=1234,
+            )
 
-    def test_integer_builderNames(self):
+    def test_listofints_properties(self) -> None:
         with self.assertRaisesConfigError(
-                "ForceScheduler 'testsched': builderNames must be a list of strings:"):
-            ForceScheduler(name='testsched', builderNames=1234,
-                           codebases=['bar'], username="foo")
+            "ForceScheduler 'testsched': properties must be a list of BaseParameters:"
+        ):
+            ForceScheduler(
+                name='testsched',
+                builderNames=[],
+                properties=[1234, 2345],
+            )
 
-    def test_listofints_builderNames(self):
+    def test_listofmixed_properties(self) -> None:
         with self.assertRaisesConfigError(
-                "ForceScheduler 'testsched': builderNames must be a list of strings:"):
-            ForceScheduler(name='testsched', builderNames=[1234],
-                           codebases=['bar'], username="foo")
+            "ForceScheduler 'testsched': properties must be a list of BaseParameters:"
+        ):
+            ForceScheduler(
+                name='testsched',
+                builderNames=[],
+                properties=[
+                    BaseParameter(
+                        name="test",
+                    ),
+                    4567,
+                ],
+            )
 
-    def test_listofunicode_builderNames(self):
-        ForceScheduler(name='testsched', builderNames=['a', 'b'])
-
-    def test_listofmixed_builderNames(self):
+    def test_novalue_to_parameter(self) -> None:
         with self.assertRaisesConfigError(
-                "ForceScheduler 'testsched': builderNames must be a list of strings:"):
-            ForceScheduler(name='testsched', builderNames=['test', 1234],
-                           codebases=['bar'], username="foo")
-
-    def test_integer_properties(self):
-        with self.assertRaisesConfigError(
-                "ForceScheduler 'testsched': properties must be a list of BaseParameters:"):
-            ForceScheduler(name='testsched', builderNames=[],
-                           codebases=['bar'], username="foo",
-                           properties=1234)
-
-    def test_listofints_properties(self):
-        with self.assertRaisesConfigError(
-                "ForceScheduler 'testsched': properties must be a list of BaseParameters:"):
-            ForceScheduler(name='testsched', builderNames=[],
-                           codebases=['bar'], username="foo",
-                           properties=[1234, 2345])
-
-    def test_listofmixed_properties(self):
-        with self.assertRaisesConfigError(
-                "ForceScheduler 'testsched': properties must be a list of BaseParameters:"):
-            ForceScheduler(name='testsched', builderNames=[],
-                           codebases=['bar'], username="foo",
-                           properties=[BaseParameter(name="test",),
-                           4567])
-
-    def test_novalue_to_parameter(self):
-        with self.assertRaisesConfigError(
-                "Use default='1234' instead of value=... to give a default Parameter value"):
+            "Use default='1234' instead of value=... to give a default Parameter value"
+        ):
             BaseParameter(name="test", value="1234")

@@ -13,16 +13,17 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
 import os
 import sys
 import time
+from typing import TYPE_CHECKING
+from typing import Any
+from unittest import mock
 
-import mock
-
-import twisted
 from twisted.internet import defer
 from twisted.internet.utils import getProcessOutputAndValue
-from twisted.python import versions
 from twisted.trial import unittest
 
 from buildbot.scripts import start
@@ -30,9 +31,12 @@ from buildbot.test.util import dirs
 from buildbot.test.util import misc
 from buildbot.test.util.decorators import skipUnlessPlatformIs
 
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
 
-def mkconfig(**kwargs):
-    config = {
+
+def mkconfig(**kwargs: Any) -> dict[str, Any]:
+    config: dict[str, Any] = {
         'quiet': False,
         'basedir': os.path.abspath('basedir'),
         'nodaemon': False,
@@ -58,52 +62,64 @@ app.setServiceParent(application)
 
 
 class TestStart(misc.StdoutAssertionsMixin, dirs.DirsMixin, unittest.TestCase):
+    def setUp(self) -> None:
+        # On slower machines with high CPU oversubscription this test may take longer to run than
+        # the default timeout.
+        self.timeout = 20
 
-    def setUp(self):
         self.setUpDirs('basedir')
-        with open(os.path.join('basedir', 'buildbot.tac'), 'wt') as f:
+        with open(os.path.join('basedir', 'buildbot.tac'), "w", encoding='utf-8') as f:
             f.write(fake_master_tac)
         self.setUpStdoutAssertions()
 
-    def tearDown(self):
-        self.tearDownDirs()
-
     # tests
 
-    def test_start_not_basedir(self):
+    def test_start_not_basedir(self) -> None:
         self.assertEqual(start.start(mkconfig(basedir='doesntexist')), 1)
         self.assertInStdout('invalid buildmaster directory')
 
-    def runStart(self, **config):
+    def runStart(self, **config: Any) -> defer.Deferred[tuple[bytes, bytes, int]]:
         args = [
             '-c',
             'from buildbot.scripts.start import start; import sys; '
-            'sys.exit(start(%r))' % (
-                mkconfig(**config),),
+            f'sys.exit(start({mkconfig(**config)!r}))',
         ]
         env = os.environ.copy()
         env['PYTHONPATH'] = os.pathsep.join(sys.path)
         return getProcessOutputAndValue(sys.executable, args=args, env=env)
 
+    def assert_stderr_ok(self, err: bytes) -> None:
+        lines = err.split(b'\n')
+        good_warning_parts = [b'32-bit Python on a 64-bit', b'cryptography.hazmat.bindings']
+        for line in lines:
+            is_line_good = False
+            if line == b'':
+                is_line_good = True
+            else:
+                for part in good_warning_parts:
+                    if part in line:
+                        is_line_good = True
+                        break
+            if not is_line_good:
+                self.assertEqual(err, b'')  # not valid warning
+
     @defer.inlineCallbacks
-    def test_start_no_daemon(self):
+    def test_start_no_daemon(self) -> InlineCallbacksType[None]:
         (_, err, rc) = yield self.runStart(nodaemon=True)
-
-        # on python 3.5, cryptography loudly complains to upgrade
-        if sys.version_info[:2] != (3, 5):
-            self.assertEqual((err, rc), (b'', 0))
+        self.assert_stderr_ok(err)
+        self.assertEqual(rc, 0)
 
     @defer.inlineCallbacks
-    def test_start_quiet(self):
+    def test_start_quiet(self) -> InlineCallbacksType[None]:
         res = yield self.runStart(quiet=True)
 
-        # on python 3.5, cryptography loudly complains to upgrade
-        if sys.version_info[:2] != (3, 5):
-            self.assertEqual(res, (b'', b'', 0))
+        self.assertEqual(res[0], b'')
+        self.assert_stderr_ok(res[1])
+        self.assertEqual(res[2], 0)
 
     @skipUnlessPlatformIs('posix')
     @defer.inlineCallbacks
-    def test_start_timeout_nonnumber(self):
+    def test_start_timeout_nonnumber(self) -> InlineCallbacksType[None]:
         (out, err, rc) = yield self.runStart(start_timeout='a')
 
         self.assertEqual((rc, err), (1, b''))
@@ -111,7 +127,7 @@ class TestStart(misc.StdoutAssertionsMixin, dirs.DirsMixin, unittest.TestCase):
 
     @skipUnlessPlatformIs('posix')
     @defer.inlineCallbacks
-    def test_start_timeout_number_string(self):
+    def test_start_timeout_number_string(self) -> InlineCallbacksType[None]:
         # integer values from command-line options come in as strings
         res = yield self.runStart(start_timeout='10')
 
@@ -119,7 +135,7 @@ class TestStart(misc.StdoutAssertionsMixin, dirs.DirsMixin, unittest.TestCase):
 
     @skipUnlessPlatformIs('posix')
     @defer.inlineCallbacks
-    def test_start(self):
+    def test_start(self) -> InlineCallbacksType[None]:
         try:
             (out, err, rc) = yield self.runStart()
 
@@ -131,9 +147,6 @@ class TestStart(misc.StdoutAssertionsMixin, dirs.DirsMixin, unittest.TestCase):
             pidfile = os.path.join('basedir', 'twistd.pid')
             while os.path.exists(pidfile):
                 time.sleep(0.01)
-
-    if twisted.version <= versions.Version('twisted', 9, 0, 0):
-        test_start.skip = test_start_quiet.skip = "Skipping due to suprious PotentialZombieWarning."
 
     # the remainder of this script does obscene things:
     #  - forks

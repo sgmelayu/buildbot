@@ -13,18 +13,23 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 from buildbot.db import base
+from buildbot.util.sautils import hash_columns
+
+if TYPE_CHECKING:
+    from twisted.internet import defer
 
 
 class TagsConnectorComponent(base.DBConnectorComponent):
-
-    def findTagId(self, name):
+    def findTagId(self, name: str) -> defer.Deferred[int]:
         tbl = self.db.model.tags
+        name_hash = hash_columns(name)
         return self.findSomethingId(
             tbl=tbl,
-            whereclause=(tbl.c.name == name),
-            insert_values=dict(
-                name=name,
-                name_hash=self.hashColumns(name),
-            ))
+            whereclause=(tbl.c.name_hash == name_hash),
+            insert_values={"name": name, "name_hash": name_hash},
+        )

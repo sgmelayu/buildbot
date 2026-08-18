@@ -14,6 +14,10 @@
 # Copyright Buildbot Team Members
 
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from twisted.internet import defer
 
 from buildbot.process.results import FAILURE
@@ -22,8 +26,11 @@ from buildbot.steps.source.base import Source
 from buildbot.test.util.decorators import skipUnlessPlatformIs
 from buildbot.test.util.integration import RunMasterBase
 
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
+
 # a simple patch which adds a Makefile
-PATCH = """diff --git a/Makefile b/Makefile
+PATCH = b"""diff --git a/Makefile b/Makefile
 new file mode 100644
 index 0000000..8a5cf80
 --- /dev/null
@@ -38,7 +45,9 @@ class MySource(Source):
     """A source class which only applies the patch"""
 
     @defer.inlineCallbacks
-    def run_vc(self, branch, revision, patch):
+    def run_vc(
+        self, branch: str | None, revision: str | None, patch: tuple[int, bytes, str] | None
+    ) -> InlineCallbacksType[int]:
         self.stdio_log = yield self.addLogForRemoteCommands("stdio")
         if patch:
             yield self.patch(patch)
@@ -46,48 +55,48 @@ class MySource(Source):
 
 
 class ShellMaster(RunMasterBase):
+    @defer.inlineCallbacks
+    def setup_config(self) -> InlineCallbacksType[None]:
+        c = {}
+        from buildbot.config import BuilderConfig  # noqa: PLC0415
+        from buildbot.plugins import schedulers  # noqa: PLC0415
+        from buildbot.plugins import steps  # noqa: PLC0415
+        from buildbot.plugins import util  # noqa: PLC0415
+        from buildbot.process.factory import BuildFactory  # noqa: PLC0415
+
+        c['schedulers'] = [
+            schedulers.ForceScheduler(
+                name="force",
+                codebases=[util.CodebaseParameter("foo", patch=util.PatchParameter())],
+                builderNames=["testy"],
+            )
+        ]
+
+        f = BuildFactory()
+        f.addStep(MySource(codebase='foo'))
+        # if the patch was applied correctly, then make will work!
+        f.addStep(steps.ShellCommand(command=["make"]))
+        c['builders'] = [BuilderConfig(name="testy", workernames=["local1"], factory=f)]
+
+        yield self.setup_master(c)
 
     @skipUnlessPlatformIs("posix")  # make is not installed on windows
     @defer.inlineCallbacks
-    def test_shell(self):
-        yield self.setupConfig(masterConfig())
-        build = yield self.doForceBuild(wantSteps=True, wantLogs=True,
-                                        forceParams={'foo_patch_body': PATCH})
+    def test_shell(self) -> InlineCallbacksType[None]:
+        yield self.setup_config()
+        build = yield self.doForceBuild(
+            wantSteps=True, wantLogs=True, forceParams={'foo_patch_body': PATCH}
+        )
         self.assertEqual(build['buildid'], 1)
         # if makefile was not properly created, we would have a failure
         self.assertEqual(build['results'], SUCCESS)
 
     @defer.inlineCallbacks
-    def test_shell_no_patch(self):
-        yield self.setupConfig(masterConfig())
+    def test_shell_no_patch(self) -> InlineCallbacksType[None]:
+        yield self.setup_config()
         build = yield self.doForceBuild(wantSteps=True, wantLogs=True)
         self.assertEqual(build['buildid'], 1)
         # if no patch, the source step is happy, but the make step cannot find makefile
         self.assertEqual(build['steps'][1]['results'], SUCCESS)
         self.assertEqual(build['steps'][2]['results'], FAILURE)
         self.assertEqual(build['results'], FAILURE)
-
-
-# master configuration
-def masterConfig():
-    c = {}
-    from buildbot.config import BuilderConfig
-    from buildbot.process.factory import BuildFactory
-    from buildbot.plugins import steps, schedulers, util
-
-    c['schedulers'] = [
-        schedulers.ForceScheduler(
-            name="force",
-            codebases=[util.CodebaseParameter(
-                "foo", patch=util.PatchParameter())],
-            builderNames=["testy"])]
-
-    f = BuildFactory()
-    f.addStep(MySource(codebase='foo'))
-    # if the patch was applied correctly, then make will work!
-    f.addStep(steps.ShellCommand(command=["make"]))
-    c['builders'] = [
-        BuilderConfig(name="testy",
-                      workernames=["local1"],
-                      factory=f)]
-    return c

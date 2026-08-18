@@ -13,31 +13,42 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from twisted.internet import defer
 from twisted.internet import threads
 from twisted.trial import unittest
 
+from buildbot import config as config_module
 from buildbot.db import dbconfig
-from buildbot.test.util import db
+from buildbot.test.fake import fakemaster
+
+if TYPE_CHECKING:
+    from twisted.internet.defer import Deferred
+
+    from buildbot.util.twisted import InlineCallbacksType
 
 
-class TestDbConfig(db.RealDatabaseMixin, unittest.TestCase):
-
+class TestDbConfig(unittest.TestCase):
     @defer.inlineCallbacks
-    def setUp(self):
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
         # as we will open the db twice, we can't use in memory sqlite
-        yield self.setUpRealDatabase(table_names=['objects', 'object_state'], sqlite_memory=False)
+        self.master = yield fakemaster.make_master(
+            self, wantRealReactor=True, wantDb=True, sqlite_memory=False
+        )
+        self.db_config = {
+            "db_url": self.master.db.configured_db_config.db_url,
+            "engine_kwargs": self.master.db.configured_db_config.engine_kwargs,
+        }
         yield threads.deferToThread(self.createDbConfig)
 
-    def createDbConfig(self):
-        self.dbConfig = dbconfig.DbConfig(
-            {"db_url": self.db_url}, self.basedir)
+    def createDbConfig(self) -> None:
+        self.dbConfig = dbconfig.DbConfig(self.db_config, self.master.basedir)
 
-    def tearDown(self):
-        return self.tearDownRealDatabase()
-
-    def test_basic(self):
-        def thd():
+    def test_basic(self) -> Deferred[None]:
+        def thd() -> None:
             workersInDB = ['foo', 'bar']
             self.dbConfig.set("workers", workersInDB)
             workers = self.dbConfig.get("workers")
@@ -45,81 +56,89 @@ class TestDbConfig(db.RealDatabaseMixin, unittest.TestCase):
 
         return threads.deferToThread(thd)
 
-    def test_default(self):
-        def thd():
+    def test_default(self) -> Deferred[None]:
+        def thd() -> None:
             workers = self.dbConfig.get("workers", "default")
             self.assertEqual(workers, "default")
 
         return threads.deferToThread(thd)
 
-    def test_error(self):
-        def thd():
+    def test_error(self) -> Deferred[None]:
+        def thd() -> None:
             with self.assertRaises(KeyError):
                 self.dbConfig.get("workers")
 
         return threads.deferToThread(thd)
 
     # supports the 3 different ways to declare db_url in the master.cfg
-    def test_init1(self):
-        obj = dbconfig.DbConfig({"db_url": self.db_url}, self.basedir)
-        self.assertEqual(obj.db_url, self.db_url)
+    def test_init1(self) -> None:
+        obj = dbconfig.DbConfig({"db_url": self.db_config['db_url']}, self.master.basedir)
+        self.assertEqual(
+            obj.db_config,
+            config_module.master.DBConfig(
+                self.db_config['db_url'], self.db_config['engine_kwargs']
+            ),
+        )
 
-    def test_init2(self):
-        obj = dbconfig.DbConfig({"db": {"db_url": self.db_url}}, self.basedir)
-        self.assertEqual(obj.db_url, self.db_url)
+    def test_init2(self) -> None:
+        obj = dbconfig.DbConfig({"db": self.db_config}, self.master.basedir)
+        self.assertEqual(
+            obj.db_config,
+            config_module.master.DBConfig(
+                self.db_config['db_url'], self.db_config['engine_kwargs']
+            ),
+        )
 
-    def test_init3(self):
-        obj = dbconfig.DbConfig({}, self.basedir)
-        self.assertEqual(obj.db_url, "sqlite:///state.sqlite")
+    def test_init3(self) -> None:
+        obj = dbconfig.DbConfig({}, self.master.basedir)
+        self.assertEqual(obj.db_config, config_module.master.DBConfig("sqlite:///state.sqlite"))
 
 
-class TestDbConfigNotInitialized(db.RealDatabaseMixin, unittest.TestCase):
-
+class TestDbConfigNotInitialized(unittest.TestCase):
     @defer.inlineCallbacks
-    def setUp(self):
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
         # as we will open the db twice, we can't use in memory sqlite
-        yield self.setUpRealDatabase(table_names=[], sqlite_memory=False)
+        self.master = yield fakemaster.make_master(
+            self, wantRealReactor=True, wantDb=True, sqlite_memory=False
+        )
+        self.db_url = self.master.db.configured_db_config.db_url
 
-    @defer.inlineCallbacks
-    def tearDown(self):
-        yield self.tearDownRealDatabase()
+    def createDbConfig(self, db_url: str | None = None) -> dbconfig.DbConfig:
+        return dbconfig.DbConfig({"db_url": db_url or self.db_url}, self.master.basedir)
 
-    def createDbConfig(self, db_url=None):
-        return dbconfig.DbConfig({"db_url": db_url or self.db_url}, self.basedir)
-
-    def test_default(self):
-        def thd():
+    def test_default(self) -> Deferred[None]:
+        def thd() -> None:
             db = self.createDbConfig()
             self.assertEqual("foo", db.get("workers", "foo"))
 
         return threads.deferToThread(thd)
 
-    def test_error(self):
-        def thd():
+    def test_error(self) -> Deferred[None]:
+        def thd() -> None:
             db = self.createDbConfig()
             with self.assertRaises(KeyError):
                 db.get("workers")
 
         return threads.deferToThread(thd)
 
-    def test_bad_url(self):
-        def thd():
+    def test_bad_url(self) -> Deferred[None]:
+        def thd() -> None:
             db = self.createDbConfig("garbage://")
             with self.assertRaises(KeyError):
                 db.get("workers")
 
         return threads.deferToThread(thd)
 
-    def test_bad_url2(self):
-        def thd():
+    def test_bad_url2(self) -> Deferred[None]:
+        def thd() -> None:
             db = self.createDbConfig("trash")
             with self.assertRaises(KeyError):
                 db.get("workers")
 
         return threads.deferToThread(thd)
 
-    def test_bad_url3(self):
-        def thd():
+    def test_bad_url3(self) -> Deferred[None]:
+        def thd() -> None:
             db = self.createDbConfig("sqlite://bad")
             with self.assertRaises(KeyError):
                 db.get("workers")

@@ -14,6 +14,8 @@
 # Copyright Buildbot Team Members
 
 
+from __future__ import annotations
+
 import textwrap
 
 from twisted.trial import unittest
@@ -22,42 +24,60 @@ from buildbot.util import raml
 
 
 class TestRaml(unittest.TestCase):
-
-    def setUp(self):
+    def setUp(self) -> None:
         self.api = raml.RamlSpec()
 
-    def test_api(self):
+    def test_api(self) -> None:
         self.assertTrue(self.api.api is not None)
 
-    def test_endpoints(self):
+    def test_endpoints(self) -> None:
         self.assertIn(
-            "/masters/{masterid}/builders/{builderid}/workers/{workerid}",
-            self.api.endpoints.keys())
+            "/masters/{masterid}/builders/{builderid}/workers/{workerid}", self.api.endpoints.keys()
+        )
 
-    def test_endpoints_uri_parameters(self):
+    def test_endpoints_uri_parameters(self) -> None:
         # comparison of OrderedDict do not take in account order :(
         # this is why we compare str repr, to make sure the endpoints are in
         # the right order
-        self.assertEqual(str(self.api.endpoints[
-            "/masters/{masterid}/builders/{builderid}/workers/{workerid}"]['uriParameters']),
-            str(raml.OrderedDict([
-                ('masterid', raml.OrderedDict([
-                    ('type', 'number'), ('description', 'the id of the master')])),
-                ('builderid', raml.OrderedDict([
-                    ('type', 'number'), ('description', 'the id of the builder')])),
-                ('workerid', raml.OrderedDict([
-                    ('type', 'number'), ('description', 'the id of the worker')]))]))
+        self.assertEqual(
+            str(
+                self.api.endpoints["/masters/{masterid}/builders/{builderid}/workers/{workerid}"][
+                    'uriParameters'
+                ]
+            ),
+            str(
+                raml.OrderedDict([
+                    (
+                        'masterid',
+                        raml.OrderedDict([
+                            ('type', 'number'),
+                            ('description', 'the id of the master'),
+                        ]),
+                    ),
+                    (
+                        'builderid',
+                        raml.OrderedDict([
+                            ('type', 'number'),
+                            ('description', 'the id of the builder'),
+                        ]),
+                    ),
+                    (
+                        'workerid',
+                        raml.OrderedDict([
+                            ('type', 'number'),
+                            ('description', 'the id of the worker'),
+                        ]),
+                    ),
+                ])
+            ),
         )
 
-    def test_types(self):
-        self.assertIn(
-            "log",
-            self.api.types.keys())
+    def test_types(self) -> None:
+        self.assertIn("log", self.api.types.keys())
 
-    def test_json_example(self):
+    def test_json_example(self) -> None:
         self.assertEqual(
-            textwrap.dedent(
-                self.api.format_json(self.api.types["build"]['example'], 0)),
+            textwrap.dedent(self.api.format_json(self.api.types["build"]['example'], 0)),
             textwrap.dedent("""
             {
                 "builderid": 10,
@@ -72,19 +92,19 @@ class TestRaml(unittest.TestCase):
                 "started_at": 1451001600,
                 "state_string": "created",
                 "properties": {}
-            }""").strip())
+            }""").strip(),
+        )
 
-    def test_endpoints_by_type(self):
+    def test_endpoints_by_type(self) -> None:
         self.assertIn(
             "/masters/{masterid}/builders/{builderid}/workers/{workerid}",
-            self.api.endpoints_by_type['worker'].keys())
+            self.api.endpoints_by_type['worker'].keys(),
+        )
 
-    def test_iter_actions(self):
+    def test_iter_actions(self) -> None:
         build = self.api.endpoints_by_type['build']
         actions = dict(self.api.iter_actions(build['/builds/{buildid}']))
         self.assertEqual(sorted(actions.keys()), sorted(['rebuild', 'stop']))
 
-    def test_rawendpoints(self):
-        self.assertIn(
-            "/steps/{stepid}/logs/{log_slug}/raw",
-            self.api.rawendpoints.keys())
+    def test_rawendpoints(self) -> None:
+        self.assertIn("/steps/{stepid}/logs/{log_slug}/raw", self.api.rawendpoints.keys())

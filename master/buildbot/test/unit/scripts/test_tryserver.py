@@ -13,6 +13,8 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
 import os
 import sys
 from io import StringIO
@@ -24,14 +26,13 @@ from buildbot.test.util import dirs
 
 
 class TestStatusLog(dirs.DirsMixin, unittest.TestCase):
-
-    def setUp(self):
+    def setUp(self) -> None:
         self.newdir = os.path.join('jobdir', 'new')
         self.tmpdir = os.path.join('jobdir', 'tmp')
         self.setUpDirs("jobdir", self.newdir, self.tmpdir)
 
-    def test_trycmd(self):
-        config = dict(jobdir='jobdir')
+    def test_trycmd(self) -> None:
+        config = {"jobdir": 'jobdir'}
         inputfile = StringIO('this is my try job')
         self.patch(sys, 'stdin', inputfile)
 
@@ -41,7 +42,6 @@ class TestStatusLog(dirs.DirsMixin, unittest.TestCase):
 
         newfiles = os.listdir(self.newdir)
         tmpfiles = os.listdir(self.tmpdir)
-        self.assertEqual((len(newfiles), len(tmpfiles)),
-                         (1, 0))
-        with open(os.path.join(self.newdir, newfiles[0]), 'rt') as f:
+        self.assertEqual((len(newfiles), len(tmpfiles)), (1, 0))
+        with open(os.path.join(self.newdir, newfiles[0]), encoding='utf-8') as f:
             self.assertEqual(f.read(), 'this is my try job')

@@ -13,13 +13,20 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
 import calendar
 import datetime
 import os
 from binascii import hexlify
+from typing import TYPE_CHECKING
+from typing import Any
+from typing import Callable
+from typing import cast
 
 import jwt
-
+import twisted
+from packaging.version import parse as parse_version
 from twisted.application import strports
 from twisted.cred.portal import IRealm
 from twisted.cred.portal import Portal
@@ -32,6 +39,7 @@ from twisted.web import resource
 from twisted.web import server
 from zope.interface import implementer
 
+from buildbot import config
 from buildbot.plugins.db import get_plugins
 from buildbot.util import bytes2unicode
 from buildbot.util import service
@@ -40,15 +48,16 @@ from buildbot.www import auth
 from buildbot.www import avatar
 from buildbot.www import change_hook
 from buildbot.www import config as wwwconfig
+from buildbot.www import resource as buildbot_resource
 from buildbot.www import rest
 from buildbot.www import sse
 from buildbot.www import ws
 
-# as per:
-# http://security.stackexchange.com/questions/95972/what-are-requirements-for-hmac-secret-key
-# we need 128 bit key for HS256
-SESSION_SECRET_LENGTH = 128
-SESSION_SECRET_ALGORITHM = "HS256"
+if TYPE_CHECKING:
+    from twisted.application.internet import StreamServerEndpointService
+
+    from buildbot.master import BuildMaster
+    from buildbot.util.twisted import InlineCallbacksType
 
 
 class BuildbotSession(server.Session):
@@ -59,7 +68,7 @@ class BuildbotSession(server.Session):
     # us with few choice.
     expDelay = datetime.timedelta(weeks=1)
 
-    def __init__(self, site, token=None):
+    def __init__(self, site: BuildbotSite, token: str | None = None) -> None:
         """
         Initialize a session with a unique ID for that session.
         """
@@ -70,96 +79,80 @@ class BuildbotSession(server.Session):
         # server.Session parent class constructor
         components.Componentized.__init__(self)
         if token:
-            self._fromToken(token)
+            self._set_user_info_from_token(token)
         else:
             self._defaultValue()
 
-    def _defaultValue(self):
-        self.user_info = {"anonymous": True}
+    def _defaultValue(self) -> None:
+        self.user_info = auth.build_anonymous_user_info()
 
-    def _fromToken(self, token):
-        try:
-            decoded = jwt.decode(token, self.site.session_secret, algorithms=[
-                                 SESSION_SECRET_ALGORITHM])
-        except jwt.exceptions.ExpiredSignatureError as e:
-            raise KeyError(str(e)) from e
-        except Exception as e:
-            log.err(e, "while decoding JWT session")
-            raise KeyError(str(e)) from e
-        # might raise KeyError: will be caught by caller, which makes the token invalid
-        self.user_info = decoded['user_info']
+    def _set_user_info_from_token(self, token: str) -> None:
+        self.user_info = auth.parse_user_info_from_token(token, self.site.session_secret)
 
-    def updateSession(self, request):
+    def updateSession(self, request: server.Request) -> None:
         """
         Update the cookie after session object was modified
         @param request: the request object which should get a new cookie
         """
-        # we actually need to copy some hardcoded constants from twisted :-(
+        cookiename = auth.build_cookie_name(request.isSecure(), request.sitepath)  # type: ignore[attr-defined]
+        request.addCookie(cookiename, self.uid, path=b"/", secure=request.isSecure())
 
-        # Make sure we aren't creating a secure session on a non-secure page
-        secure = request.isSecure()
-
-        if not secure:
-            cookieString = b"TWISTED_SESSION"
-        else:
-            cookieString = b"TWISTED_SECURE_SESSION"
-
-        cookiename = b"_".join([cookieString] + request.sitepath)
-        request.addCookie(cookiename, self.uid, path=b"/",
-                          secure=secure)
-
-    def expire(self):
+    def expire(self) -> None:
         # caller must still call self.updateSession() to actually expire it
         self._defaultValue()
 
-    def notifyOnExpire(self, callback):
-        raise NotImplementedError(
-            "BuildbotSession can't support notify on session expiration")
+    def notifyOnExpire(self, callback: Callable) -> None:
+        raise NotImplementedError("BuildbotSession can't support notify on session expiration")
 
-    def touch(self):
+    def touch(self) -> None:
         pass
 
     @property
-    def uid(self):
+    def uid(self) -> str:
         """uid is now generated automatically according to the claims.
 
         This should actually only be used for cookie generation
         """
-        exp = datetime.datetime.utcnow() + self.expDelay
+        exp = datetime.datetime.now(datetime.timezone.utc) + self.expDelay
         claims = {
             'user_info': self.user_info,
             # Note that we use JWT standard 'exp' field to implement session expiration
             # we completely bypass twisted.web session expiration mechanisms
-            'exp': calendar.timegm(datetime.datetime.timetuple(exp))}
+            'exp': calendar.timegm(datetime.datetime.timetuple(exp)),
+        }
 
-        return jwt.encode(claims, self.site.session_secret, algorithm=SESSION_SECRET_ALGORITHM)
+        return jwt.encode(claims, self.site.session_secret, algorithm=auth.SESSION_SECRET_ALGORITHM)
 
 
 class BuildbotSite(server.Site):
-
-    """ A custom Site for Buildbot needs.
-        Supports rotating logs, and JWT sessions
+    """A custom Site for Buildbot needs.
+    Supports rotating logs, and JWT sessions
     """
 
-    def __init__(self, root, logPath, rotateLength, maxRotatedFiles):
+    master: BuildMaster | None = None
+
+    def __init__(
+        self, root: resource.Resource, logPath: str | None, rotateLength: int, maxRotatedFiles: int
+    ) -> None:
         super().__init__(root, logPath=logPath)
         self.rotateLength = rotateLength
         self.maxRotatedFiles = maxRotatedFiles
-        self.session_secret = None
+        self.session_secret: str | None = None
 
-    def _openLogFile(self, path):
+    def _openLogFile(self, path: str | bytes) -> LogFile:
         self._nativeize = True
         return LogFile.fromFullPath(
-            path, rotateLength=self.rotateLength, maxRotatedFiles=self.maxRotatedFiles)
+            path, rotateLength=self.rotateLength, maxRotatedFiles=self.maxRotatedFiles
+        )
 
-    def getResourceFor(self, request):
+    def getResourceFor(self, request: server.Request) -> resource.Resource:
         request.responseHeaders.removeHeader('Server')
         return server.Site.getResourceFor(self, request)
 
-    def setSessionSecret(self, secret):
+    def setSessionSecret(self, secret: str) -> None:
         self.session_secret = secret
 
-    def makeSession(self):
+    def makeSession(self) -> BuildbotSession:
         """
         Generate a new Session instance, but not store it for future reference
         (because it will be used by another master instance)
@@ -167,7 +160,7 @@ class BuildbotSite(server.Site):
         """
         return BuildbotSession(self)
 
-    def getSession(self, uid):
+    def getSession(self, uid: str) -> BuildbotSession:
         """
         Get a previously generated session.
         @param uid: Unique ID of the session (a JWT token).
@@ -178,24 +171,29 @@ class BuildbotSite(server.Site):
 
 
 class WWWService(service.ReconfigurableServiceMixin, service.AsyncMultiService):
-    name = 'www'
+    _getPort: Callable[[], Any]
+    name: str | None = 'www'  # type: ignore[assignment]
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
 
         self.port = None
-        self.port_service = None
-        self.site = None
+        self.port_service: StreamServerEndpointService | None = None
+        self.reconfigurableResources: (
+            list[buildbot_resource.Resource] | tuple[buildbot_resource.Resource, ...]
+        ) = []
+        self.site: BuildbotSite | None = None
 
         # load the apps early, in case something goes wrong in Python land
         self.apps = get_plugins('www', None, load_now=True)
+        self.base_plugin_name = 'base'
 
     @property
-    def auth(self):
+    def auth(self) -> Any:
         return self.master.config.www['auth']
 
     @defer.inlineCallbacks
-    def reconfigServiceWithBuildbotConfig(self, new_config):
+    def reconfigServiceWithBuildbotConfig(self, new_config: Any) -> InlineCallbacksType[None]:
         www = new_config.www
 
         self.authz = www.get('authz')
@@ -226,17 +224,17 @@ class WWWService(service.ReconfigurableServiceMixin, service.AsyncMultiService):
             if self.port:
                 port = self.port
                 if isinstance(port, int):
-                    port = "tcp:%d" % port
+                    port = f"tcp:{port}"
                 self.port_service = strports.service(port, self.site)
 
                 # monkey-patch in some code to get the actual Port object
                 # returned by endpoint.listen().  But only for tests.
                 if port == "tcp:0:interface=127.0.0.1":
                     if hasattr(self.port_service, 'endpoint'):
-                        old_listen = self.port_service.endpoint.listen
+                        old_listen: Any = self.port_service.endpoint.listen
 
                         @defer.inlineCallbacks
-                        def listen(factory):
+                        def listen(factory: Any) -> InlineCallbacksType[Any]:
                             port = yield old_listen(factory)
                             self._getPort = lambda: port
                             return port
@@ -254,40 +252,64 @@ class WWWService(service.ReconfigurableServiceMixin, service.AsyncMultiService):
 
         yield super().reconfigServiceWithBuildbotConfig(new_config)
 
-    def getPortnum(self):
+    def getPortnum(self) -> int:
         # for tests, when the configured port is 0 and the kernel selects a
         # dynamic port.  This will fail if the monkeypatch in reconfigService
         # was not made.
         return self._getPort().getHost().port
 
-    def configPlugins(self, root, new_config):
-        known_plugins = set(new_config.www.get('plugins', {})) | set(['base'])
+    def refresh_base_plugin_name(self, new_config: Any) -> None:
+        if 'base_react' in new_config.www.get('plugins', {}):
+            config.error(
+                "'base_react' plugin is no longer supported. Use 'base' plugin in master.cfg "
+                "BuildmasterConfig['www'] dictionary instead. Remove 'buildbot-www-react' and "
+                "install 'buildbot-www' package."
+            )
+        self.base_plugin_name = 'base'
+
+    def configPlugins(self, root: resource.Resource, new_config: Any) -> None:
+        plugin_root = root
+        current_version = parse_version(twisted.__version__)
+        if current_version < parse_version("22.10.0"):
+            from twisted.web.resource import NoResource  # noqa: PLC0415
+
+            plugin_root = NoResource()
+        else:
+            from twisted.web.pages import notFound  # noqa: PLC0415
+
+            plugin_root = cast(resource.Resource, notFound())
+        root.putChild(b"plugins", plugin_root)
+
+        known_plugins = set(new_config.www.get('plugins', {})) | set([self.base_plugin_name])
         for key, plugin in list(new_config.www.get('plugins', {}).items()):
-            log.msg("initializing www plugin %r" % (key,))
+            log.msg(f"initializing www plugin {key!r}")
             if key not in self.apps:
-                raise RuntimeError("could not find plugin {}; is it installed?".format(key))
+                raise RuntimeError(f"could not find plugin {key}; is it installed?")
             app = self.apps.get(key)
             app.setMaster(self.master)
             app.setConfiguration(plugin)
-            root.putChild(unicode2bytes(key), app.resource)
-            if not app.ui:
-                del new_config.www['plugins'][key]
+            plugin_root.putChild(unicode2bytes(key), app.resource)
+
         for plugin_name in set(self.apps.names) - known_plugins:
-            log.msg("NOTE: www plugin %r is installed but not "
-                    "configured" % (plugin_name,))
+            log.msg(f"NOTE: www plugin {plugin_name!r} is installed but not configured")
 
-    def setupSite(self, new_config):
-        self.reconfigurableResources = []
+    def setupSite(self, new_config: Any) -> None:
+        self.refresh_base_plugin_name(new_config)
 
-        # we're going to need at least the base plugin (buildbot-www)
-        if 'base' not in self.apps:
+        assert isinstance(self.reconfigurableResources, list)
+        self.reconfigurableResources.clear()
+
+        # we're going to need at least the base plugin (buildbot-www or buildbot-www-react)
+        if self.base_plugin_name not in self.apps:
             raise RuntimeError("could not find buildbot-www; is it installed?")
 
-        root = self.apps.get('base').resource
+        root = self.apps.get(self.base_plugin_name).resource
         self.configPlugins(root, new_config)
         # /
-        root.putChild(b'', wwwconfig.IndexResource(
-            self.master, self.apps.get('base').static_dir))
+        root.putChild(
+            b'',
+            wwwconfig.IndexResource(self.master, self.apps.get(self.base_plugin_name).static_dir),
+        )
 
         # /auth
         root.putChild(b'auth', auth.AuthRootResource(self.master))
@@ -298,6 +320,9 @@ class WWWService(service.ReconfigurableServiceMixin, service.AsyncMultiService):
         # /api
         root.putChild(b'api', rest.RestRootResource(self.master))
 
+        # /config
+        root.putChild(b'config', wwwconfig.ConfigResource(self.master))
+
         # /ws
         root.putChild(b'ws', ws.WsResource(self.master))
 
@@ -305,30 +330,36 @@ class WWWService(service.ReconfigurableServiceMixin, service.AsyncMultiService):
         root.putChild(b'sse', sse.EventResource(self.master))
 
         # /change_hook
-        resource_obj = change_hook.ChangeHookResource(master=self.master)
+        resource_obj: resource.IResource = change_hook.ChangeHookResource(master=self.master)
 
         # FIXME: this does not work with reconfig
-        change_hook_auth = new_config.www.get('change_hook_auth')
+        change_hook_auth: list | None = new_config.www.get('change_hook_auth')
         if change_hook_auth is not None:
-            resource_obj = self.setupProtectedResource(
-                resource_obj, change_hook_auth)
-        root.putChild(b"change_hook", resource_obj)
+            resource_obj = self.setupProtectedResource(resource_obj, change_hook_auth)
+        root.putChild(b"change_hook", cast(resource.Resource, resource_obj))
 
         self.root = root
 
-        rotateLength = new_config.www.get(
-            'logRotateLength') or self.master.log_rotation.rotateLength
-        maxRotatedFiles = new_config.www.get(
-            'maxRotatedFiles') or self.master.log_rotation.maxRotatedFiles
+        rotateLength = (
+            new_config.www.get('logRotateLength') or self.master.log_rotation.rotateLength
+        )
+        maxRotatedFiles = (
+            new_config.www.get('maxRotatedFiles') or self.master.log_rotation.maxRotatedFiles
+        )
 
         httplog = None
         if new_config.www['logfileName']:
             httplog = os.path.abspath(
-                os.path.join(self.master.basedir, new_config.www['logfileName']))
-        self.site = BuildbotSite(root, logPath=httplog, rotateLength=rotateLength,
-                                 maxRotatedFiles=maxRotatedFiles)
+                os.path.join(self.master.basedir, new_config.www['logfileName'])
+            )
+        self.site = BuildbotSite(
+            root, logPath=httplog, rotateLength=rotateLength, maxRotatedFiles=maxRotatedFiles
+        )
 
-        self.site.sessionFactory = None
+        assert self.site is not None
+
+        # mypy is confused by issuing warning on the next line
+        self.site.sessionFactory = None  # type: ignore[assignment,unused-ignore]
 
         # Make sure site.master is set. It is required for poller change_hook
         self.site.master = self.master
@@ -336,12 +367,17 @@ class WWWService(service.ReconfigurableServiceMixin, service.AsyncMultiService):
         # case some dynamically created resources try to get reconfigs)
         self.reconfigurableResources = tuple(self.reconfigurableResources)
 
-    def resourceNeedsReconfigs(self, resource):
+    def resourceNeedsReconfigs(self, resource: buildbot_resource.Resource) -> None:
         # flag this resource as needing to know when a reconfig occurs
+        assert isinstance(self.reconfigurableResources, list), (
+            "www Resources can no longer be reconfigured"
+        )
         self.reconfigurableResources.append(resource)
 
-    def reconfigSite(self, new_config):
-        root = self.apps.get('base').resource
+    def reconfigSite(self, new_config: Any) -> None:
+        self.refresh_base_plugin_name(new_config)
+
+        root = self.apps.get(self.base_plugin_name).resource
         self.configPlugins(root, new_config)
         new_config.www['auth'].reconfigAuth(self.master, new_config)
         cookie_expiration_time = new_config.www.get('cookie_expiration_time')
@@ -352,32 +388,37 @@ class WWWService(service.ReconfigurableServiceMixin, service.AsyncMultiService):
             rsrc.reconfigResource(new_config)
 
     @defer.inlineCallbacks
-    def makeSessionSecret(self):
+    def makeSessionSecret(self) -> InlineCallbacksType[None]:
         state = self.master.db.state
-        objectid = yield state.getObjectId(
-            "www", "buildbot.www.service.WWWService")
+        objectid = yield state.getObjectId("www", "buildbot.www.service.WWWService")
 
-        def create_session_secret():
+        def create_session_secret() -> str:
             # Bootstrap: We need to create a key, that will be shared with other masters
             # and other runs of this master
 
             # we encode that in hex for db storage convenience
-            return bytes2unicode(hexlify(os.urandom(int(SESSION_SECRET_LENGTH / 8))))
+            return bytes2unicode(hexlify(os.urandom(int(auth.SESSION_SECRET_LENGTH / 8))))
 
-        session_secret = yield state.atomicCreateState(objectid, "session_secret",
-                                                       create_session_secret)
+        session_secret = yield state.atomicCreateState(
+            objectid, "session_secret", create_session_secret
+        )
+
+        assert self.site is not None
         self.site.setSessionSecret(session_secret)
 
-    def setupProtectedResource(self, resource_obj, checkers):
+    def setupProtectedResource(
+        self, resource_obj: resource.IResource, checkers: list
+    ) -> resource.IResource:
         @implementer(IRealm)
         class SimpleRealm:
-
             """
             A realm which gives out L{ChangeHookResource} instances for authenticated
             users.
             """
 
-            def requestAvatar(self, avatarId, mind, *interfaces):
+            def requestAvatar(
+                self, avatarId: Any, mind: Any, *interfaces: Any
+            ) -> tuple[Any, Any, Callable[[], None]]:
                 if resource.IResource in interfaces:
                     return (resource.IResource, resource_obj, lambda: None)
                 raise NotImplementedError()
@@ -387,10 +428,12 @@ class WWWService(service.ReconfigurableServiceMixin, service.AsyncMultiService):
         wrapper = guard.HTTPAuthSessionWrapper(portal, [credentialFactory])
         return wrapper
 
-    def getUserInfos(self, request):
+    def getUserInfos(self, request: server.Request) -> dict[str, Any]:
         session = request.getSession()
         return session.user_info
 
-    def assertUserAllowed(self, request, ep, action, options):
+    def assertUserAllowed(
+        self, request: server.Request, ep: tuple[str, ...], action: str, options: dict[str, Any]
+    ) -> bool:
         user_info = self.getUserInfos(request)
         return self.authz.assertUserAllowed(ep, action, options, user_info)

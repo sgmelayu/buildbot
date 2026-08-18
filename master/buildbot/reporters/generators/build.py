@@ -13,32 +13,52 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from typing import Any
+from typing import ClassVar
+
 from twisted.internet import defer
 from zope.interface import implementer
 
 from buildbot import interfaces
 from buildbot.reporters import utils
 from buildbot.reporters.message import MessageFormatter
+from buildbot.reporters.message import MessageFormatterBase
 from buildbot.reporters.message import MessageFormatterRenderable
 
 from .utils import BuildStatusGeneratorMixin
 
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from buildbot.util.twisted import InlineCallbacksType
+
 
 @implementer(interfaces.IReportGenerator)
 class BuildStatusGenerator(BuildStatusGeneratorMixin):
-
     wanted_event_keys = [
         ('builds', None, 'finished'),
     ]
 
-    compare_attrs = ['formatter']
+    compare_attrs: ClassVar[Sequence[str]] = ['formatter']
 
-    def __init__(self, mode=("failing", "passing", "warnings"),
-                 tags=None, builders=None, schedulers=None, branches=None,
-                 subject="Buildbot %(result)s in %(title)s on %(builder)s",
-                 add_logs=False, add_patch=False, report_new=False, message_formatter=None):
+    def __init__(
+        self,
+        mode: str | tuple[str, ...] = ("failing", "passing", "warnings"),
+        tags: list[str] | None = None,
+        builders: list[str] | None = None,
+        schedulers: list[str] | None = None,
+        branches: list[str] | None = None,
+        add_logs: Any = None,
+        add_patch: bool = False,
+        report_new: bool = False,
+        message_formatter: MessageFormatter | None = None,
+    ) -> None:
+        subject = "Buildbot %(result)s in %(title)s on %(builder)s"
         super().__init__(mode, tags, builders, schedulers, branches, subject, add_logs, add_patch)
-        self.formatter = message_formatter
+        self.formatter: MessageFormatter = message_formatter  # type: ignore[assignment]
         if self.formatter is None:
             self.formatter = MessageFormatter()
 
@@ -49,16 +69,23 @@ class BuildStatusGenerator(BuildStatusGeneratorMixin):
             ]
 
     @defer.inlineCallbacks
-    def generate(self, master, reporter, key, build):
+    def generate(
+        self, master: Any, reporter: Any, key: Any, build: Any
+    ) -> InlineCallbacksType[Any]:
         _, _, event = key
         is_new = event == 'new'
         want_previous_build = False if is_new else self._want_previous_build()
 
-        yield utils.getDetailsForBuild(master, build,
-                                       wantProperties=self.formatter.wantProperties,
-                                       wantSteps=self.formatter.wantSteps,
-                                       wantPreviousBuild=want_previous_build,
-                                       wantLogs=self.formatter.wantLogs)
+        yield utils.getDetailsForBuild(
+            master,
+            build,
+            want_properties=self.formatter.want_properties,
+            want_steps=self.formatter.want_steps,
+            want_previous_build=want_previous_build,
+            want_logs=self.formatter.want_logs,
+            add_logs=self.add_logs,
+            want_logs_content=self.formatter.want_logs_content,
+        )
 
         if not self.is_message_needed_by_props(build):
             return None
@@ -68,42 +95,56 @@ class BuildStatusGenerator(BuildStatusGeneratorMixin):
         report = yield self.build_message(self.formatter, master, reporter, build)
         return report
 
-    def _want_previous_build(self):
+    def _want_previous_build(self) -> bool:
         return "change" in self.mode or "problem" in self.mode
 
 
 @implementer(interfaces.IReportGenerator)
 class BuildStartEndStatusGenerator(BuildStatusGeneratorMixin):
-
     wanted_event_keys = [
         ('builds', None, 'new'),
         ('builds', None, 'finished'),
     ]
 
-    compare_attrs = ['start_formatter', 'end_formatter']
+    compare_attrs: ClassVar[Sequence[str]] = ['start_formatter', 'end_formatter']
 
-    def __init__(self, tags=None, builders=None, schedulers=None, branches=None, add_logs=False,
-                 add_patch=False, start_formatter=None, end_formatter=None):
-
+    def __init__(
+        self,
+        tags: list[str] | None = None,
+        builders: list[str] | None = None,
+        schedulers: list[str] | None = None,
+        branches: list[str] | None = None,
+        add_logs: Any = None,
+        add_patch: bool = False,
+        start_formatter: MessageFormatterBase | None = None,
+        end_formatter: MessageFormatterBase | None = None,
+    ) -> None:
         super().__init__('all', tags, builders, schedulers, branches, None, add_logs, add_patch)
-        self.start_formatter = start_formatter
+        self.start_formatter: MessageFormatterBase = start_formatter  # type: ignore[assignment]
         if self.start_formatter is None:
             self.start_formatter = MessageFormatterRenderable('Build started.')
-        self.end_formatter = end_formatter
+        self.end_formatter: MessageFormatterBase = end_formatter  # type: ignore[assignment]
         if self.end_formatter is None:
             self.end_formatter = MessageFormatterRenderable('Build done.')
 
     @defer.inlineCallbacks
-    def generate(self, master, reporter, key, build):
+    def generate(
+        self, master: Any, reporter: Any, key: Any, build: Any
+    ) -> InlineCallbacksType[Any]:
         _, _, event = key
         is_new = event == 'new'
 
         formatter = self.start_formatter if is_new else self.end_formatter
 
-        yield utils.getDetailsForBuild(master, build,
-                                       wantProperties=formatter.wantProperties,
-                                       wantSteps=formatter.wantSteps,
-                                       wantLogs=formatter.wantLogs)
+        yield utils.getDetailsForBuild(
+            master,
+            build,
+            want_properties=formatter.want_properties,
+            want_steps=formatter.want_steps,
+            want_logs=formatter.want_logs,
+            add_logs=self.add_logs,
+            want_logs_content=formatter.want_logs_content,
+        )
 
         if not self.is_message_needed_by_props(build):
             return None

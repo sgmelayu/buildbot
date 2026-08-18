@@ -15,7 +15,12 @@
 # Portions Copyright Dan Radez <dradez+buildbot@redhat.com>
 # Portions Copyright Steve 'Ashcrow' Milner <smilner+buildbot@redhat.com>
 
+from __future__ import annotations
+
 import os
+from typing import TYPE_CHECKING
+from typing import Any
+from typing import cast
 
 from twisted.internet import defer
 
@@ -23,49 +28,55 @@ from buildbot import config
 from buildbot.process import buildstep
 from buildbot.process import logobserver
 
+if TYPE_CHECKING:
+    from collections.abc import Generator
+
+    from buildbot.interfaces import IMaybeRenderableType
+    from buildbot.util.twisted import InlineCallbacksType
+
 
 class RpmBuild(buildstep.ShellMixin, buildstep.BuildStep):
-
     """
     RpmBuild build step.
     """
 
     renderables = ['dist']
     name = "rpmbuilder"
-    haltOnFailure = 1
-    flunkOnFailure = 1
+    haltOnFailure = True
+    flunkOnFailure = True
     description = ["RPMBUILD"]
     descriptionDone = ["RPMBUILD"]
 
-    def __init__(self,
-                 specfile=None,
-                 topdir='`pwd`',
-                 builddir='`pwd`',
-                 rpmdir='`pwd`',
-                 sourcedir='`pwd`',
-                 specdir='`pwd`',
-                 srcrpmdir='`pwd`',
-                 dist='.el6',
-                 define=None,
-                 autoRelease=False,
-                 vcsRevision=False,
-                 **kwargs):
+    def __init__(
+        self,
+        specfile: str | None = None,
+        topdir: str = '`pwd`',
+        builddir: str = '`pwd`',
+        rpmdir: str = '`pwd`',
+        sourcedir: str = '`pwd`',
+        specdir: str = '`pwd`',
+        srcrpmdir: str = '`pwd`',
+        dist: IMaybeRenderableType[str] = '.el6',
+        define: dict[str, str] | None = None,
+        autoRelease: bool = False,
+        vcsRevision: bool = False,
+        **kwargs: Any,
+    ) -> None:
         kwargs = self.setupShellMixin(kwargs, prohibitArgs=['command'])
         super().__init__(**kwargs)
 
         self.dist = dist
 
         self.base_rpmbuild = (
-            ('rpmbuild --define "_topdir {}" --define "_builddir {}"'
-             ' --define "_rpmdir {}" --define "_sourcedir {}"'
-             ' --define "_specdir {}" --define "_srcrpmdir {}"').format(topdir, builddir, rpmdir,
-                                                                        sourcedir, specdir,
-                                                                        srcrpmdir))
+            f'rpmbuild --define "_topdir {topdir}" --define "_builddir {builddir}"'
+            f' --define "_rpmdir {rpmdir}" --define "_sourcedir {sourcedir}"'
+            f' --define "_specdir {specdir}" --define "_srcrpmdir {srcrpmdir}"'
+        )
 
         if define is None:
             define = {}
         for k, v in define.items():
-            self.base_rpmbuild += " --define \"{} {}\"".format(k, v)
+            self.base_rpmbuild += f" --define \"{k} {v}\""
 
         self.specfile = specfile
         self.autoRelease = autoRelease
@@ -74,24 +85,22 @@ class RpmBuild(buildstep.ShellMixin, buildstep.BuildStep):
         if not self.specfile:
             config.error("You must specify a specfile")
 
-        self.addLogObserver(
-            'stdio', logobserver.LineConsumerLogObserver(self.logConsumer))
+        self.addLogObserver('stdio', logobserver.LineConsumerLogObserver(self.logConsumer))
 
     @defer.inlineCallbacks
-    def run(self):
-
-        rpm_extras_dict = {}
+    def run(self) -> InlineCallbacksType[int]:
+        rpm_extras_dict: dict[str, Any] = {}
         rpm_extras_dict['dist'] = self.dist
 
         if self.autoRelease:
-            relfile = '{}.release'.format(os.path.basename(self.specfile).split('.')[0])
+            relfile = f"{os.path.basename(cast(str, self.specfile)).split('.')[0]}.release"
             try:
-                with open(relfile, 'r') as rfile:
+                with open(relfile, encoding='utf-8') as rfile:
                     rel = int(rfile.readline().strip())
-            except (IOError, TypeError, ValueError):
+            except (OSError, TypeError, ValueError):
                 rel = 0
             rpm_extras_dict['_release'] = rel
-            with open(relfile, 'w') as rfile:
+            with open(relfile, 'w', encoding='utf-8') as rfile:
                 rfile.write(str(rel + 1))
 
         if self.vcsRevision:
@@ -105,10 +114,9 @@ class RpmBuild(buildstep.ShellMixin, buildstep.BuildStep):
         # The unit tests expect a certain order, so we sort the dict to keep
         # format the same every time
         for k, v in sorted(rpm_extras_dict.items()):
-            self.rpmbuild = '{0} --define "{1} {2}"'.format(
-                self.rpmbuild, k, v)
+            self.rpmbuild = f'{self.rpmbuild} --define "{k} {v}"'
 
-        command = '{} -ba {}'.format(self.rpmbuild, self.specfile)
+        command = f'{self.rpmbuild} -ba {self.specfile}'
 
         cmd = yield self.makeRemoteShellCommand(command=command)
 
@@ -123,16 +131,23 @@ class RpmBuild(buildstep.ShellMixin, buildstep.BuildStep):
 
         return cmd.results()
 
-    def logConsumer(self):
-        rpm_prefixes = ['Provides:', 'Requires(', 'Requires:',
-                        'Checking for unpackaged', 'Wrote:',
-                        'Executing(%', '+ ', 'Processing files:']
+    def logConsumer(self) -> Generator[None, tuple[str, str], None]:
+        rpm_prefixes = [
+            'Provides:',
+            'Requires(',
+            'Requires:',
+            'Checking for unpackaged',
+            'Wrote:',
+            'Executing(%',
+            '+ ',
+            'Processing files:',
+        ]
         rpm_err_pfx = ['   ', 'RPM build errors:', 'error: ']
         self.rpmcmdlog = []
         self.rpmerrors = []
 
         while True:
-            stream, line = yield
+            _, line = yield
             for pfx in rpm_prefixes:
                 if line.startswith(pfx):
                     self.rpmcmdlog.append(line)

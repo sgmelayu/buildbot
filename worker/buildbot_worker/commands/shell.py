@@ -12,31 +12,34 @@
 # Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
 # Copyright Buildbot Team Members
+from __future__ import annotations
 
-from __future__ import absolute_import
-from __future__ import print_function
-
-import os
+from typing import TYPE_CHECKING
 
 from buildbot_worker import runprocess
 from buildbot_worker.commands import base
 
+if TYPE_CHECKING:
+    from twisted.internet.defer import Deferred
+
 
 class WorkerShellCommand(base.Command):
-
     requiredArgs = ['workdir', 'command']
 
-    def start(self):
+    def start(self) -> Deferred[None]:
         args = self.args
-        workdir = os.path.join(self.builder.basedir, args['workdir'])
+        workdir = args['workdir']
 
         c = runprocess.RunProcess(
-            self.builder,
+            self.command_id,
             args['command'],
             workdir,
+            self.protocol_command.unicode_encoding,
+            self.protocol_command.send_update,
             environ=args.get('env'),
             timeout=args.get('timeout', None),
             maxTime=args.get('maxTime', None),
+            max_lines=args.get('max_lines', None),
             sigtermTime=args.get('sigtermTime', None),
             sendStdout=args.get('want_stdout', True),
             sendStderr=args.get('want_stderr', True),
@@ -53,12 +56,12 @@ class WorkerShellCommand(base.Command):
         d = self.command.start()
         return d
 
-    def interrupt(self):
+    def interrupt(self) -> None:
         self.interrupted = True
         self.command.kill("command interrupted")
 
-    def writeStdin(self, data):
-        self.command.writeStdin(data)
+    def writeStdin(self, data: bytes) -> None:
+        self.command.writeStdin(data)  # type: ignore[attr-defined]
 
-    def closeStdin(self):
-        self.command.closeStdin()
+    def closeStdin(self) -> None:
+        self.command.closeStdin()  # type: ignore[attr-defined]

@@ -1,0 +1,75 @@
+@use '../../styles/colors.scss';
+
+.bb-badge-status {
+  display: inline;
+  padding: 0.2em 0.6em 0.3em;
+  font-size: 75%;
+  font-weight: 700;
+  line-height: 1;
+  text-align: center;
+  white-space: nowrap;
+  vertical-align: baseline;
+  border-radius: 0.25em;
+
+  &.results_SUCCESS,
+  &.worker_CONNECTED {
+    color: colors.$bb-color-results-success;
+    background-color: colors.$bb-color-background-results-success;
+    border-color: colors.$bb-color-border-results-success;
+  }
+
+  &.results_WARNINGS {
+    color: colors.$bb-color-results-warnings;
+    background-color: colors.$bb-color-background-results-warnings;
+    border-color: colors.$bb-color-border-results-warnings;
+  }
+
+  &.results_FAILURE,
+  &.worker_DISCONNECTED {
+    color: colors.$bb-color-results-failure;
+    background-color: colors.$bb-color-background-results-failure;
+    border-color: colors.$bb-color-border-results-failure;
+  }
+
+  &.results_SKIPPED {
+    color: colors.$bb-color-results-skipped;
+    background: colors.$bb-color-background-results-skipped;
+    border-color: colors.$bb-color-border-results-skipped;
+  }
+
+  &.results_EXCEPTION {
+    color: colors.$bb-color-results-exception;
+    background-color: colors.$bb-color-background-results-exception;
+    border-color: colors.$bb-color-border-results-exception;
+  }
+
+  &.results_RETRY {
+    color: colors.$bb-color-results-retry;
+    background-color: colors.$bb-color-background-results-retry;
+    border-color: colors.$bb-color-border-results-retry;
+  }
+
+  &.results_CANCELLED {
+    color: colors.$bb-color-results-cancelled;
+    background-color: colors.$bb-color-background-results-cancelled;
+    border-color: colors.$bb-color-border-results-cancelled;
+  }
+
+  &.results_PENDING {
+    color: colors.$bb-color-results-pending;
+    background-color: colors.$bb-color-background-results-pending;
+    border-color: colors.$bb-color-border-results-pending;
+  }
+
+  &.results_UNKNOWN {
+    color: colors.$bb-color-results-unknown;
+    background-color: colors.$bb-color-background-results-unknown;
+    border-color: colors.$bb-color-border-results-unknown;
+  }
+}
+
+a .bb-badge-status:hover,
+a .bb-badge-status:focus {
+  color: #fff;
+  cursor: pointer;
+}

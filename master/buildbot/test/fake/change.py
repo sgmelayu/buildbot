@@ -13,23 +13,25 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
+from typing import Any
 
 from buildbot.process.properties import Properties
 from buildbot.test.fake.state import State
 
 
 class Change(State):
-
     project = ''
     repository = ''
     branch = ''
     category = ''
     codebase = ''
-    properties = {}
+    properties: dict[str, Any] | Properties = {}
 
-    def __init__(self, **kw):
+    def __init__(self, **kw: Any) -> None:
         super().__init__(**kw)
         # change.properties is a IProperties
         props = Properties()
-        props.update(self.properties, "test")
+        props.update(self.properties, "test")  # type: ignore[arg-type]
         self.properties = props

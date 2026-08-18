@@ -13,40 +13,46 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from typing import Any
+
 from twisted.internet import defer
-from twisted.internet import task
 from twisted.trial import unittest
 
 from buildbot.schedulers import timed
+from buildbot.test.reactor import TestReactorMixin
 from buildbot.test.util import scheduler
-from buildbot.test.util.misc import TestReactorMixin
+
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
 
 
 class Timed(scheduler.SchedulerMixin, TestReactorMixin, unittest.TestCase):
-
     OBJECTID = 928754
 
-    def setUp(self):
-        self.setUpTestReactor()
-        self.setUpScheduler()
-
-    def tearDown(self):
-        self.tearDownScheduler()
+    @defer.inlineCallbacks
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        self.setup_test_reactor()
+        yield self.setUpScheduler()
 
     class Subclass(timed.Timed):
-
-        def getNextBuildTime(self, lastActuation):
+        def getNextBuildTime(self, lastActuation: float | None) -> defer.Deferred[float | None]:
             self.got_lastActuation = lastActuation
             return defer.succeed((lastActuation or 1000) + 60)
 
-        def startBuild(self):
+        def startBuild(self) -> defer.Deferred[None]:
             self.started_build = True
             return defer.succeed(None)
 
-    def makeScheduler(self, firstBuildDuration=0, **kwargs):
-        sched = self.attachScheduler(self.Subclass(**kwargs), self.OBJECTID)
-        self.clock = sched._reactor = task.Clock()
+    @defer.inlineCallbacks
+    def makeScheduler(
+        self, firstBuildDuration: int = 0, **kwargs: Any
+    ) -> InlineCallbacksType[Subclass]:
+        sched = yield self.attachScheduler(self.Subclass(**kwargs), self.OBJECTID)  # type: ignore[call-arg]
         return sched
+
     # tests
 
     # note that most of the heavy-lifting for testing this class is handled by

@@ -14,75 +14,94 @@
 # Copyright Buildbot Team Members
 
 
+from __future__ import annotations
+
 import os
+from typing import TYPE_CHECKING
 
 from twisted.internet import defer
 from twisted.trial import unittest
 
+from buildbot.test.fake import fakemaster
+from buildbot.test.reactor import TestReactorMixin
 from buildbot.test.util import dirs
 from buildbot.util import maildir
 
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
 
-class TestMaildirService(dirs.DirsMixin, unittest.TestCase):
 
-    def setUp(self):
+class TestMaildirService(dirs.DirsMixin, TestReactorMixin, unittest.TestCase):
+    @defer.inlineCallbacks
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        self.setup_test_reactor()
         self.maildir = os.path.abspath("maildir")
         self.newdir = os.path.join(self.maildir, "new")
         self.curdir = os.path.join(self.maildir, "cur")
         self.tmpdir = os.path.join(self.maildir, "tmp")
         self.setUpDirs(self.maildir, self.newdir, self.curdir, self.tmpdir)
 
+        self.master = yield fakemaster.make_master(self, wantDb=True, wantMq=True, wantData=True)
+
         self.svc = None
 
-    def tearDown(self):
+    def tearDown(self) -> None:
         if self.svc and self.svc.running:
             self.svc.stopService()
-        self.tearDownDirs()
 
     # tests
 
     @defer.inlineCallbacks
-    def test_start_stop_repeatedly(self):
-        self.svc = maildir.MaildirService(self.maildir)
-        self.svc.startService()
-        yield self.svc.stopService()
-        self.svc.startService()
-        yield self.svc.stopService()
-        self.assertEqual(len(list(self.svc)), 0)
+    def test_start_stop_repeatedly(self) -> InlineCallbacksType[None]:
+        self.svc = maildir.MaildirService(self.maildir)  # type: ignore[assignment]
+        yield self.svc.setServiceParent(self.master)  # type: ignore[attr-defined]
+        yield self.master.startService()
+        yield self.master.stopService()
+        yield self.master.startService()
+        yield self.master.stopService()
+        self.assertEqual(len(list(self.svc)), 0)  # type: ignore[call-overload]
 
     @defer.inlineCallbacks
-    def test_messageReceived(self):
-        self.svc = maildir.MaildirService(self.maildir)
+    def test_messageReceived(self) -> InlineCallbacksType[None]:
+        self.svc = maildir.MaildirService(self.maildir)  # type: ignore[assignment]
+        yield self.svc.setServiceParent(self.master)  # type: ignore[attr-defined]
 
         # add a fake messageReceived method
         messagesReceived = []
 
-        def messageReceived(filename):
+        def messageReceived(filename: str) -> defer.Deferred[None]:
             messagesReceived.append(filename)
             return defer.succeed(None)
-        self.svc.messageReceived = messageReceived
-        yield self.svc.startService()
+
+        self.svc.messageReceived = messageReceived  # type: ignore[attr-defined]
+        yield self.master.startService()
 
         self.assertEqual(messagesReceived, [])
 
         tmpfile = os.path.join(self.tmpdir, "newmsg")
         newfile = os.path.join(self.newdir, "newmsg")
-        open(tmpfile, "w").close()
+        with open(tmpfile, "w", encoding='utf-8'):
+            pass
         os.rename(tmpfile, newfile)
 
         # TODO: can we wait for a dnotify somehow, if enabled?
-        yield self.svc.poll()
+        yield self.svc.poll()  # type: ignore[attr-defined]
 
         self.assertEqual(messagesReceived, ['newmsg'])
 
-    def test_moveToCurDir(self):
-        self.svc = maildir.MaildirService(self.maildir)
+    def test_moveToCurDir(self) -> None:
+        self.svc = maildir.MaildirService(self.maildir)  # type: ignore[assignment]
         tmpfile = os.path.join(self.tmpdir, "newmsg")
         newfile = os.path.join(self.newdir, "newmsg")
-        open(tmpfile, "w").close()
+        with open(tmpfile, "w", encoding='utf-8'):
+            pass
         os.rename(tmpfile, newfile)
-        f = self.svc.moveToCurDir("newmsg")
+        f = self.svc.moveToCurDir("newmsg")  # type: ignore[attr-defined]
         f.close()
-        self.assertEqual([os.path.exists(os.path.join(d, "newmsg"))
-                          for d in (self.newdir, self.curdir, self.tmpdir)],
-                         [False, True, False])
+        self.assertEqual(
+            [
+                os.path.exists(os.path.join(d, "newmsg"))
+                for d in (self.newdir, self.curdir, self.tmpdir)
+            ],
+            [False, True, False],
+        )

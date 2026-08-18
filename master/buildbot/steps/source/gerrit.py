@@ -12,19 +12,24 @@
 # Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
 # Copyright Buildbot Team Members
+from __future__ import annotations
 
+from typing import TYPE_CHECKING
+from typing import Any
 
 from buildbot.steps.source.git import Git
 
+if TYPE_CHECKING:
+    from twisted.internet import defer
+
 
 class Gerrit(Git):
-
-    def run_vc(self, branch, revision, patch):
+    def run_vc(self, branch: str | None, revision: str | None, patch: Any) -> defer.Deferred[Any]:
         gerrit_branch = None
 
+        assert self.build is not None
         changed_project = self.build.getProperty('event.change.project')
-        if (not self.sourcestamp or (self.sourcestamp.project !=
-                                     changed_project)):
+        if not self.sourcestamp or (self.sourcestamp.project != changed_project):
             # If we don't have a sourcestamp, or the project is  wrong, this
             # isn't the repo that's changed.  Drop through and check out the
             # head of the given branch
@@ -36,8 +41,9 @@ class Gerrit(Git):
             try:
                 change = self.build.getProperty("gerrit_change", '').split('/')
                 if len(change) == 2:
-                    gerrit_branch = "refs/changes/%2.2d/%d/%d" \
-                        % (int(change[0]) % 100, int(change[0]), int(change[1]))
+                    gerrit_branch = (
+                        f"refs/changes/{(int(change[0]) % 100):2}/{int(change[0])}/{int(change[1])}"
+                    )
                     self.updateSourceProperty("gerrit_branch", gerrit_branch)
             except Exception:
                 pass

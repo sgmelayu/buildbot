@@ -14,13 +14,22 @@
 # Copyright Buildbot Team Members
 
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from typing import Any
+
 from twisted.internet import defer
 from twisted.trial import unittest
 
 from buildbot import config
 from buildbot.schedulers import timed
+from buildbot.test.reactor import TestReactorMixin
 from buildbot.test.util import scheduler
-from buildbot.test.util.misc import TestReactorMixin
+
+if TYPE_CHECKING:
+    from buildbot.process.properties import Properties
+    from buildbot.util.twisted import InlineCallbacksType
 
 
 class TestException(Exception):
@@ -28,73 +37,91 @@ class TestException(Exception):
 
 
 class Periodic(scheduler.SchedulerMixin, TestReactorMixin, unittest.TestCase):
-
     OBJECTID = 23
     SCHEDULERID = 3
 
-    def setUp(self):
-        self.setUpTestReactor()
-        self.setUpScheduler()
+    @defer.inlineCallbacks
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        self.setup_test_reactor()
+        yield self.setUpScheduler()
 
-    def makeScheduler(self, firstBuildDuration=0, firstBuildError=False, exp_branch=None, **kwargs):
+    @defer.inlineCallbacks
+    def makeScheduler(
+        self,
+        firstBuildDuration: int = 0,
+        firstBuildError: bool = False,
+        exp_branch: str | None = None,
+        **kwargs: Any,
+    ) -> InlineCallbacksType[timed.Periodic]:
         self.sched = sched = timed.Periodic(**kwargs)
-        sched._reactor = self.reactor
 
-        self.attachScheduler(self.sched, self.OBJECTID, self.SCHEDULERID)
+        yield self.attachScheduler(self.sched, self.OBJECTID, self.SCHEDULERID)
 
         # keep track of builds in self.events
-        self.events = []
+        self.events: list[str] = []
 
-        def addBuildsetForSourceStampsWithDefaults(reason, sourcestamps, waited_for=False,
-                                                   properties=None, builderNames=None, **kw):
+        def addBuildsetForSourceStampsWithDefaults(
+            reason: str,
+            sourcestamps: list[dict[str, Any]] | None = None,
+            waited_for: bool = False,
+            properties: Properties | None = None,
+            builderNames: list[str] | None = None,
+            **kw: Any,
+        ) -> defer.Deferred[None]:
             self.assertIn('Periodic scheduler named', reason)
             # TODO: check branch
-            isFirst = (self.events == [])
+            isFirst = not self.events
             if self.reactor.seconds() == 0 and firstBuildError:
                 raise TestException()
-            self.events.append('B@%d' % self.reactor.seconds())
+            self.events.append(f'B@{int(self.reactor.seconds())}')
             if isFirst and firstBuildDuration:
-                d = defer.Deferred()
+                d: defer.Deferred[None] = defer.Deferred()
                 self.reactor.callLater(firstBuildDuration, d.callback, None)
                 return d
             return defer.succeed(None)
-        sched.addBuildsetForSourceStampsWithDefaults = addBuildsetForSourceStampsWithDefaults
+
+        sched.addBuildsetForSourceStampsWithDefaults = addBuildsetForSourceStampsWithDefaults  # type: ignore[assignment,method-assign]
 
         # handle state locally
-        self.state = {}
+        self.state: dict[str, Any] = {}
 
-        def getState(k, default):
+        def getState(k: str, default: Any) -> defer.Deferred[Any]:
             return defer.succeed(self.state.get(k, default))
-        sched.getState = getState
 
-        def setState(k, v):
+        sched.getState = getState  # type: ignore[method-assign]
+
+        def setState(k: str, v: Any) -> defer.Deferred[None]:
             self.state[k] = v
             return defer.succeed(None)
-        sched.setState = setState
+
+        sched.setState = setState  # type: ignore[assignment,method-assign]
 
         return sched
 
     # tests
 
-    def test_constructor_invalid(self):
+    def test_constructor_invalid(self) -> None:
         with self.assertRaises(config.ConfigErrors):
-            timed.Periodic(name='test', builderNames=['test'],
-                           periodicBuildTimer=-2)
+            timed.Periodic(name='test', builderNames=['test'], periodicBuildTimer=-2)
 
-    def test_constructor_no_reason(self):
-        sched = self.makeScheduler(
-            name='test', builderNames=['test'], periodicBuildTimer=10)
-        self.assertEqual(
-            sched.reason, "The Periodic scheduler named 'test' triggered this build")
+    @defer.inlineCallbacks
+    def test_constructor_no_reason(self) -> InlineCallbacksType[None]:
+        sched = yield self.makeScheduler(name='test', builderNames=['test'], periodicBuildTimer=10)
+        yield sched.configureService()
+        self.assertEqual(sched.reason, "The Periodic scheduler named 'test' triggered this build")
 
-    def test_constructor_reason(self):
-        sched = self.makeScheduler(
-            name='test', builderNames=['test'], periodicBuildTimer=10, reason="periodic")
+    @defer.inlineCallbacks
+    def test_constructor_reason(self) -> InlineCallbacksType[None]:
+        sched = yield self.makeScheduler(
+            name='test', builderNames=['test'], periodicBuildTimer=10, reason="periodic"
+        )
+        yield sched.configureService()
         self.assertEqual(sched.reason, "periodic")
 
-    def test_iterations_simple(self):
-        sched = self.makeScheduler(name='test', builderNames=['test'],
-                                   periodicBuildTimer=13)
+    @defer.inlineCallbacks
+    def test_iterations_simple(self) -> InlineCallbacksType[None]:
+        sched = yield self.makeScheduler(name='test', builderNames=['test'], periodicBuildTimer=13)
+        yield self.master.startService()
 
         sched.activate()
         self.reactor.advance(0)  # let it trigger the first build
@@ -103,46 +130,46 @@ class Periodic(scheduler.SchedulerMixin, TestReactorMixin, unittest.TestCase):
         self.assertEqual(self.events, ['B@0', 'B@13', 'B@26'])
         self.assertEqual(self.state.get('last_build'), 26)
 
-        d = sched.deactivate()
-        return d
+        yield sched.deactivate()
 
-    def test_iterations_simple_branch(self):
-        sched = self.makeScheduler(exp_branch='newfeature',
-                                   name='test', builderNames=['test'],
-                                   periodicBuildTimer=13, branch='newfeature')
+    @defer.inlineCallbacks
+    def test_iterations_simple_branch(self) -> InlineCallbacksType[None]:
+        yield self.makeScheduler(
+            exp_branch='newfeature',
+            name='test',
+            builderNames=['test'],
+            periodicBuildTimer=13,
+            branch='newfeature',
+        )
 
-        sched.activate()
+        yield self.master.startService()
+
         self.reactor.advance(0)  # let it trigger the first build
         while self.reactor.seconds() < 30:
             self.reactor.advance(1)
         self.assertEqual(self.events, ['B@0', 'B@13', 'B@26'])
         self.assertEqual(self.state.get('last_build'), 26)
 
-        d = sched.deactivate()
-        return d
+    @defer.inlineCallbacks
+    def test_iterations_long(self) -> InlineCallbacksType[None]:
+        yield self.makeScheduler(
+            name='test', builderNames=['test'], periodicBuildTimer=10, firstBuildDuration=15
+        )  # takes a while to start a build
 
-    def test_iterations_long(self):
-        sched = self.makeScheduler(name='test', builderNames=['test'],
-                                   periodicBuildTimer=10,
-                                   firstBuildDuration=15)  # takes a while to start a build
-
-        sched.activate()
+        yield self.master.startService()
         self.reactor.advance(0)  # let it trigger the first (longer) build
         while self.reactor.seconds() < 40:
             self.reactor.advance(1)
         self.assertEqual(self.events, ['B@0', 'B@15', 'B@25', 'B@35'])
         self.assertEqual(self.state.get('last_build'), 35)
 
-        d = sched.deactivate()
-        return d
-
     @defer.inlineCallbacks
-    def test_start_build_error(self):
-        sched = self.makeScheduler(name='test', builderNames=['test'],
-                                   periodicBuildTimer=10,
-                                   firstBuildError=True)  # error during first build start
+    def test_start_build_error(self) -> InlineCallbacksType[None]:
+        yield self.makeScheduler(
+            name='test', builderNames=['test'], periodicBuildTimer=10, firstBuildError=True
+        )  # error during first build start
 
-        yield sched.activate()
+        yield self.master.startService()
         self.reactor.advance(0)  # let it trigger the first (error) build
         while self.reactor.seconds() < 40:
             self.reactor.advance(1)
@@ -150,20 +177,18 @@ class Periodic(scheduler.SchedulerMixin, TestReactorMixin, unittest.TestCase):
         self.assertEqual(self.state.get('last_build'), 40)
         self.assertEqual(1, len(self.flushLoggedErrors(TestException)))
 
-        yield sched.deactivate()
+    @defer.inlineCallbacks
+    def test_iterations_stop_while_starting_build(self) -> InlineCallbacksType[None]:
+        sched = yield self.makeScheduler(
+            name='test', builderNames=['test'], periodicBuildTimer=13, firstBuildDuration=6
+        )  # takes a while to start a build
 
-    def test_iterations_stop_while_starting_build(self):
-        sched = self.makeScheduler(name='test', builderNames=['test'],
-                                   periodicBuildTimer=13,
-                                   firstBuildDuration=6)  # takes a while to start a build
-
-        sched.activate()
+        yield self.master.startService()
         self.reactor.advance(0)  # let it trigger the first (longer) build
         self.reactor.advance(3)  # get partway into that build
 
         d = sched.deactivate()  # begin stopping the service
-        d.addCallback(
-            lambda _: self.events.append('STOP@%d' % self.reactor.seconds()))
+        d.addCallback(lambda _: self.events.append(f'STOP@{int(self.reactor.seconds())}'))
 
         # run the clock out
         while self.reactor.seconds() < 40:
@@ -174,44 +199,41 @@ class Periodic(scheduler.SchedulerMixin, TestReactorMixin, unittest.TestCase):
         self.assertEqual(self.events, ['B@0', 'STOP@6'])
         self.assertEqual(self.state.get('last_build'), 0)
 
-        return d
+        yield d
 
-    def test_iterations_with_initial_state(self):
-        sched = self.makeScheduler(name='test', builderNames=['test'],
-                                   periodicBuildTimer=13)
+    @defer.inlineCallbacks
+    def test_iterations_with_initial_state(self) -> InlineCallbacksType[None]:
+        yield self.makeScheduler(name='test', builderNames=['test'], periodicBuildTimer=13)
         # so next build should start in 6s
         self.state['last_build'] = self.reactor.seconds() - 7
 
-        sched.activate()
+        yield self.master.startService()
         self.reactor.advance(0)  # let it trigger the first build
         while self.reactor.seconds() < 30:
             self.reactor.advance(1)
         self.assertEqual(self.events, ['B@6', 'B@19'])
         self.assertEqual(self.state.get('last_build'), 19)
 
-        d = sched.deactivate()
-        return d
-
     @defer.inlineCallbacks
-    def test_getNextBuildTime_None(self):
-        sched = self.makeScheduler(name='test', builderNames=['test'],
-                                   periodicBuildTimer=13)
+    def test_getNextBuildTime_None(self) -> InlineCallbacksType[None]:
+        sched = yield self.makeScheduler(name='test', builderNames=['test'], periodicBuildTimer=13)
+        yield sched.configureService()
         # given None, build right away
         t = yield sched.getNextBuildTime(None)
         self.assertEqual(t, 0)
 
     @defer.inlineCallbacks
-    def test_getNextBuildTime_given(self):
-        sched = self.makeScheduler(name='test', builderNames=['test'],
-                                   periodicBuildTimer=13)
+    def test_getNextBuildTime_given(self) -> InlineCallbacksType[None]:
+        sched = yield self.makeScheduler(name='test', builderNames=['test'], periodicBuildTimer=13)
+        yield sched.configureService()
         # given a time, add the periodicBuildTimer to it
         t = yield sched.getNextBuildTime(20)
         self.assertEqual(t, 33)
 
     @defer.inlineCallbacks
-    def test_enabled_callback(self):
-        sched = self.makeScheduler(name='test', builderNames=['test'],
-                                   periodicBuildTimer=13)
+    def test_enabled_callback(self) -> InlineCallbacksType[None]:
+        sched = yield self.makeScheduler(name='test', builderNames=['test'], periodicBuildTimer=13)
+        yield self.master.startService()
         expectedValue = not sched.enabled
         yield sched._enabledCallback(None, {'enabled': not sched.enabled})
         self.assertEqual(sched.enabled, expectedValue)
@@ -219,28 +241,27 @@ class Periodic(scheduler.SchedulerMixin, TestReactorMixin, unittest.TestCase):
         yield sched._enabledCallback(None, {'enabled': not sched.enabled})
         self.assertEqual(sched.enabled, expectedValue)
 
+        yield sched.deactivate()
+
     @defer.inlineCallbacks
-    def test_disabled_activate(self):
-        sched = self.makeScheduler(name='test', builderNames=['test'],
-                                   periodicBuildTimer=13)
+    def test_disabled_activate(self) -> InlineCallbacksType[None]:
+        sched = yield self.makeScheduler(name='test', builderNames=['test'], periodicBuildTimer=13)
         yield sched._enabledCallback(None, {'enabled': not sched.enabled})
         self.assertEqual(sched.enabled, False)
         r = yield sched.activate()
         self.assertEqual(r, None)
 
     @defer.inlineCallbacks
-    def test_disabled_deactivate(self):
-        sched = self.makeScheduler(name='test', builderNames=['test'],
-                                   periodicBuildTimer=13)
+    def test_disabled_deactivate(self) -> InlineCallbacksType[None]:
+        sched = yield self.makeScheduler(name='test', builderNames=['test'], periodicBuildTimer=13)
+        yield self.master.startService()
         yield sched._enabledCallback(None, {'enabled': not sched.enabled})
         self.assertEqual(sched.enabled, False)
-        r = yield sched.deactivate()
-        self.assertEqual(r, None)
+        yield sched.deactivate()
 
     @defer.inlineCallbacks
-    def test_disabled_start_build(self):
-        sched = self.makeScheduler(name='test', builderNames=['test'],
-                                   periodicBuildTimer=13)
+    def test_disabled_start_build(self) -> InlineCallbacksType[None]:
+        sched = yield self.makeScheduler(name='test', builderNames=['test'], periodicBuildTimer=13)
         yield sched._enabledCallback(None, {'enabled': not sched.enabled})
         self.assertEqual(sched.enabled, False)
         r = yield sched.startBuild()

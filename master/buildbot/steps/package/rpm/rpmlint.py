@@ -17,14 +17,21 @@
 Steps and objects related to rpmlint.
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from typing import Any
+
 from twisted.internet import defer
 
 from buildbot.steps.package import util as pkgutil
 from buildbot.steps.shell import Test
 
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
+
 
 class RpmLint(Test):
-
     """
     Rpmlint build step.
     """
@@ -37,10 +44,9 @@ class RpmLint(Test):
     fileloc = '.'
     config = None
 
-    def __init__(self,
-                 fileloc=None,
-                 config=None,
-                 **kwargs):
+    def __init__(
+        self, fileloc: str | None = None, config: str | None = None, **kwargs: Any
+    ) -> None:
         """
         Create the Rpmlint object.
 
@@ -66,15 +72,15 @@ class RpmLint(Test):
         self.addLogObserver('stdio', self.obs)
 
     @defer.inlineCallbacks
-    def createSummary(self):
+    def createSummary(self) -> InlineCallbacksType[None]:
         """
         Create nice summary logs.
 
         @param log: log to create summary off of.
         """
         warnings = self.obs.warnings
-        errors = []
+        errors: list[str] = []
         if warnings:
-            yield self.addCompleteLog('%d Warnings' % len(warnings), "\n".join(warnings))
+            yield self.addCompleteLog(f'{len(warnings)} Warnings', "\n".join(warnings))
         if errors:
-            yield self.addCompleteLog('%d Errors' % len(errors), "\n".join(errors))
+            yield self.addCompleteLog(f'{len(errors)} Errors', "\n".join(errors))

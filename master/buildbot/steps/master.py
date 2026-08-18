@@ -13,29 +13,41 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
 import os
 import pprint
 import re
+from typing import TYPE_CHECKING
+from typing import Any
+from typing import Union
+from typing import cast
 
 from twisted.internet import defer
-from twisted.internet import error
 from twisted.internet import reactor
-from twisted.internet.protocol import ProcessProtocol
 from twisted.python import runtime
 
+from buildbot.process.buildstep import CANCELLED
 from buildbot.process.buildstep import FAILURE
 from buildbot.process.buildstep import SUCCESS
 from buildbot.process.buildstep import BuildStep
 from buildbot.util import deferwaiter
+from buildbot.util import runprocess
+
+if TYPE_CHECKING:
+    from twisted.python.failure import Failure
+
+    from buildbot.interfaces import IMaybeRenderableType
+    from buildbot.util.twisted import InlineCallbacksType
 
 
 class MasterShellCommand(BuildStep):
-
     """
     Run a shell command locally - on the buildmaster.  The shell command
     COMMAND is specified just as for a RemoteShellCommand.  Note that extra
     logfiles are not supported.
     """
+
     name = 'MasterShellCommand'
     description = 'Running'
     descriptionDone = 'Ran'
@@ -44,48 +56,26 @@ class MasterShellCommand(BuildStep):
     haltOnFailure = True
     flunkOnFailure = True
 
-    def __init__(self, command, **kwargs):
+    def __init__(
+        self, command: IMaybeRenderableType[str] | IMaybeRenderableType[list[str]], **kwargs: Any
+    ) -> None:
         self.env = kwargs.pop('env', None)
         self.usePTY = kwargs.pop('usePTY', 0)
         self.interruptSignal = kwargs.pop('interruptSignal', 'KILL')
         self.logEnviron = kwargs.pop('logEnviron', True)
+        self.runtime_timeout = kwargs.pop('runtime_timeout', 3600)
 
         super().__init__(**kwargs)
 
         self.command = command
+        self.process: runprocess.RunProcess | None = None
         self.masterWorkdir = self.workdir
-        self._deferwaiter = deferwaiter.DeferWaiter()
-        self._status_object = None
-
-    class LocalPP(ProcessProtocol):
-
-        def __init__(self, step):
-            self.step = step
-            self._finish_d = defer.Deferred()
-            self.step._deferwaiter.add(self._finish_d)
-
-        def outReceived(self, data):
-            self.step._deferwaiter.add(self.step.stdio_log.addStdout(data))
-
-        def errReceived(self, data):
-            self.step._deferwaiter.add(self.step.stdio_log.addStderr(data))
-
-        def processEnded(self, status_object):
-            if status_object.value.exitCode is not None:
-                msg = "exit status {}\n".format(status_object.value.exitCode)
-                self.step._deferwaiter.add(self.step.stdio_log.addHeader(msg))
-
-            if status_object.value.signal is not None:
-                msg = "signal {}\n".format(status_object.value.signal)
-                self.step._deferwaiter.add(self.step.stdio_log.addHeader(msg))
-
-            self.step._status_object = status_object
-            self._finish_d.callback(None)
+        self._deferwaiter: deferwaiter.DeferWaiter[Any] = deferwaiter.DeferWaiter()
 
     @defer.inlineCallbacks
-    def run(self):
+    def run(self) -> InlineCallbacksType[int]:
         # render properties
-        command = self.command
+        command = cast(Union[str, list[str]], self.command)
         # set up argv
         if isinstance(command, (str, bytes)):
             if runtime.platformType == 'win32':
@@ -115,11 +105,13 @@ class MasterShellCommand(BuildStep):
         else:
             yield self.stdio_log.addHeader(" ".join(command) + "\n\n")
         yield self.stdio_log.addHeader("** RUNNING ON BUILDMASTER **\n")
-        yield self.stdio_log.addHeader(" in dir {}\n".format(os.getcwd()))
-        yield self.stdio_log.addHeader(" argv: {}\n".format(argv))
+        yield self.stdio_log.addHeader(f" in dir {os.getcwd()}\n")
+        yield self.stdio_log.addHeader(f" argv: {argv}\n")
 
+        os_env = os.environ
+        env: dict[Any, Any] | os._Environ[str]
         if self.env is None:
-            env = os.environ
+            env = os_env
         else:
             assert isinstance(self.env, dict)
             env = self.env
@@ -135,46 +127,65 @@ class MasterShellCommand(BuildStep):
             # do substitution on variable values matching pattern: ${name}
             p = re.compile(r'\${([0-9a-zA-Z_]*)}')
 
-            def subst(match):
+            def subst(match: re.Match[str]) -> str:
                 return os.environ.get(match.group(1), "")
+
             newenv = {}
             for key, v in env.items():
                 if v is not None:
                     if not isinstance(v, (str, bytes)):
-                        raise RuntimeError(("'env' values must be strings or "
-                                            "lists; key '{}' is incorrect").format(key))
-                    newenv[key] = p.sub(subst, env[key])
+                        raise RuntimeError(
+                            f"'env' values must be strings or lists; key '{key}' is incorrect"
+                        )
+                    newenv[key] = p.sub(subst, v)  # type: ignore[arg-type]
+
+            # RunProcess will take environment values from os.environ in cases of env not having
+            # the keys that are in os.environ. Prevent this by putting None into those keys.
+            for key in os_env:
+                if key not in env:
+                    env[key] = None
+
             env = newenv
 
         if self.logEnviron:
-            yield self.stdio_log.addHeader(" env: %r\n" % (env,))
+            yield self.stdio_log.addHeader(f" env: {env!r}\n")
 
-        # TODO add a timeout?
-        self.process = reactor.spawnProcess(self.LocalPP(self), argv[0], argv,
-                                            path=self.masterWorkdir, usePTY=self.usePTY, env=env)
+        if self.stopped:
+            return CANCELLED
 
-        # self._deferwaiter will yield only after LocalPP finishes
+        on_stdout = lambda data: self._deferwaiter.add(self.stdio_log.addStdout(data))
+        on_stderr = lambda data: self._deferwaiter.add(self.stdio_log.addStderr(data))
 
+        self.process = runprocess.create_process(
+            reactor,
+            argv,
+            workdir=self.masterWorkdir,
+            use_pty=self.usePTY,
+            env=env,
+            collect_stdout=on_stdout,
+            collect_stderr=on_stderr,
+            runtime_timeout=self.runtime_timeout,
+        )
+
+        yield self.process.start()
         yield self._deferwaiter.wait()
 
-        status_value = self._status_object.value
-        if status_value.signal is not None:
-            self.descriptionDone = ["killed ({})".format(status_value.signal)]
+        if self.process.result_signal is not None:
+            yield self.stdio_log.addHeader(f"signal {self.process.result_signal}\n")
+            self.descriptionDone = [f"killed ({self.process.result_signal})"]  # type: ignore[assignment]
             return FAILURE
-        elif status_value.exitCode != 0:
-            self.descriptionDone = ["failed ({})".format(status_value.exitCode)]
+        elif self.process.result_rc != 0:
+            yield self.stdio_log.addHeader(f"exit status {self.process.result_signal}\n")
+            self.descriptionDone = [f"failed ({self.process.result_rc})"]  # type: ignore[assignment]
             return FAILURE
         else:
             return SUCCESS
 
-    def interrupt(self, reason):
-        try:
-            self.process.signalProcess(self.interruptSignal)
-        except KeyError:  # Process not started yet
-            pass
-        except error.ProcessExitedAlready:
-            pass
-        super().interrupt(reason)
+    @defer.inlineCallbacks
+    def interrupt(self, reason: str | Failure) -> InlineCallbacksType[None]:
+        yield super().interrupt(reason)
+        if self.process is not None:
+            self.process.send_signal(self.interruptSignal)
 
 
 class SetProperty(BuildStep):
@@ -183,15 +194,15 @@ class SetProperty(BuildStep):
     descriptionDone = ['Set']
     renderables = ['property', 'value']
 
-    def __init__(self, property, value, **kwargs):
+    def __init__(self, property: str, value: Any, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.property = property
         self.value = value
 
-    def run(self):
+    def run(self) -> defer.Deferred[int]:
+        assert self.build is not None
         properties = self.build.getProperties()
-        properties.setProperty(
-            self.property, self.value, self.name, runtime=True)
+        properties.setProperty(self.property, self.value, self.name, runtime=True)
         return defer.succeed(SUCCESS)
 
 
@@ -201,11 +212,11 @@ class SetProperties(BuildStep):
     descriptionDone = ['Properties Set']
     renderables = ['properties']
 
-    def __init__(self, properties=None, **kwargs):
+    def __init__(self, properties: dict[str, Any] | None = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.properties = properties
 
-    def run(self):
+    def run(self) -> defer.Deferred[int]:
         if self.properties is None:
             return defer.succeed(SUCCESS)
         for k, v in self.properties.items():
@@ -219,12 +230,12 @@ class Assert(BuildStep):
     descriptionDone = ["checked"]
     renderables = ['check']
 
-    def __init__(self, check, **kwargs):
+    def __init__(self, check: Any, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.check = check
-        self.descriptionDone = ["checked {}".format(repr(self.check))]
+        self.descriptionDone = [f"checked {self.check!r}"]
 
-    def run(self):
+    def run(self) -> defer.Deferred[int]:
         if self.check:
             return defer.succeed(SUCCESS)
         return defer.succeed(FAILURE)
@@ -236,12 +247,12 @@ class LogRenderable(BuildStep):
     descriptionDone = ['Logged']
     renderables = ['content']
 
-    def __init__(self, content, **kwargs):
+    def __init__(self, content: Any, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.content = content
 
     @defer.inlineCallbacks
-    def run(self):
+    def run(self) -> InlineCallbacksType[int]:
         content = pprint.pformat(self.content)
         yield self.addCompleteLog(name='Output', text=content)
         return SUCCESS

@@ -13,99 +13,118 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
+from typing import Callable
+
 from twisted.internet import defer
 
 from buildbot import util
 from buildbot.util import lineboundaries
+from buildbot.util.twisted import async_to_deferred
 
 
 class FakeLogFile:
-
-    def __init__(self, name):
+    def __init__(self, name: str) -> None:
         self.name = name
         self.header = ''
         self.stdout = ''
         self.stderr = ''
-        self.lbfs = {}
+        self.lbfs: dict[str, lineboundaries.LineBoundaryFinder] = {}
         self.finished = False
-        self._finish_waiters = []
         self._had_errors = False
-        self.subPoint = util.subscription.SubscriptionPoint("%r log" % (name,))
+        self.subPoint = util.subscription.SubscriptionPoint(f"{name!r} log")
 
-    def getName(self):
+    def getName(self) -> str:
         return self.name
 
-    def subscribe(self, callback):
+    def subscribe(self, callback: Callable) -> util.subscription.Subscription:
         return self.subPoint.subscribe(callback)
 
-    def _getLbf(self, stream, meth):
+    def _getLbf(self, stream: str) -> lineboundaries.LineBoundaryFinder:
         try:
             return self.lbfs[stream]
         except KeyError:
-            def wholeLines(lines):
-                self.subPoint.deliver(stream, lines)
-                assert not self.finished
-            lbf = self.lbfs[stream] = \
-                lineboundaries.LineBoundaryFinder(wholeLines)
+            lbf = self.lbfs[stream] = lineboundaries.LineBoundaryFinder()
             return lbf
 
-    def addHeader(self, text):
+    def _on_whole_lines(self, stream: str | None, lines: str | None) -> None:
+        self.subPoint.deliver(stream, lines)
+        assert not self.finished
+
+    def _split_lines(self, stream: str, text: str) -> None:
+        lbf = self._getLbf(stream)
+        lines = lbf.append(text)
+        if lines is None:
+            return
+        self._on_whole_lines(stream, lines)
+
+    def addHeader(self, text: str | bytes) -> defer.Deferred[None]:
         if not isinstance(text, str):
             text = text.decode('utf-8')
         self.header += text
-        self._getLbf('h', 'headerReceived').append(text)
+        self._split_lines('h', text)
         return defer.succeed(None)
 
-    def addStdout(self, text):
+    def addStdout(self, text: str | bytes) -> defer.Deferred[None]:
         if not isinstance(text, str):
             text = text.decode('utf-8')
         self.stdout += text
-        self._getLbf('o', 'outReceived').append(text)
+        self._split_lines('o', text)
         return defer.succeed(None)
 
-    def addStderr(self, text):
+    def addStderr(self, text: str | bytes) -> defer.Deferred[None]:
         if not isinstance(text, str):
             text = text.decode('utf-8')
         self.stderr += text
-        self._getLbf('e', 'errReceived').append(text)
+        self._split_lines('e', text)
         return defer.succeed(None)
 
-    def isFinished(self):
-        return self.finished
+    def add_header_lines(self, text: str | bytes) -> defer.Deferred[None]:
+        if not isinstance(text, str):
+            text = text.decode('utf-8')
+        self.header += text
+        self._on_whole_lines('h', text)
+        return defer.succeed(None)
 
-    def waitUntilFinished(self):
-        d = defer.Deferred()
-        if self.finished:
-            d.succeed(None)
-        else:
-            self._finish_waiters.append(d)
-        return d
+    def add_stdout_lines(self, text: str | bytes) -> defer.Deferred[None]:
+        if not isinstance(text, str):
+            text = text.decode('utf-8')
+        self.stdout += text
+        self._on_whole_lines('o', text)
+        return defer.succeed(None)
 
-    def flushFakeLogfile(self):
-        for lbf in self.lbfs.values():
-            lbf.flush()
+    def add_stderr_lines(self, text: str | bytes) -> defer.Deferred[None]:
+        if not isinstance(text, str):
+            text = text.decode('utf-8')
+        self.stderr += text
+        self._on_whole_lines('e', text)
+        return defer.succeed(None)
 
-    def had_errors(self):
+    def had_errors(self) -> bool:
         return self._had_errors
 
-    @defer.inlineCallbacks
-    def finish(self):
+    def flush(self) -> defer.Deferred[None]:
+        for stream, lbf in self.lbfs.items():
+            lines = lbf.flush()
+            if lines is not None:
+                self.subPoint.deliver(stream, lines)
+        return defer.succeed(None)
+
+    @async_to_deferred
+    async def finish(self) -> None:
         assert not self.finished
 
-        self.flushFakeLogfile()
+        await self.flush()
         self.finished = True
 
         # notify subscribers *after* finishing the log
         self.subPoint.deliver(None, None)
 
-        yield self.subPoint.waitForDeliveriesToFinish()
-        self._had_errors = len(self.subPoint.pop_exceptions()) > 0
+        await self.subPoint.waitForDeliveriesToFinish()
+        self._had_errors = len(self.subPoint.pop_exceptions()) > 0  # type: ignore[arg-type]
 
-        # notify those waiting for finish
-        for d in self._finish_waiters:
-            d.callback(None)
-
-    def fakeData(self, header='', stdout='', stderr=''):
+    def fakeData(self, header: str = '', stdout: str = '', stderr: str = '') -> None:
         if header:
             self.header += header
         if stdout:

@@ -1,0 +1,33 @@
+.bb-buildsummary-tooltip-collapsed-entries {
+  font-size: 1.333em;
+  line-height: 0.75em;
+  vertical-align: -15%;
+}
+
+.bb-buildsummary-tooltip-step-badge,
+.bb-buildsummary-tooltip-step-name {
+  float: left;
+}
+
+.bb-buildsummary-tooltip-step-time {
+  float: right;
+}
+
+// Theme overrides for tooltip card (rendered outside #root via portal)
+.tooltip .card {
+  background-color: var(--bb-background-color) !important;
+  border-color: var(--bb-card-border-color) !important;
+  color: var(--bb-text-color) !important;
+}
+
+.tooltip .card-header {
+  background-color: var(--bb-card-bg-color) !important;
+  border-bottom-color: var(--bb-card-border-color) !important;
+  color: var(--bb-text-color) !important;
+}
+
+.tooltip .list-group-item {
+  background-color: var(--bb-background-color) !important;
+  border-color: var(--bb-card-border-color) !important;
+  color: var(--bb-text-color) !important;
+}

@@ -13,22 +13,26 @@
 #
 # Portions Copyright Buildbot Team Members
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 from buildbot.util import service
-from buildbot.worker.manager import WorkerManager
+
+if TYPE_CHECKING:
+    from buildbot.machine.base import Machine
 
 
 class MachineManager(service.BuildbotServiceManager):
-    reconfig_priority = WorkerManager.reconfig_priority + 1
-    name = 'MachineManager'
+    name: str | None = 'MachineManager'
     managed_services_name = 'machines'
     config_attr = 'machines'
 
     @property
-    def machines(self):
+    def machines(self) -> dict[str, Machine]:
         return self.namedServices
 
-    def getMachineByName(self, name):
+    def getMachineByName(self, name: str) -> Machine | None:
         if name in self.machines:
             return self.machines[name]
         return None

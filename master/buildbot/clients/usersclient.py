@@ -16,38 +16,44 @@
 # this class is known to contain cruft and will be looked at later, so
 # no current implementation utilizes it aside from scripts.runner.
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from typing import Any
+
 from twisted.cred import credentials
+from twisted.internet import defer
 from twisted.internet import reactor
 from twisted.spread import pb
 
+from buildbot.util import unicode2bytes
+
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
+
 
 class UsersClient:
-
     """
     Client set up in buildbot.scripts.runner to send `buildbot user` args
     over a PB connection to perspective_commandline that will execute the
     args on the database.
     """
 
-    def __init__(self, master, username, password, port):
+    def __init__(self, master: str, username: Any, password: Any, port: int | str) -> None:
         self.host = master
-        self.username = username
-        self.password = password
+        self.username = unicode2bytes(username)
+        self.password = unicode2bytes(password)
         self.port = int(port)
 
-    def send(self, op, bb_username, bb_password, ids, info):
+    @defer.inlineCallbacks
+    def send(
+        self, op: Any, bb_username: Any, bb_password: Any, ids: Any, info: Any
+    ) -> InlineCallbacksType[Any]:
         f = pb.PBClientFactory()
         d = f.login(credentials.UsernamePassword(self.username, self.password))
-        reactor.connectTCP(self.host, self.port, f)
+        reactor.connectTCP(self.host, self.port, f)  # type: ignore[attr-defined]
 
-        @d.addCallback
-        def call_commandline(remote):
-            d = remote.callRemote("commandline", op, bb_username,
-                                  bb_password, ids, info)
-
-            @d.addCallback
-            def returnAndLose(res):
-                remote.broker.transport.loseConnection()
-                return res
-            return d
-        return d
+        remote = yield d
+        res = yield remote.callRemote("commandline", op, bb_username, bb_password, ids, info)
+        remote.broker.transport.loseConnection()
+        return res

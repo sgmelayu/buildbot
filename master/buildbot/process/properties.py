@@ -12,11 +12,16 @@
 # Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
 # Copyright Buildbot Team Members
+from __future__ import annotations
 
 import collections
 import json
 import re
 import weakref
+from typing import TYPE_CHECKING
+from typing import Any
+from typing import Callable
+from typing import ClassVar
 
 from twisted.internet import defer
 from twisted.python.components import registerAdapter
@@ -28,10 +33,14 @@ from buildbot.interfaces import IProperties
 from buildbot.interfaces import IRenderable
 from buildbot.util import flatten
 
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from buildbot.util.twisted import InlineCallbacksType
+
 
 @implementer(IProperties)
 class Properties(util.ComparableMixin):
-
     """
     I represent a set of properties that can be interpolated into various
     strings in buildsteps.
@@ -47,36 +56,36 @@ class Properties(util.ComparableMixin):
     string when used as a mapping.
     """
 
-    compare_attrs = ('properties',)
+    compare_attrs: ClassVar[Sequence[str]] = ('properties',)
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
         """
         @param kwargs: initial property values (for testing)
         """
-        self.properties = {}
+        self.properties: dict[str, tuple[Any, str]] = {}
         # Track keys which are 'runtime', and should not be
         # persisted if a build is rebuilt
-        self.runtime = set()
-        self.build = None  # will be set by the Build when starting
-        self._used_secrets = {}
+        self.runtime: set[str] = set()
+        self.build: Any = None  # will be set by the Build when starting
+        self._used_secrets: dict[str, str] = {}
         if kwargs:
             self.update(kwargs, "TEST")
-        self._master = None
-        self._sourcestamps = None
-        self._changes = None
+        self._master: Any = None
+        self._sourcestamps: list[Any] | None = None
+        self._changes: list[Any] | None = None
 
     @property
-    def master(self):
+    def master(self) -> Any:
         if self.build is not None:
             return self.build.master
         return self._master
 
     @master.setter
-    def master(self, value):
+    def master(self, value: Any) -> None:
         self._master = value
 
     @property
-    def sourcestamps(self):
+    def sourcestamps(self) -> list[Any]:
         if self.build is not None:
             return [b.asDict() for b in self.build.getAllSourceStamps()]
         elif self._sourcestamps is not None:
@@ -84,17 +93,17 @@ class Properties(util.ComparableMixin):
         raise AttributeError('neither build nor _sourcestamps are set')
 
     @sourcestamps.setter
-    def sourcestamps(self, value):
+    def sourcestamps(self, value: list[Any]) -> None:
         self._sourcestamps = value
 
-    def getSourceStamp(self, codebase=''):
+    def getSourceStamp(self, codebase: str = '') -> dict[str, Any] | None:
         for source in self.sourcestamps:
             if source['codebase'] == codebase:
                 return source
         return None
 
     @property
-    def changes(self):
+    def changes(self) -> list[Any]:
         if self.build is not None:
             return [c.asChDict() for c in self.build.allChanges()]
         elif self._changes is not None:
@@ -102,76 +111,74 @@ class Properties(util.ComparableMixin):
         raise AttributeError('neither build nor _changes are set')
 
     @changes.setter
-    def changes(self, value):
+    def changes(self, value: list[Any]) -> None:
         self._changes = value
 
     @property
-    def files(self):
+    def files(self) -> list[Any]:
         if self.build is not None:
             return self.build.allFiles()
-        files = []
+        files: list[Any] = []
         # self.changes, not self._changes to raise AttributeError if unset
         for chdict in self.changes:
             files.extend(chdict['files'])
         return files
 
     @classmethod
-    def fromDict(cls, propDict):
+    def fromDict(cls, propDict: dict[str, tuple[Any, str]]) -> Properties:
         properties = cls()
         for name, (value, source) in propDict.items():
             properties.setProperty(name, value, source)
         return properties
 
-    def __getstate__(self):
+    def __getstate__(self) -> dict[str, Any]:
         d = self.__dict__.copy()
         d['build'] = None
         return d
 
-    def __setstate__(self, d):
+    def __setstate__(self, d: dict[str, Any]) -> None:
         self.__dict__ = d
         if not hasattr(self, 'runtime'):
             self.runtime = set()
 
-    def __contains__(self, name):
+    def __contains__(self, name: object) -> bool:
         return name in self.properties
 
-    def __getitem__(self, name):
+    def __getitem__(self, name: str) -> Any:
         """Just get the value for this property."""
         rv = self.properties[name][0]
         return rv
 
-    def __bool__(self):
+    def __bool__(self) -> bool:
         return bool(self.properties)
 
-    def getPropertySource(self, name):
+    def getPropertySource(self, name: str) -> str:
         return self.properties[name][1]
 
-    def asList(self):
+    def asList(self) -> list[tuple[str, Any, str]]:
         """Return the properties as a sorted list of (name, value, source)"""
         ret = sorted([(k, v[0], v[1]) for k, v in self.properties.items()])
         return ret
 
-    def asDict(self):
+    def asDict(self) -> dict[str, tuple[Any, str]]:
         """Return the properties as a simple key:value dictionary,
         properly unicoded"""
         return self.properties.copy()
 
-    def __repr__(self):
-        return ('Properties(**' +
-                repr(dict((k, v[0]) for k, v in self.properties.items())) +
-                ')')
+    def __repr__(self) -> str:
+        return 'Properties(**' + repr(dict((k, v[0]) for k, v in self.properties.items())) + ')'
 
-    def update(self, dict, source, runtime=False):
+    def update(self, dict: dict[str, Any], source: str, runtime: bool = False) -> None:
         """Update this object from a dictionary, with an explicit source specified."""
         for k, v in dict.items():
             self.setProperty(k, v, source, runtime=runtime)
 
-    def updateFromProperties(self, other):
-        """Update this object based on another object; the other object's """
+    def updateFromProperties(self, other: Properties) -> None:
+        """Update this object based on another object; the other object's"""
         self.properties.update(other.properties)
         self.runtime.update(other.runtime)
 
-    def updateFromPropertiesNoRuntime(self, other):
+    def updateFromPropertiesNoRuntime(self, other: Properties) -> None:
         """Update this object based on another object, but don't
         include properties that were marked as runtime."""
         for k, v in other.properties.items():
@@ -180,15 +187,15 @@ class Properties(util.ComparableMixin):
 
     # IProperties methods
 
-    def getProperty(self, name, default=None):
+    def getProperty(self, name: str, default: Any = None) -> Any:
         return self.properties.get(name, (default,))[0]
 
-    def hasProperty(self, name):
+    def hasProperty(self, name: str) -> bool:
         return name in self.properties
 
     has_key = hasProperty
 
-    def setProperty(self, name, value, source, runtime=False):
+    def setProperty(self, name: str, value: Any, source: str, runtime: bool = False) -> None:
         name = util.bytes2unicode(name)
         if not IRenderable.providedBy(value):
             json.dumps(value)  # Let the exception propagate ...
@@ -198,26 +205,26 @@ class Properties(util.ComparableMixin):
         if runtime:
             self.runtime.add(name)
 
-    def getProperties(self):
+    def getProperties(self) -> Properties:
         return self
 
-    def getBuild(self):
+    def getBuild(self) -> Any:
         return self.build
 
-    def render(self, value):
+    def render(self, value: Any) -> defer.Deferred[Any]:
         renderable = IRenderable(value)
         return defer.maybeDeferred(renderable.getRenderingFor, self)
 
     # as the secrets are used in the renderable, they can pretty much arrive anywhere
     # in the log of state strings
     # so we have the renderable record here which secrets are used that we must remove
-    def useSecret(self, secret_value, secret_name):
+    def useSecret(self, secret_value: str, secret_name: str) -> None:
         if secret_value.strip():
             self._used_secrets[secret_value] = "<" + secret_name + ">"
 
     # This method shall then be called to remove secrets from any text that could be logged
     # somewhere and that could contain secrets
-    def cleanupTextFromSecrets(self, text):
+    def cleanupTextFromSecrets(self, text: str) -> str:
         # Better be correct and inefficient than efficient and wrong
         secrets = self._used_secrets
         for k in sorted(secrets, key=len, reverse=True):
@@ -226,7 +233,6 @@ class Properties(util.ComparableMixin):
 
 
 class PropertiesMixin:
-
     """
     A mixin to add L{IProperties} methods to a class which does not implement
     the full interface, only getProperties() function.
@@ -239,16 +245,19 @@ class PropertiesMixin:
     """
 
     set_runtime_properties = False
+    getProperties: Callable[[], IProperties]
 
-    def getProperty(self, propname, default=None):
+    def getProperty(self, propname: str, default: Any = None) -> Any:
         return self.getProperties().getProperty(propname, default)
 
-    def hasProperty(self, propname):
+    def hasProperty(self, propname: str) -> bool:
         return self.getProperties().hasProperty(propname)
 
     has_key = hasProperty
 
-    def setProperty(self, propname, value, source='Unknown', runtime=None):
+    def setProperty(
+        self, propname: str, value: Any, source: str = 'Unknown', runtime: bool | None = None
+    ) -> None:
         # source is not optional in IProperties, but is optional here to avoid
         # breaking user-supplied code that fails to specify a source
         props = self.getProperties()
@@ -256,102 +265,107 @@ class PropertiesMixin:
             runtime = self.set_runtime_properties
         props.setProperty(propname, value, source, runtime=runtime)
 
-    def render(self, value):
+    def render(self, value: Any) -> defer.Deferred[Any]:
         return self.getProperties().render(value)
 
 
 @implementer(IRenderable)
-class RenderableOperatorsMixin:
-
+class RenderableOperatorsMixin:  # noqa: PLW1641
     """
     Properties and Interpolate instances can be manipulated with standard operators.
     """
 
-    def __eq__(self, other):
+    def __eq__(self, other: Any) -> _OperatorRenderer:  # type: ignore[override]
         return _OperatorRenderer(self, other, "==", lambda v1, v2: v1 == v2)
 
-    def __ne__(self, other):
+    def __ne__(self, other: Any) -> _OperatorRenderer:  # type: ignore[override]
         return _OperatorRenderer(self, other, "!=", lambda v1, v2: v1 != v2)
 
-    def __lt__(self, other):
+    def __lt__(self, other: Any) -> _OperatorRenderer:
         return _OperatorRenderer(self, other, "<", lambda v1, v2: v1 < v2)
 
-    def __le__(self, other):
+    def __le__(self, other: Any) -> _OperatorRenderer:
         return _OperatorRenderer(self, other, "<=", lambda v1, v2: v1 <= v2)
 
-    def __gt__(self, other):
+    def __gt__(self, other: Any) -> _OperatorRenderer:
         return _OperatorRenderer(self, other, ">", lambda v1, v2: v1 > v2)
 
-    def __ge__(self, other):
+    def __ge__(self, other: Any) -> _OperatorRenderer:
         return _OperatorRenderer(self, other, ">=", lambda v1, v2: v1 >= v2)
 
-    def __add__(self, other):
+    def __add__(self, other: Any) -> _OperatorRenderer:
         return _OperatorRenderer(self, other, "+", lambda v1, v2: v1 + v2)
 
-    def __sub__(self, other):
+    def __sub__(self, other: Any) -> _OperatorRenderer:
         return _OperatorRenderer(self, other, "-", lambda v1, v2: v1 - v2)
 
-    def __mul__(self, other):
+    def __mul__(self, other: Any) -> _OperatorRenderer:
         return _OperatorRenderer(self, other, "*", lambda v1, v2: v1 * v2)
 
-    def __truediv__(self, other):
+    def __truediv__(self, other: Any) -> _OperatorRenderer:
         return _OperatorRenderer(self, other, "/", lambda v1, v2: v1 / v2)
 
-    def __floordiv__(self, other):
+    def __floordiv__(self, other: Any) -> _OperatorRenderer:
         return _OperatorRenderer(self, other, "//", lambda v1, v2: v1 // v2)
 
-    def __mod__(self, other):
+    def __mod__(self, other: Any) -> _OperatorRenderer:
         return _OperatorRenderer(self, other, "%", lambda v1, v2: v1 % v2)
 
     # we cannot use this trick to overload the 'in' operator, as python will force the result
     # of __contains__ to a boolean, forcing it to True all the time
     # so we mimic sqlalchemy and make a in_ method
-    def in_(self, other):
+    def in_(self, other: Any) -> _OperatorRenderer:
         return _OperatorRenderer(self, other, "in", lambda v1, v2: v1 in v2)
+
+    def getRenderingFor(self, iprops: IProperties) -> defer.Deferred:
+        raise NotImplementedError
 
 
 @implementer(IRenderable)
-class _OperatorRenderer(RenderableOperatorsMixin, util.ComparableMixin):
+class _OperatorRenderer(RenderableOperatorsMixin, util.ComparableMixin):  # type: ignore[misc]
     """
     An instance of this class renders a comparison given by a operator
     function with v1 and v2
 
     """
 
-    compare_attrs = ('fn',)
+    compare_attrs: ClassVar[Sequence[str]] = ('fn',)
 
-    def __init__(self, v1, v2, cstr, comparator):
-        self.v1, self.v2, self.comparator, self.cstr = v1, v2, comparator, cstr
+    def __init__(self, v1: Any, v2: Any, cstr: str, comparator: Callable[[Any, Any], Any]) -> None:
+        self.v1 = v1
+        self.v2 = v2
+        self.comparator = comparator
+        self.cstr = cstr
 
     @defer.inlineCallbacks
-    def getRenderingFor(self, props):
+    def getRenderingFor(self, props: IProperties) -> InlineCallbacksType[Any]:
         v1, v2 = yield props.render((self.v1, self.v2))
         return self.comparator(v1, v2)
 
-    def __repr__(self):
-        return '%r %s %r' % (self.v1, self.cstr, self.v2)
+    def __repr__(self) -> str:
+        return f'{self.v1!r} {self.cstr!s} {self.v2!r}'
 
 
 class _PropertyMap:
-
     """
     Privately-used mapping object to implement WithProperties' substitutions,
     including the rendering of None as ''.
     """
+
     colon_minus_re = re.compile(r"(.*):-(.*)")
     colon_tilde_re = re.compile(r"(.*):~(.*)")
     colon_plus_re = re.compile(r"(.*):\+(.*)")
 
-    def __init__(self, properties):
+    def __init__(self, properties: Properties) -> None:
         # use weakref here to avoid a reference loop
-        self.properties = weakref.ref(properties)
-        self.temp_vals = {}
+        self.properties: weakref.ref[Properties] = weakref.ref(properties)
+        self.temp_vals: dict[str, Any] = {}
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str) -> Any:
         properties = self.properties()
         assert properties is not None
 
-        def colon_minus(mo):
+        def colon_minus(mo: re.Match[str]) -> Any:
             # %(prop:-repl)s
             # if prop exists, use it; otherwise, use repl
             prop, repl = mo.group(1, 2)
@@ -361,18 +375,18 @@ class _PropertyMap:
                 return properties[prop]
             return repl
 
-        def colon_tilde(mo):
+        def colon_tilde(mo: re.Match[str]) -> Any:
             # %(prop:~repl)s
             # if prop exists and is true (nonempty), use it; otherwise, use
             # repl
             prop, repl = mo.group(1, 2)
-            if prop in self.temp_vals and self.temp_vals[prop]:
+            if self.temp_vals.get(prop):
                 return self.temp_vals[prop]
-            elif prop in properties and properties[prop]:
+            elif prop in properties and properties[prop]:  # noqa: RUF019
                 return properties[prop]
             return repl
 
-        def colon_plus(mo):
+        def colon_plus(mo: re.Match[str]) -> Any:
             # %(prop:+repl)s
             # if prop exists, use repl; otherwise, an empty string
             prop, repl = mo.group(1, 2)
@@ -402,35 +416,34 @@ class _PropertyMap:
             rv = ''
         return rv
 
-    def add_temporary_value(self, key, val):
-        'Add a temporary value (to support keyword arguments to WithProperties)'
+    def add_temporary_value(self, key: str, val: Any) -> None:
+        "Add a temporary value (to support keyword arguments to WithProperties)"
         self.temp_vals[key] = val
 
 
 @implementer(IRenderable)
 class WithProperties(util.ComparableMixin):
-
     """
     This is a marker class, used fairly widely to indicate that we
     want to interpolate build properties.
     """
 
-    compare_attrs = ('fmtstring', 'args', 'lambda_subs')
+    compare_attrs: ClassVar[Sequence[str]] = ('fmtstring', 'args', 'lambda_subs')
 
-    def __init__(self, fmtstring, *args, **lambda_subs):
+    def __init__(self, fmtstring: str, *args: str, **lambda_subs: Callable[..., Any]) -> None:
         self.fmtstring = fmtstring
         self.args = args
         if not self.args:
             self.lambda_subs = lambda_subs
             for key, val in self.lambda_subs.items():
                 if not callable(val):
-                    raise ValueError(
-                        'Value for lambda substitution "{}" must be callable.'.format(key))
+                    raise ValueError(f'Value for lambda substitution "{key}" must be callable.')
         elif lambda_subs:
             raise ValueError(
-                'WithProperties takes either positional or keyword substitutions, not both.')
+                'WithProperties takes either positional or keyword substitutions, not both.'
+            )
 
-    def getRenderingFor(self, build):
+    def getRenderingFor(self, build: IProperties) -> Any:
         pmap = _PropertyMap(build.getProperties())
         if self.args:
             strings = []
@@ -445,13 +458,13 @@ class WithProperties(util.ComparableMixin):
 
 
 class _NotHasKey(util.ComparableMixin):
-
     """A marker for missing ``hasKey`` parameter.
 
     To withstand ``deepcopy``, ``reload`` and pickle serialization round trips,
     check it with ``==`` or ``!=``.
     """
-    compare_attrs = ()
+
+    compare_attrs: ClassVar[Sequence[str]] = ()
 
 
 # any instance of _NotHasKey would do, yet we don't want to create and delete
@@ -461,13 +474,24 @@ _notHasKey = _NotHasKey()
 
 @implementer(IRenderable)
 class _Lookup(util.ComparableMixin):
+    compare_attrs: ClassVar[Sequence[str]] = (
+        'value',
+        'index',
+        'default',
+        'defaultWhenFalse',
+        'hasKey',
+        'elideNoneAs',
+    )
 
-    compare_attrs = (
-        'value', 'index', 'default', 'defaultWhenFalse', 'hasKey', 'elideNoneAs')
-
-    def __init__(self, value, index, default=None,
-                 defaultWhenFalse=True, hasKey=_notHasKey,
-                 elideNoneAs=None):
+    def __init__(
+        self,
+        value: Any,
+        index: Any,
+        default: Any = None,
+        defaultWhenFalse: bool = True,
+        hasKey: Any = _notHasKey,
+        elideNoneAs: Any = None,
+    ) -> None:
         self.value = value
         self.index = index
         self.default = default
@@ -475,22 +499,26 @@ class _Lookup(util.ComparableMixin):
         self.hasKey = hasKey
         self.elideNoneAs = elideNoneAs
 
-    def __repr__(self):
-        return '_Lookup({}, {}{}{}{}{})'.format(
-            repr(self.value),
-            repr(self.index),
-            ', default={}'.format(repr(self.default)) if self.default is not None else '',
-            ', defaultWhenFalse=False' if not self.defaultWhenFalse else '',
-            ', hasKey={}'.format(repr(self.hasKey)) if self.hasKey != _notHasKey else '',
-            ', elideNoneAs={}'.format(repr(self.elideNoneAs))
-            if self.elideNoneAs is not None else ''
-            )
+    def __repr__(self) -> str:
+        parts = [repr(self.index)]
+        if self.default is not None:
+            parts.append(f', default={self.default!r}')
+        if not self.defaultWhenFalse:
+            parts.append(', defaultWhenFalse=False')
+        if self.hasKey != _notHasKey:
+            parts.append(f', hasKey={self.hasKey!r}')
+        if self.elideNoneAs is not None:
+            parts.append(f', elideNoneAs={self.elideNoneAs!r}')
+
+        parts_str = ''.join(parts)
+
+        return f'_Lookup({self.value!r}, {parts_str})'
 
     @defer.inlineCallbacks
-    def getRenderingFor(self, build):
+    def getRenderingFor(self, build: IProperties) -> InlineCallbacksType[Any]:
         value = build.render(self.value)
         index = build.render(self.index)
-        value, index = yield defer.gatherResults([value, index])
+        value, index = yield defer.gatherResults([value, index], consumeErrors=True)
         if index not in value:
             rv = yield build.render(self.default)
         else:
@@ -509,17 +537,16 @@ class _Lookup(util.ComparableMixin):
         return rv
 
 
-def _getInterpolationList(fmtstring):
+def _getInterpolationList(fmtstring: str) -> list[str]:
     # TODO: Verify that no positional substitutions are requested
-    dd = collections.defaultdict(str)
+    dd: collections.defaultdict[str, str] = collections.defaultdict(str)
     fmtstring % dd
     return list(dd)
 
 
 @implementer(IRenderable)
 class _PropertyDict:
-
-    def getRenderingFor(self, build):
+    def getRenderingFor(self, build: IProperties) -> Any:
         return build.getProperties()
 
 
@@ -528,8 +555,7 @@ _thePropertyDict = _PropertyDict()
 
 @implementer(IRenderable)
 class _WorkerPropertyDict:
-
-    def getRenderingFor(self, build):
+    def getRenderingFor(self, build: IProperties) -> Any:
         return build.getBuild().getWorkerInfo()
 
 
@@ -538,50 +564,49 @@ _theWorkerPropertyDict = _WorkerPropertyDict()
 
 @implementer(IRenderable)
 class _SecretRenderer:
-
-    def __init__(self, secret_name):
+    def __init__(self, secret_name: str) -> None:
         self.secret_name = secret_name
 
     @defer.inlineCallbacks
-    def getRenderingFor(self, properties):
-        secretsSrv = properties.master.namedServices.get("secrets")
+    def getRenderingFor(self, properties: IProperties) -> InlineCallbacksType[Any]:
+        props = properties.getProperties()
+        secretsSrv = props.master.namedServices.get("secrets")
         if not secretsSrv:
-            error_message = "secrets service not started, need to configure" \
-                            " SecretManager in c['services'] to use 'secrets'" \
-                            "in Interpolate"
+            error_message = (
+                "secrets service not started, need to configure"
+                " SecretManager in c['services'] to use 'secrets'"
+                "in Interpolate"
+            )
             raise KeyError(error_message)
-        credsservice = properties.master.namedServices['secrets']
+        credsservice = props.master.namedServices['secrets']
         secret_detail = yield credsservice.get(self.secret_name)
         if secret_detail is None:
-            raise KeyError("secret key {} is not found in any provider".format(self.secret_name))
-        properties.useSecret(secret_detail.value, self.secret_name)
+            raise KeyError(f"secret key {self.secret_name} is not found in any provider")
+        props.useSecret(secret_detail.value, self.secret_name)
         return secret_detail.value
 
 
 class Secret(_SecretRenderer):
-
-    def __repr__(self):
-        return "Secret({0})".format(self.secret_name)
+    def __repr__(self) -> str:
+        return f"Secret({self.secret_name})"
 
 
 class _SecretIndexer:
-
-    def __contains__(self, password):
+    def __contains__(self, password: object) -> bool:
         return True
 
-    def __getitem__(self, password):
+    def __getitem__(self, password: str) -> _SecretRenderer:
         return _SecretRenderer(password)
 
 
 @implementer(IRenderable)
 class _SourceStampDict(util.ComparableMixin):
+    compare_attrs: ClassVar[Sequence[str]] = ('codebase',)
 
-    compare_attrs = ('codebase',)
-
-    def __init__(self, codebase):
+    def __init__(self, codebase: str) -> None:
         self.codebase = codebase
 
-    def getRenderingFor(self, props):
+    def getRenderingFor(self, props: Properties) -> dict[str, Any]:  # type: ignore[override]
         ss = props.getSourceStamp(self.codebase)
         if ss:
             return ss
@@ -590,72 +615,68 @@ class _SourceStampDict(util.ComparableMixin):
 
 @implementer(IRenderable)
 class _Lazy(util.ComparableMixin):
+    compare_attrs: ClassVar[Sequence[str]] = ('value',)
 
-    compare_attrs = ('value',)
-
-    def __init__(self, value):
+    def __init__(self, value: Any) -> None:
         self.value = value
 
-    def getRenderingFor(self, build):
+    def getRenderingFor(self, build: IProperties) -> Any:
         return self.value
 
-    def __repr__(self):
-        return '_Lazy(%r)' % self.value
+    def __repr__(self) -> str:
+        return f'_Lazy({self.value!r})'
 
 
 @implementer(IRenderable)
-class Interpolate(RenderableOperatorsMixin, util.ComparableMixin):
-
+class Interpolate(RenderableOperatorsMixin, util.ComparableMixin):  # type: ignore[misc]
     """
     This is a marker class, used fairly widely to indicate that we
     want to interpolate build properties.
     """
 
-    compare_attrs = ('fmtstring', 'args', 'kwargs')
+    compare_attrs: ClassVar[Sequence[str]] = ('fmtstring', 'args', 'kwargs')
 
     identifier_re = re.compile(r'^[\w._-]*$')
 
-    def __init__(self, fmtstring, *args, **kwargs):
+    def __init__(self, fmtstring: str, *args: Any, **kwargs: Any) -> None:
         self.fmtstring = fmtstring
         self.args = args
         self.kwargs = kwargs
         if self.args and self.kwargs:
-            config.error("Interpolate takes either positional or keyword "
-                         "substitutions, not both.")
+            config.error("Interpolate takes either positional or keyword substitutions, not both.")
         if not self.args:
-            self.interpolations = {}
+            self.interpolations: dict[str, Any] = {}
             self._parse(fmtstring)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         if self.args:
-            return 'Interpolate(%r, *%r)' % (self.fmtstring, self.args)
+            return f'Interpolate({self.fmtstring!r}, *{self.args!r})'
         elif self.kwargs:
-            return 'Interpolate(%r, **%r)' % (self.fmtstring, self.kwargs)
-        return 'Interpolate(%r)' % (self.fmtstring,)
+            return f'Interpolate({self.fmtstring!r}, **{self.kwargs!r})'
+        return f'Interpolate({self.fmtstring!r})'
 
-    @staticmethod
-    def _parse_prop(arg):
+    def _parse_substitution_prop(self, arg: str) -> tuple[Any, str | None, str | None]:
         try:
             prop, repl = arg.split(":", 1)
         except ValueError:
-            prop, repl = arg, None
+            prop = arg
+            repl = None
         if not Interpolate.identifier_re.match(prop):
-            config.error(
-                "Property name must be alphanumeric for prop Interpolation '{}'".format(arg))
-            prop = repl = None
+            config.error(f"Property name must be alphanumeric for prop Interpolation '{arg}'")
+            prop = None  # type: ignore[assignment]
+            repl = None
 
         return _thePropertyDict, prop, repl
 
-    @staticmethod
-    def _parse_secret(arg):
+    def _parse_substitution_secret(self, arg: str) -> tuple[Any, str, str | None]:
         try:
             secret, repl = arg.split(":", 1)
         except ValueError:
-            secret, repl = arg, None
+            secret = arg
+            repl = None
         return _SecretIndexer(), secret, repl
 
-    @staticmethod
-    def _parse_src(arg):
+    def _parse_substitution_src(self, arg: str) -> tuple[Any, str | None, str | None]:
         # TODO: Handle changes
         try:
             codebase, attr, repl = arg.split(":", 2)
@@ -664,110 +685,124 @@ class Interpolate(RenderableOperatorsMixin, util.ComparableMixin):
                 codebase, attr = arg.split(":", 1)
                 repl = None
             except ValueError:
-                config.error(("Must specify both codebase and attribute for "
-                              "src Interpolation '{}'").format(arg))
+                config.error(
+                    f"Must specify both codebase and attribute for src Interpolation '{arg}'"
+                )
                 return {}, None, None
 
         if not Interpolate.identifier_re.match(codebase):
-            config.error(
-                "Codebase must be alphanumeric for src Interpolation '{}'".format(arg))
-            codebase = attr = repl = None
-        if not Interpolate.identifier_re.match(attr):
-            config.error(
-                "Attribute must be alphanumeric for src Interpolation '{}'".format(arg))
-            codebase = attr = repl = None
+            config.error(f"Codebase must be alphanumeric for src Interpolation '{arg}'")
+            codebase = attr = repl = None  # type: ignore[assignment]
+        if not Interpolate.identifier_re.match(attr):  # type: ignore[arg-type,unused-ignore]
+            config.error(f"Attribute must be alphanumeric for src Interpolation '{arg}'")
+            codebase = attr = repl = None  # type: ignore[assignment]
         return _SourceStampDict(codebase), attr, repl
 
-    def _parse_worker(self, arg):
+    def _parse_substitution_worker(self, arg: str) -> tuple[Any, str, str | None]:
         try:
             prop, repl = arg.split(":", 1)
         except ValueError:
-            prop, repl = arg, None
+            prop = arg
+            repl = None
         return _theWorkerPropertyDict, prop, repl
 
-    def _parse_kw(self, arg):
+    def _parse_substitution_kw(self, arg: str) -> tuple[Any, str | None, str | None]:
         try:
             kw, repl = arg.split(":", 1)
         except ValueError:
-            kw, repl = arg, None
+            kw = arg
+            repl = None
         if not Interpolate.identifier_re.match(kw):
-            config.error(
-                "Keyword must be alphanumeric for kw Interpolation '{}'".format(arg))
-            kw = repl = None
+            config.error(f"Keyword must be alphanumeric for kw Interpolation '{arg}'")
+            kw = repl = None  # type: ignore[assignment]
         return _Lazy(self.kwargs), kw, repl
 
-    def _parseSubstitution(self, fmt):
+    _substitutions = {
+        "prop": _parse_substitution_prop,
+        "secret": _parse_substitution_secret,
+        "src": _parse_substitution_src,
+        "worker": _parse_substitution_worker,
+        "kw": _parse_substitution_kw,
+    }
+
+    def _parseSubstitution(self, fmt: str) -> tuple[Any, str | None, str | None] | None:
         try:
             key, arg = fmt.split(":", 1)
         except ValueError:
-            config.error(
-                "invalid Interpolate substitution without selector '{}'".format(fmt))
+            config.error(f"invalid Interpolate substitution without selector '{fmt}'")
             return None
 
-        fn = getattr(self, "_parse_" + key, None)
+        fn = self._substitutions.get(key, None)
         if not fn:
-            config.error("invalid Interpolate selector '{}'".format(key))
+            config.error(f"invalid Interpolate selector '{key}'")
             return None
-        return fn(arg)
+        return fn(self, arg)
 
     @staticmethod
-    def _splitBalancedParen(delim, arg):
+    def _splitBalancedParen(delim: str, arg: str) -> tuple[str, str] | str:
         parenCount = 0
         for i, val in enumerate(arg):
-            if arg[i] == "(":
+            if val == "(":
                 parenCount += 1
-            if arg[i] == ")":
+            if val == ")":
                 parenCount -= 1
                 if parenCount < 0:
                     raise ValueError
-            if parenCount == 0 and arg[i] == delim:
-                return arg[0:i], arg[i + 1:]
+            if parenCount == 0 and val == delim:
+                return arg[0:i], arg[i + 1 :]
         return arg
 
-    def _parseColon_minus(self, d, kw, repl):
-        return _Lookup(d, kw,
-                       default=Interpolate(repl, **self.kwargs),
-                       defaultWhenFalse=False,
-                       elideNoneAs='')
+    def _parseColon_minus(self, d: Any, kw: Any, repl: str) -> _Lookup:
+        return _Lookup(
+            d, kw, default=Interpolate(repl, **self.kwargs), defaultWhenFalse=False, elideNoneAs=''
+        )
 
-    def _parseColon_tilde(self, d, kw, repl):
-        return _Lookup(d, kw,
-                       default=Interpolate(repl, **self.kwargs),
-                       defaultWhenFalse=True,
-                       elideNoneAs='')
+    def _parseColon_tilde(self, d: Any, kw: Any, repl: str) -> _Lookup:
+        return _Lookup(
+            d, kw, default=Interpolate(repl, **self.kwargs), defaultWhenFalse=True, elideNoneAs=''
+        )
 
-    def _parseColon_plus(self, d, kw, repl):
-        return _Lookup(d, kw,
-                       hasKey=Interpolate(repl, **self.kwargs),
-                       default='',
-                       defaultWhenFalse=False,
-                       elideNoneAs='')
+    def _parseColon_plus(self, d: Any, kw: Any, repl: str) -> _Lookup:
+        return _Lookup(
+            d,
+            kw,
+            hasKey=Interpolate(repl, **self.kwargs),
+            default='',
+            defaultWhenFalse=False,
+            elideNoneAs='',
+        )
 
-    def _parseColon_ternary(self, d, kw, repl, defaultWhenFalse=False):
+    def _parseColon_ternary(
+        self, d: Any, kw: Any, repl: str, defaultWhenFalse: bool = False
+    ) -> _Lookup | None:
         delim = repl[0]
         if delim == '(':
             config.error("invalid Interpolate ternary delimiter '('")
             return None
         try:
-            truePart, falsePart = self._splitBalancedParen(delim, repl[1:])
+            truePart, falsePart = self._splitBalancedParen(delim, repl[1:])  # type: ignore[misc]
         except ValueError:
-            config.error("invalid Interpolate ternary expression '{}' with delimiter '{}'".format(
-                repl[1:], repl[0]))
+            config.error(
+                f"invalid Interpolate ternary expression '{repl[1:]}' with delimiter '{repl[0]}'"
+            )
             return None
-        return _Lookup(d, kw,
-                       hasKey=Interpolate(truePart, **self.kwargs),
-                       default=Interpolate(falsePart, **self.kwargs),
-                       defaultWhenFalse=defaultWhenFalse,
-                       elideNoneAs='')
+        return _Lookup(
+            d,
+            kw,
+            hasKey=Interpolate(truePart, **self.kwargs),
+            default=Interpolate(falsePart, **self.kwargs),
+            defaultWhenFalse=defaultWhenFalse,
+            elideNoneAs='',
+        )
 
-    def _parseColon_ternary_hash(self, d, kw, repl):
+    def _parseColon_ternary_hash(self, d: Any, kw: Any, repl: str) -> _Lookup | None:
         return self._parseColon_ternary(d, kw, repl, defaultWhenFalse=True)
 
-    def _parse(self, fmtstring):
+    def _parse(self, fmtstring: str) -> None:
         keys = _getInterpolationList(fmtstring)
         for key in keys:
             if key not in self.interpolations:
-                d, kw, repl = self._parseSubstitution(key)
+                d, kw, repl = self._parseSubstitution(key)  # type: ignore[misc]
                 if repl is None:
                     repl = '-'
                 for pattern, fn in [
@@ -775,38 +810,35 @@ class Interpolate(RenderableOperatorsMixin, util.ComparableMixin):
                     ("~", self._parseColon_tilde),
                     ("+", self._parseColon_plus),
                     ("?", self._parseColon_ternary),
-                    ("#?", self._parseColon_ternary_hash)
+                    ("#?", self._parseColon_ternary_hash),
                 ]:
                     junk, matches, tail = repl.partition(pattern)
                     if not junk and matches:
-                        self.interpolations[key] = fn(d, kw, tail)
+                        self.interpolations[key] = fn(d, kw, tail)  # type: ignore[operator]
                         break
                 if key not in self.interpolations:
-                    config.error("invalid Interpolate default type '{}'".format(repl[0]))
+                    config.error(f"invalid Interpolate default type '{repl[0]}'")
 
-    def getRenderingFor(self, build):
+    @defer.inlineCallbacks
+    def getRenderingFor(self, build: IProperties) -> InlineCallbacksType[str]:
         props = build.getProperties()
         if self.args:
-            d = props.render(self.args)
-            d.addCallback(lambda args:
-                          self.fmtstring % tuple(args))
+            args = yield props.render(self.args)
+            return self.fmtstring % tuple(args)
         else:
-            d = props.render(self.interpolations)
-            d.addCallback(lambda res:
-                          self.fmtstring % res)
-        return d
+            res = yield props.render(self.interpolations)
+            return self.fmtstring % res
 
 
 @implementer(IRenderable)
-class Property(RenderableOperatorsMixin, util.ComparableMixin):
-
+class Property(RenderableOperatorsMixin, util.ComparableMixin):  # type: ignore[misc]
     """
     An instance of this class renders a property of a build.
     """
 
-    compare_attrs = ('key', 'default', 'defaultWhenFalse')
+    compare_attrs: ClassVar[Sequence[str]] = ('key', 'default', 'defaultWhenFalse')
 
-    def __init__(self, key, default=None, defaultWhenFalse=True):
+    def __init__(self, key: str, default: Any = None, defaultWhenFalse: bool = True) -> None:
         """
         @param key: Property to render.
         @param default: Value to use if property isn't set.
@@ -818,18 +850,19 @@ class Property(RenderableOperatorsMixin, util.ComparableMixin):
         self.default = default
         self.defaultWhenFalse = defaultWhenFalse
 
-    def __repr__(self):
-        return "Property({0})".format(self.key)
+    def __repr__(self) -> str:
+        return f"Property({self.key})"
 
-    def getRenderingFor(self, props):
+    def getRenderingFor(self, props: IProperties) -> defer.Deferred[Any]:
         if self.defaultWhenFalse:
             d = props.render(props.getProperty(self.key))
 
             @d.addCallback
-            def checkDefault(rv):
+            def checkDefault(rv: Any) -> Any:
                 if rv:
                     return rv
                 return props.render(self.default)
+
             return d
 
         if props.hasProperty(self.key):
@@ -838,15 +871,14 @@ class Property(RenderableOperatorsMixin, util.ComparableMixin):
 
 
 @implementer(IRenderable)
-class FlattenList(RenderableOperatorsMixin, util.ComparableMixin):
-
+class FlattenList(RenderableOperatorsMixin, util.ComparableMixin):  # type: ignore[misc]
     """
     An instance of this class flattens all nested lists in a list
     """
 
-    compare_attrs = ('nestedlist')
+    compare_attrs: ClassVar[Sequence[str]] = ('nestedlist',)
 
-    def __init__(self, nestedlist, types=(list, tuple)):
+    def __init__(self, nestedlist: Any, types: tuple[type, ...] = (list, tuple)) -> None:
         """
         @param nestedlist: a list of values to render
         @param types: only flatten these types. defaults to (list, tuple)
@@ -854,15 +886,12 @@ class FlattenList(RenderableOperatorsMixin, util.ComparableMixin):
         self.nestedlist = nestedlist
         self.types = types
 
-    def getRenderingFor(self, props):
-        d = props.render(self.nestedlist)
+    @defer.inlineCallbacks
+    def getRenderingFor(self, props: IProperties) -> InlineCallbacksType[Any]:
+        r = yield props.render(self.nestedlist)
+        return flatten(r, self.types)
 
-        @d.addCallback
-        def flat(r):
-            return flatten(r, self.types)
-        return d
-
-    def __add__(self, b):
+    def __add__(self, b: Any) -> FlattenList:  # type: ignore[override]
         if isinstance(b, FlattenList):
             b = b.nestedlist
         return FlattenList(self.nestedlist + b, self.types)
@@ -870,15 +899,14 @@ class FlattenList(RenderableOperatorsMixin, util.ComparableMixin):
 
 @implementer(IRenderable)
 class _Renderer(util.ComparableMixin):
+    compare_attrs: ClassVar[Sequence[str]] = ('fn',)
 
-    compare_attrs = ('fn',)
-
-    def __init__(self, fn):
+    def __init__(self, fn: Callable[..., Any]) -> None:
         self.fn = fn
-        self.args = []
-        self.kwargs = {}
+        self.args: list[Any] = []
+        self.kwargs: dict[str, Any] = {}
 
-    def withArgs(self, *args, **kwargs):
+    def withArgs(self, *args: Any, **kwargs: Any) -> _Renderer:
         new_renderer = _Renderer(self.fn)
         new_renderer.args = self.args + list(args)
         new_renderer.kwargs = dict(self.kwargs)
@@ -886,7 +914,7 @@ class _Renderer(util.ComparableMixin):
         return new_renderer
 
     @defer.inlineCallbacks
-    def getRenderingFor(self, props):
+    def getRenderingFor(self, props: IProperties) -> InlineCallbacksType[Any]:
         args = yield props.render(self.args)
         kwargs = yield props.render(self.kwargs)
 
@@ -895,32 +923,30 @@ class _Renderer(util.ComparableMixin):
         result = yield props.render(result)
         return result
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         if self.args or self.kwargs:
-            return 'renderer(%r, args=%r, kwargs=%r)' % (self.fn, self.args,
-                                                         self.kwargs)
-        return 'renderer(%r)' % (self.fn,)
+            return f'renderer({self.fn!r}, args={self.args!r}, kwargs={self.kwargs!r})'
+        return f'renderer({self.fn!r})'
 
 
-def renderer(fn):
+def renderer(fn: Callable[..., Any]) -> _Renderer:
     return _Renderer(fn)
 
 
 @implementer(IRenderable)
 class _DefaultRenderer:
-
     """
     Default IRenderable adaptor. Calls .getRenderingFor if available, otherwise
     returns argument unchanged.
     """
 
-    def __init__(self, value):
+    def __init__(self, value: Any) -> None:
         try:
             self.renderer = value.getRenderingFor
         except AttributeError:
             self.renderer = lambda _: value
 
-    def getRenderingFor(self, build):
+    def getRenderingFor(self, build: IProperties) -> Any:
         return self.renderer(build)
 
 
@@ -929,16 +955,15 @@ registerAdapter(_DefaultRenderer, object, IRenderable)
 
 @implementer(IRenderable)
 class _ListRenderer:
-
     """
     List IRenderable adaptor. Maps Build.render over the list.
     """
 
-    def __init__(self, value):
+    def __init__(self, value: list[Any]) -> None:
         self.value = value
 
-    def getRenderingFor(self, build):
-        return defer.gatherResults([build.render(e) for e in self.value])
+    def getRenderingFor(self, build: IProperties) -> defer.Deferred[list[Any]]:
+        return defer.gatherResults([build.render(e) for e in self.value], consumeErrors=True)
 
 
 registerAdapter(_ListRenderer, list, IRenderable)
@@ -946,16 +971,15 @@ registerAdapter(_ListRenderer, list, IRenderable)
 
 @implementer(IRenderable)
 class _TupleRenderer:
-
     """
     Tuple IRenderable adaptor. Maps Build.render over the tuple.
     """
 
-    def __init__(self, value):
+    def __init__(self, value: tuple[Any, ...]) -> None:
         self.value = value
 
-    def getRenderingFor(self, build):
-        d = defer.gatherResults([build.render(e) for e in self.value])
+    def getRenderingFor(self, build: IProperties) -> defer.Deferred[Any]:
+        d = defer.gatherResults([build.render(e) for e in self.value], consumeErrors=True)
         d.addCallback(tuple)
         return d
 
@@ -965,16 +989,14 @@ registerAdapter(_TupleRenderer, tuple, IRenderable)
 
 @implementer(IRenderable)
 class _DictRenderer:
-
     """
     Dict IRenderable adaptor. Maps Build.render over the keys and values in the dict.
     """
 
-    def __init__(self, value):
-        self.value = _ListRenderer(
-            [_TupleRenderer((k, v)) for k, v in value.items()])
+    def __init__(self, value: dict[Any, Any]) -> None:
+        self.value = _ListRenderer([_TupleRenderer((k, v)) for k, v in value.items()])
 
-    def getRenderingFor(self, build):
+    def getRenderingFor(self, build: IProperties) -> defer.Deferred[Any]:
         d = self.value.getRenderingFor(build)
         d.addCallback(dict)
         return d
@@ -985,22 +1007,20 @@ registerAdapter(_DictRenderer, dict, IRenderable)
 
 @implementer(IRenderable)
 class Transform:
-
     """
     A renderable that combines other renderables' results using an arbitrary function.
     """
 
-    def __init__(self, function, *args, **kwargs):
+    def __init__(self, function: Any, *args: Any, **kwargs: Any) -> None:
         if not callable(function) and not IRenderable.providedBy(function):
-            config.error(
-                "function given to Transform neither callable nor renderable")
+            config.error("function given to Transform neither callable nor renderable")
 
         self._function = function
         self._args = args
         self._kwargs = kwargs
 
     @defer.inlineCallbacks
-    def getRenderingFor(self, iprops):
+    def getRenderingFor(self, iprops: IProperties) -> InlineCallbacksType[Any]:
         rfunction = yield iprops.render(self._function)
         rargs = yield iprops.render(self._args)
         rkwargs = yield iprops.render(self._kwargs)

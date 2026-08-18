@@ -13,6 +13,8 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
 from twisted.trial import unittest
 
 from buildbot.test.util import tuplematching
@@ -20,12 +22,12 @@ from buildbot.util import tuplematch
 
 
 class MatchTuple(tuplematching.TupleMatchingMixin, unittest.TestCase):
-
     # called by the TupleMatchingMixin methods
 
-    def do_test_match(self, routingKey, shouldMatch, filter):
+    def do_test_match(  # type: ignore[override]
+        self, routingKey: tuple[str, ...], shouldMatch: bool, filter: tuple[str | None, ...]
+    ) -> None:
         result = tuplematch.matchTuple(routingKey, filter)
-        msg = '{} {} {}'.format(repr(routingKey),
-                                'should match' if shouldMatch else "shouldn't match",
-                                repr(filter))
+        should_match_string = 'should match' if shouldMatch else "shouldn't match"
+        msg = f"{routingKey!r} {should_match_string} {filter!r}"
         self.assertEqual(shouldMatch, result, msg)

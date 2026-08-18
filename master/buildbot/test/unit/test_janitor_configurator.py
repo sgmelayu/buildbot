@@ -14,13 +14,14 @@
 # Copyright Buildbot Team Members
 
 
+from __future__ import annotations
+
 import datetime
 from datetime import timedelta
+from typing import TYPE_CHECKING
+from unittest import mock
 
 from parameterized import parameterized
-
-import mock
-
 from twisted.internet import defer
 from twisted.trial import unittest
 
@@ -32,30 +33,34 @@ from buildbot.configurators.janitor import LogChunksJanitor
 from buildbot.process.results import SUCCESS
 from buildbot.schedulers.forcesched import ForceScheduler
 from buildbot.schedulers.timed import Nightly
+from buildbot.test.reactor import TestReactorMixin
+from buildbot.test.steps import TestBuildStepMixin
 from buildbot.test.util import config as configmixin
 from buildbot.test.util import configurators
-from buildbot.test.util import steps
-from buildbot.test.util.misc import TestReactorMixin
 from buildbot.util import datetime2epoch
 from buildbot.worker.local import LocalWorker
+
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
 
 
 class JanitorConfiguratorTests(configurators.ConfiguratorMixin, unittest.SynchronousTestCase):
     ConfiguratorClass = JanitorConfigurator
 
-    def test_nothing(self):
+    def test_nothing(self) -> None:
         self.setupConfigurator()
-        self.assertEqual(self.config_dict, {
-        })
+        self.assertEqual(self.config_dict, {})
 
     @parameterized.expand([
         ('logs', {'logHorizon': timedelta(weeks=1)}, [LogChunksJanitor]),
         ('build_data', {'build_data_horizon': timedelta(weeks=1)}, [BuildDataJanitor]),
-        ('logs_build_data', {'build_data_horizon': timedelta(weeks=1),
-                             'logHorizon': timedelta(weeks=1)},
-         [LogChunksJanitor, BuildDataJanitor]),
+        (
+            'logs_build_data',
+            {'build_data_horizon': timedelta(weeks=1), 'logHorizon': timedelta(weeks=1)},
+            [LogChunksJanitor, BuildDataJanitor],
+        ),
     ])
-    def test_steps(self, name, configuration, exp_steps):
+    def test_steps(self, name: str, configuration: dict, exp_steps: list) -> None:
         self.setupConfigurator(**configuration)
         self.expectWorker(JANITOR_NAME, LocalWorker)
         self.expectScheduler(JANITOR_NAME, Nightly)
@@ -64,36 +69,29 @@ class JanitorConfiguratorTests(configurators.ConfiguratorMixin, unittest.Synchro
         self.expectNoConfigError()
 
 
-class LogChunksJanitorTests(steps.BuildStepMixin,
-                            configmixin.ConfigErrorsMixin,
-                            TestReactorMixin,
-                            unittest.TestCase):
-
+class LogChunksJanitorTests(
+    TestBuildStepMixin, configmixin.ConfigErrorsMixin, TestReactorMixin, unittest.TestCase
+):
     @defer.inlineCallbacks
-    def setUp(self):
-        self.setUpTestReactor()
-        yield self.setUpBuildStep()
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        self.setup_test_reactor()
+        yield self.setup_test_build_step()
         self.patch(janitor, "now", lambda: datetime.datetime(year=2017, month=1, day=1))
 
-    def tearDown(self):
-        return self.tearDownBuildStep()
-
     @defer.inlineCallbacks
-    def test_basic(self):
-        self.setupStep(
-            LogChunksJanitor(logHorizon=timedelta(weeks=1)))
+    def test_basic(self) -> InlineCallbacksType[None]:
+        self.setup_step(LogChunksJanitor(logHorizon=timedelta(weeks=1)))
         self.master.db.logs.deleteOldLogChunks = mock.Mock(return_value=3)
-        self.expectOutcome(result=SUCCESS,
-                           state_string="deleted 3 logchunks")
-        yield self.runStep()
+        self.expect_outcome(result=SUCCESS, state_string="deleted 3 logchunks")
+        yield self.run_step()
         expected_timestamp = datetime2epoch(datetime.datetime(year=2016, month=12, day=25))
         self.master.db.logs.deleteOldLogChunks.assert_called_with(expected_timestamp)
 
     @defer.inlineCallbacks
-    def test_build_data(self):
-        self.setupStep(BuildDataJanitor(build_data_horizon=timedelta(weeks=1)))
+    def test_build_data(self) -> InlineCallbacksType[None]:
+        self.setup_step(BuildDataJanitor(build_data_horizon=timedelta(weeks=1)))
         self.master.db.build_data.deleteOldBuildData = mock.Mock(return_value=4)
-        self.expectOutcome(result=SUCCESS, state_string="deleted 4 build data key-value pairs")
-        yield self.runStep()
+        self.expect_outcome(result=SUCCESS, state_string="deleted 4 build data key-value pairs")
+        yield self.run_step()
         expected_timestamp = datetime2epoch(datetime.datetime(year=2016, month=12, day=25))
         self.master.db.build_data.deleteOldBuildData.assert_called_with(expected_timestamp)

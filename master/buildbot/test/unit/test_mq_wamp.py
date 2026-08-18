@@ -13,11 +13,15 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
 import json
 import os
 import textwrap
-
-import mock
+from typing import TYPE_CHECKING
+from typing import Any
+from typing import Callable
+from unittest import mock
 
 from autobahn.wamp.exception import TransportLost
 from autobahn.wamp.types import SubscribeOptions
@@ -26,30 +30,33 @@ from twisted.trial import unittest
 
 from buildbot.mq import wamp
 from buildbot.test.fake import fakemaster
-from buildbot.test.util.misc import TestReactorMixin
+from buildbot.test.reactor import TestReactorMixin
 from buildbot.wamp import connector
+
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
 
 
 class FakeEventDetails:
-    def __init__(self, topic):
+    def __init__(self, topic: str) -> None:
         self.topic = topic
 
 
 class ComparableSubscribeOptions(SubscribeOptions):
-
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         if not isinstance(other, SubscribeOptions):
             return False
         return self.match == other.match
 
     __repr__ = SubscribeOptions.__str__
+    __hash__ = SubscribeOptions.__hash__
 
 
 class FakeSubscription:
-    def __init__(self):
-        self.exception_on_unsubscribe = None
+    def __init__(self) -> None:
+        self.exception_on_unsubscribe: type[Exception] | None = None
 
-    def unsubscribe(self):
+    def unsubscribe(self) -> None:
         if self.exception_on_unsubscribe is not None:
             raise self.exception_on_unsubscribe()
 
@@ -60,23 +67,29 @@ class TestException(Exception):
 
 class FakeWampConnector:
     # a fake wamp connector with only one queue
-    def __init__(self):
-        self.subscriptions = []
+    def __init__(self) -> None:
+        self.subscriptions: list[FakeSubscription] = []
+        self.topic: str = ""
 
-    def topic_match(self, topic):
-        topic = topic.split(".")
+    def topic_match(self, topic: str) -> bool:
+        topic_parts = topic.split(".")
         owntopic = self.topic.split(".")
-        if len(topic) != len(owntopic):
+        if len(topic_parts) != len(owntopic):
             return False
-        for i, topic_item in enumerate(topic):
-            if owntopic[i] != "" and topic[i] != owntopic[i]:
+        for i, itopic in enumerate(topic_parts):
+            if owntopic[i] != "" and itopic != owntopic[i]:
                 return False
         return True
 
-    def subscribe(self, callback, topic=None, options=None):
+    def subscribe(
+        self,
+        callback: Callable[..., Any],
+        topic: str | None = None,
+        options: SubscribeOptions | None = None,
+    ) -> FakeSubscription:
         # record the topic, and to make sure subsequent publish
         # are correct
-        self.topic = topic
+        self.topic = topic or ""
         # we record the qref_cb
         self.qref_cb = callback
 
@@ -84,7 +97,7 @@ class FakeWampConnector:
         self.subscriptions.append(subs)
         return subs
 
-    def publish(self, topic, data, options=None):
+    def publish(self, topic: str, data: Any, options: Any = None) -> None:
         # make sure the topic is compatible with what was subscribed
         assert self.topic_match(topic)
         self.last_data = data
@@ -95,23 +108,25 @@ class FakeWampConnector:
 class TopicMatch(unittest.TestCase):
     # test unit tests
 
-    def test_topic_match(self):
-        matches = [("a.b.c", "a.b.c"),
-                   ("a..c", "a.c.c"),
-                   ("a.b.", "a.b.c"),
-                   (".b.", "a.b.c"),
-                   ]
+    def test_topic_match(self) -> None:
+        matches = [
+            ("a.b.c", "a.b.c"),
+            ("a..c", "a.c.c"),
+            ("a.b.", "a.b.c"),
+            (".b.", "a.b.c"),
+        ]
         for i, j in matches:
             w = FakeWampConnector()
             w.topic = i
             self.assertTrue(w.topic_match(j))
 
-    def test_topic_not_match(self):
-        matches = [("a.b.c", "a.b.d"),
-                   ("a..c", "a.b.d"),
-                   ("a.b.", "a.c.c"),
-                   (".b.", "a.a.c"),
-                   ]
+    def test_topic_not_match(self) -> None:
+        matches = [
+            ("a.b.c", "a.b.d"),
+            ("a..c", "a.b.d"),
+            ("a.b.", "a.c.c"),
+            (".b.", "a.a.c"),
+        ]
         for i, j in matches:
             w = FakeWampConnector()
             w.topic = i
@@ -119,56 +134,58 @@ class TopicMatch(unittest.TestCase):
 
 
 class WampMQ(TestReactorMixin, unittest.TestCase):
-
     """
-        Stimulate the code with a fake wamp router:
-        A router which only accepts one subscriber on one topic
+    Stimulate the code with a fake wamp router:
+    A router which only accepts one subscriber on one topic
     """
 
     @defer.inlineCallbacks
-    def setUp(self):
-        self.setUpTestReactor()
-        self.master = fakemaster.make_master(self)
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        self.setup_test_reactor()
+        self.master = yield fakemaster.make_master(self)
         self.master.wamp = FakeWampConnector()
         self.mq = wamp.WampMQ()
         yield self.mq.setServiceParent(self.master)
         yield self.mq.startService()
 
-    @defer.inlineCallbacks
-    def tearDown(self):
-        if self.mq.running:
-            yield self.mq.stopService()
+        @defer.inlineCallbacks
+        def cleanup() -> InlineCallbacksType[None]:
+            if self.mq.running:
+                yield self.mq.stopService()
+
+        self.addCleanup(cleanup)
 
     @defer.inlineCallbacks
-    def test_startConsuming_basic(self):
+    def test_startConsuming_basic(self) -> InlineCallbacksType[None]:
         self.master.wamp.subscribe = mock.Mock()
-        yield self.mq.startConsuming(None, ('a', 'b'))
+        yield self.mq.startConsuming(None, ('a', 'b'))  # type: ignore[arg-type]
         options = ComparableSubscribeOptions(details_arg='details')
         self.master.wamp.subscribe.assert_called_with(
-            mock.ANY, 'org.buildbot.mq.a.b', options=options)
+            mock.ANY, 'org.buildbot.mq.a.b', options=options
+        )
 
     @defer.inlineCallbacks
-    def test_startConsuming_wildcard(self):
+    def test_startConsuming_wildcard(self) -> InlineCallbacksType[None]:
         self.master.wamp.subscribe = mock.Mock()
-        yield self.mq.startConsuming(None, ('a', None))
-        options = ComparableSubscribeOptions(
-            match="wildcard", details_arg='details')
+        yield self.mq.startConsuming(None, ('a', None))  # type: ignore[arg-type]
+        options = ComparableSubscribeOptions(match="wildcard", details_arg='details')
         self.master.wamp.subscribe.assert_called_with(
-            mock.ANY, 'org.buildbot.mq.a.', options=options)
+            mock.ANY, 'org.buildbot.mq.a.', options=options
+        )
 
     @defer.inlineCallbacks
-    def test_forward_data(self):
+    def test_forward_data(self) -> InlineCallbacksType[None]:
         callback = mock.Mock()
         yield self.mq.startConsuming(callback, ('a', 'b'))
         # _produce returns a deferred
-        yield self.mq._produce(('a', 'b'), 'foo')
+        yield self.mq._produce(('a', 'b'), 'foo')  # type: ignore[arg-type]
         # calling produce should eventually call the callback with decoding of
         # topic
         callback.assert_called_with(('a', 'b'), 'foo')
         self.assertEqual(self.master.wamp.last_data, 'foo')
 
     @defer.inlineCallbacks
-    def test_unsubscribe_ignores_transport_lost(self):
+    def test_unsubscribe_ignores_transport_lost(self) -> InlineCallbacksType[None]:
         callback = mock.Mock()
         consumer = yield self.mq.startConsuming(callback, ('a', 'b'))
 
@@ -178,7 +195,7 @@ class WampMQ(TestReactorMixin, unittest.TestCase):
         yield consumer.stopConsuming()
 
     @defer.inlineCallbacks
-    def test_unsubscribe_logs_exceptions(self):
+    def test_unsubscribe_logs_exceptions(self) -> InlineCallbacksType[None]:
         callback = mock.Mock()
         consumer = yield self.mq.startConsuming(callback, ('a', 'b'))
 
@@ -190,37 +207,37 @@ class WampMQ(TestReactorMixin, unittest.TestCase):
         self.assertEqual(len(self.flushLoggedErrors(TestException)), 1)
 
     @defer.inlineCallbacks
-    def test_forward_data_wildcard(self):
+    def test_forward_data_wildcard(self) -> InlineCallbacksType[None]:
         callback = mock.Mock()
         yield self.mq.startConsuming(callback, ('a', None))
         # _produce returns a deferred
-        yield self.mq._produce(('a', 'b'), 'foo')
+        yield self.mq._produce(('a', 'b'), 'foo')  # type: ignore[arg-type]
         # calling produce should eventually call the callback with decoding of
         # topic
         callback.assert_called_with(('a', 'b'), 'foo')
         self.assertEqual(self.master.wamp.last_data, 'foo')
 
     @defer.inlineCallbacks
-    def test_waits_for_called_callback(self):
-        def callback(_, __):
+    def test_waits_for_called_callback(self) -> InlineCallbacksType[None]:
+        def callback(_: Any, __: Any) -> defer.Deferred[None]:
             return defer.succeed(None)
 
         yield self.mq.startConsuming(callback, ('a', None))
-        yield self.mq._produce(('a', 'b'), 'foo')
+        yield self.mq._produce(('a', 'b'), 'foo')  # type: ignore[arg-type]
         self.assertEqual(self.master.wamp.last_data, 'foo')
 
         d = self.mq.stopService()
         self.assertTrue(d.called)
 
     @defer.inlineCallbacks
-    def test_waits_for_non_called_callback(self):
-        d1 = defer.Deferred()
+    def test_waits_for_non_called_callback(self) -> InlineCallbacksType[None]:
+        d1: defer.Deferred[None] = defer.Deferred()
 
-        def callback(_, __):
+        def callback(_: Any, __: Any) -> defer.Deferred[None]:
             return d1
 
         yield self.mq.startConsuming(callback, ('a', None))
-        yield self.mq._produce(('a', 'b'), 'foo')
+        yield self.mq._produce(('a', 'b'), 'foo')  # type: ignore[arg-type]
         self.assertEqual(self.master.wamp.last_data, 'foo')
 
         d = self.mq.stopService()
@@ -230,62 +247,59 @@ class WampMQ(TestReactorMixin, unittest.TestCase):
 
 
 class FakeConfig:
-    mq = dict(type='wamp', router_url="wss://foo", realm="realm1")
+    mq = {"type": 'wamp', "router_url": 'wss://foo', "realm": 'realm1'}
 
 
 class WampMQReal(TestReactorMixin, unittest.TestCase):
+    """
+    Tests a little bit more painful to run, but which involve real communication with
+    a wamp router
+    """
 
-    """
-        Tests a little bit more painful to run, but which involve real communication with
-        a wamp router
-    """
     HOW_TO_RUN = textwrap.dedent("""\
         define WAMP_ROUTER_URL to a wamp router to run this test
         > crossbar init
         > crossbar start &
         > export WAMP_ROUTER_URL=ws://localhost:8080/ws
         > trial buildbot.unit.test_mq_wamp""")
-    # if connection is bad, this test can timeout easily
-    # we reduce the timeout to help maintain the sanity of the developer
-    timeout = 2
 
     @defer.inlineCallbacks
-    def setUp(self):
-        self.setUpTestReactor()
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        self.setup_test_reactor()
         if "WAMP_ROUTER_URL" not in os.environ:
             raise unittest.SkipTest(self.HOW_TO_RUN)
-        self.master = fakemaster.make_master(self)
+        self.master = yield fakemaster.make_master(self)
         self.mq = wamp.WampMQ()
         yield self.mq.setServiceParent(self.master)
         self.connector = self.master.wamp = connector.WampConnector()
         yield self.connector.setServiceParent(self.master)
+
         yield self.master.startService()
+        self.addCleanup(self.master.stopService)
+
         config = FakeConfig()
         config.mq['router_url'] = os.environ["WAMP_ROUTER_URL"]
         yield self.connector.reconfigServiceWithBuildbotConfig(config)
 
-    def tearDown(self):
-        return self.master.stopService()
-
     @defer.inlineCallbacks
-    def test_forward_data(self):
-        d = defer.Deferred()
+    def test_forward_data(self) -> InlineCallbacksType[None]:
+        d: defer.Deferred[None] = defer.Deferred()
         callback = mock.Mock(side_effect=lambda *a, **kw: d.callback(None))
         yield self.mq.startConsuming(callback, ('a', 'b'))
         # _produce returns a deferred
-        yield self.mq._produce(('a', 'b'), 'foo')
+        yield self.mq._produce(('a', 'b'), 'foo')  # type: ignore[arg-type]
         # calling produce should eventually call the callback with decoding of
         # topic
         yield d
         callback.assert_called_with(('a', 'b'), 'foo')
 
     @defer.inlineCallbacks
-    def test_forward_data_wildcard(self):
-        d = defer.Deferred()
+    def test_forward_data_wildcard(self) -> InlineCallbacksType[None]:
+        d: defer.Deferred[None] = defer.Deferred()
         callback = mock.Mock(side_effect=lambda *a, **kw: d.callback(None))
         yield self.mq.startConsuming(callback, ('a', None))
         # _produce returns a deferred
-        yield self.mq._produce(('a', 'b'), 'foo')
+        yield self.mq._produce(('a', 'b'), 'foo')  # type: ignore[arg-type]
         # calling produce should eventually call the callback with decoding of
         # topic
         yield d

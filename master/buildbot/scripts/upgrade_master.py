@@ -13,91 +13,113 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
 
 import os
 import signal
 import sys
 import traceback
+from typing import TYPE_CHECKING
+from typing import Any
 
 from twisted.internet import defer
 from twisted.python import util
 
-from buildbot import monkeypatches
 from buildbot.db import connector
+from buildbot.interfaces import IRenderable
 from buildbot.master import BuildMaster
 from buildbot.scripts import base
 from buildbot.util import in_reactor
 from buildbot.util import stripUrlPassword
 
+if TYPE_CHECKING:
+    from buildbot.config.master import MasterConfig
+    from buildbot.util.twisted import InlineCallbacksType
 
-def installFile(config, target, source, overwrite=False):
-    with open(source, "rt") as f:
+
+def installFile(config: dict[str, Any], target: str, source: str, overwrite: bool = False) -> None:
+    with open(source, encoding='utf-8') as f:
         new_contents = f.read()
     if os.path.exists(target):
-        with open(target, "rt") as f:
+        with open(target, encoding='utf-8') as f:
             old_contents = f.read()
         if old_contents != new_contents:
             if overwrite:
                 if not config['quiet']:
-                    print("{} has old/modified contents".format(target))
+                    print(f"{target} has old/modified contents")
                     print(" overwriting it with new contents")
-                with open(target, "wt") as f:
+                with open(target, "w", encoding='utf-8') as f:
                     f.write(new_contents)
             else:
                 if not config['quiet']:
-                    print("{} has old/modified contents".format(target))
-                    print(" writing new contents to {}.new".format(target))
-                with open(target + ".new", "wt") as f:
+                    print(f"{target} has old/modified contents")
+                    print(f" writing new contents to {target}.new")
+                with open(target + ".new", "w", encoding='utf-8') as f:
                     f.write(new_contents)
         # otherwise, it's up to date
     else:
         if not config['quiet']:
-            print("creating {}".format(target))
-        with open(target, "wt") as f:
+            print(f"creating {target}")
+        with open(target, "w", encoding='utf-8') as f:
             f.write(new_contents)
 
 
-def upgradeFiles(config):
+def upgradeFiles(config: dict[str, Any]) -> None:
     if not config['quiet']:
         print("upgrading basedir")
 
     webdir = os.path.join(config['basedir'], "public_html")
     if os.path.exists(webdir):
         print("Notice: public_html is not used starting from Buildbot 0.9.0")
-        print("        consider using third party HTTP server for serving "
-              "static files")
+        print("        consider using third party HTTP server for serving static files")
 
-    installFile(config, os.path.join(config['basedir'], "master.cfg.sample"),
-                util.sibpath(__file__, "sample.cfg"), overwrite=True)
+    installFile(
+        config,
+        os.path.join(config['basedir'], "master.cfg.sample"),
+        util.sibpath(__file__, "sample.cfg"),
+        overwrite=True,
+    )
 
 
 @defer.inlineCallbacks
-def upgradeDatabase(config, master_cfg):
+def upgradeDatabase(config: dict[str, Any], master_cfg: MasterConfig) -> InlineCallbacksType[None]:
     if not config['quiet']:
-        print("upgrading database ({})".format(stripUrlPassword(master_cfg.db['db_url'])))
+        db_url_cfg = master_cfg.db.db_url
+        if IRenderable.providedBy(db_url_cfg):
+            # if it's a renderable, assume the password is rendered
+            # so no need to try and strip it.
+            # Doesn't really make sense for it to be renderable with clear password
+            db_url = repr(db_url_cfg)
+        else:
+            db_url = stripUrlPassword(db_url_cfg)
+
+        print(f"upgrading database ({db_url})")
         print("Warning: Stopping this process might cause data loss")
 
-    def sighandler(signum, frame):
-        msg = " ".join("""
+    def sighandler(signum: int, frame: Any) -> None:
+        msg = " ".join(
+            """
         WARNING: ignoring signal {}.
         This process should not be interrupted to avoid database corruption.
         If you really need to terminate it, use SIGKILL.
-        """.split())
+        """.split()
+        )
         print(msg.format(signum))
 
     prev_handlers = {}
+    db = None
+
     try:
-        for signame in ("SIGTERM", "SIGINT", "SIGQUIT", "SIGHUP",
-                        "SIGUSR1", "SIGUSR2", "SIGBREAK"):
+        for signame in ("SIGTERM", "SIGINT", "SIGQUIT", "SIGHUP", "SIGUSR1", "SIGUSR2", "SIGBREAK"):
             if hasattr(signal, signame):
                 signum = getattr(signal, signame)
                 prev_handlers[signum] = signal.signal(signum, sighandler)
 
         master = BuildMaster(config['basedir'])
         master.config = master_cfg
-        master.db.disownServiceParent()
         db = connector.DBConnector(basedir=config['basedir'])
-        yield db.setServiceParent(master)
+        yield db.set_master(master)
+        yield master.secrets_manager.setup()
         yield db.setup(check_version=False, verbose=not config['quiet'])
         yield db.model.upgrade()
         yield db.masters.setAllMastersActiveLongTimeAgo()
@@ -107,34 +129,38 @@ def upgradeDatabase(config, master_cfg):
         for signum, handler in prev_handlers.items():
             signal.signal(signum, handler)
 
+        if db is not None and db.pool is not None:
+            yield db.pool.stop()
+
 
 @in_reactor
-def upgradeMaster(config, _noMonkey=False):
-    if not _noMonkey:  # pragma: no cover
-        monkeypatches.patch_all()
-
+def upgradeMaster(config: dict[str, Any]) -> defer.Deferred[int]:
     if not base.checkBasedir(config):
         return defer.succeed(1)
 
-    os.chdir(config['basedir'])
+    orig_cwd = os.getcwd()
 
     try:
-        configFile = base.getConfigFileFromTac(config['basedir'])
-    except (SyntaxError, ImportError):
-        print("Unable to load 'buildbot.tac' from '{}':".format(config['basedir']),
-              file=sys.stderr)
-        e = traceback.format_exc()
-        print(e, file=sys.stderr)
-        return defer.succeed(1)
-    master_cfg = base.loadConfig(config, configFile)
-    if not master_cfg:
-        return defer.succeed(1)
-    return _upgradeMaster(config, master_cfg)
+        os.chdir(config['basedir'])
+
+        try:
+            configFile = base.getConfigFileFromTac(config['basedir'])
+        except (SyntaxError, ImportError):
+            print(f"Unable to load 'buildbot.tac' from '{config['basedir']}':", file=sys.stderr)
+            e = traceback.format_exc()
+            print(e, file=sys.stderr)
+            return defer.succeed(1)
+        master_cfg = base.loadConfig(config, configFile)
+        if not master_cfg:
+            return defer.succeed(1)
+        return _upgradeMaster(config, master_cfg)
+
+    finally:
+        os.chdir(orig_cwd)
 
 
 @defer.inlineCallbacks
-def _upgradeMaster(config, master_cfg):
-
+def _upgradeMaster(config: dict[str, Any], master_cfg: MasterConfig) -> InlineCallbacksType[int]:
     try:
         upgradeFiles(config)
         yield upgradeDatabase(config, master_cfg)

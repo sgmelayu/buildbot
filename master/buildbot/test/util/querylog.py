@@ -12,12 +12,22 @@
 # Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
 # Copyright Buildbot Team Members
-
+from __future__ import annotations
 
 import contextlib
 import logging
+from typing import TYPE_CHECKING
 
 from twisted.python import log
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+    from twisted.trial import unittest
+
+    _SqliteMaxVariableMixinBase = unittest.TestCase
+else:
+    _SqliteMaxVariableMixinBase = object
 
 # These routines provides a way to dump SQLAlchemy SQL commands and their
 # results into Twisted's log.
@@ -25,34 +35,31 @@ from twisted.python import log
 
 
 class _QueryToTwistedHandler(logging.Handler):
+    prev_level: int
+    prev_propagate: bool
 
-    def __init__(self, log_query_result=False, record_mode=False):
+    def __init__(self, log_query_result: bool = False, record_mode: bool = False) -> None:
         super().__init__()
 
         self._log_query_result = log_query_result
         self.recordMode = record_mode
-        self.records = []
+        self.records: list[str] = []
 
-    def emit(self, record):
+    def emit(self, record: logging.LogRecord) -> None:
         if self.recordMode:
             self.records.append(record.getMessage())
             return
         if record.levelno == logging.DEBUG:
             if self._log_query_result:
-                log.msg("{name}:{thread}:result: {msg}".format(
-                    name=record.name,
-                    thread=record.threadName,
-                    msg=record.getMessage()))
+                log.msg(f"{record.name}:{record.threadName}:result: {record.getMessage()}")
         else:
-            log.msg("{name}:{thread}:query:  {msg}".format(
-                name=record.name,
-                thread=record.threadName,
-                msg=record.getMessage()))
+            log.msg(f"{record.name}:{record.threadName}:query:  {record.getMessage()}")
 
 
-def start_log_queries(log_query_result=False, record_mode=False):
-    handler = _QueryToTwistedHandler(
-        log_query_result=log_query_result, record_mode=record_mode)
+def start_log_queries(
+    log_query_result: bool = False, record_mode: bool = False
+) -> _QueryToTwistedHandler:
+    handler = _QueryToTwistedHandler(log_query_result=log_query_result, record_mode=record_mode)
 
     # In 'sqlalchemy.engine' logging namespace SQLAlchemy outputs SQL queries
     # on INFO level, and SQL queries results on DEBUG level.
@@ -73,7 +80,7 @@ def start_log_queries(log_query_result=False, record_mode=False):
     return handler
 
 
-def stop_log_queries(handler):
+def stop_log_queries(handler: _QueryToTwistedHandler) -> None:
     assert isinstance(handler, _QueryToTwistedHandler)
     logger = logging.getLogger('sqlalchemy.engine')
     logger.removeHandler(handler)
@@ -85,7 +92,7 @@ def stop_log_queries(handler):
 
 
 @contextlib.contextmanager
-def log_queries():
+def log_queries() -> Iterator[None]:
     handler = start_log_queries()
     try:
         yield
@@ -93,15 +100,13 @@ def log_queries():
         stop_log_queries(handler)
 
 
-class SqliteMaxVariableMixin:
-
+class SqliteMaxVariableMixin(_SqliteMaxVariableMixinBase):
     @contextlib.contextmanager
-    def assertNoMaxVariables(self):
+    def assertNoMaxVariables(self) -> Iterator[None]:
         handler = start_log_queries(record_mode=True)
         try:
             yield
         finally:
             stop_log_queries(handler)
             for line in handler.records:
-                self.assertFalse(line.count("?") > 999,
-                                 "too much variables in " + line)
+                self.assertFalse(line.count("?") > 999, "too much variables in " + line)

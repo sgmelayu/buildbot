@@ -11,79 +11,91 @@
 # this program; if not, write to the Free Software Foundation, Inc., 51
 # Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
-# Copyright Buildbot Team Members
+# Copyright Buildbot Team Member
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from typing import Any
 
 from twisted.internet import defer
 
 from buildbot.data import base
 from buildbot.data import types
+from buildbot.db.logs import LogSlugExistsError
 from buildbot.util import identifiers
+
+if TYPE_CHECKING:
+    from buildbot.data.resultspec import ResultSpec
+    from buildbot.db.logs import LogModel
+    from buildbot.util.twisted import InlineCallbacksType
 
 
 class EndpointMixin:
-
-    def db2data(self, dbdict):
+    def db2data(self, model: LogModel) -> defer.Deferred[dict[str, Any]]:
         data = {
-            'logid': dbdict['id'],
-            'name': dbdict['name'],
-            'slug': dbdict['slug'],
-            'stepid': dbdict['stepid'],
-            'complete': dbdict['complete'],
-            'num_lines': dbdict['num_lines'],
-            'type': dbdict['type'],
+            'logid': model.id,
+            'name': model.name,
+            'slug': model.slug,
+            'stepid': model.stepid,
+            'complete': model.complete,
+            'num_lines': model.num_lines,
+            'type': model.type,
         }
         return defer.succeed(data)
 
 
 class LogEndpoint(EndpointMixin, base.BuildNestingMixin, base.Endpoint):
-
-    isCollection = False
-    pathPatterns = """
-        /logs/n:logid
-        /steps/n:stepid/logs/i:log_slug
-        /builds/n:buildid/steps/i:step_name/logs/i:log_slug
-        /builds/n:buildid/steps/n:step_number/logs/i:log_slug
-        /builders/n:builderid/builds/n:build_number/steps/i:step_name/logs/i:log_slug
-        /builders/n:builderid/builds/n:build_number/steps/n:step_number/logs/i:log_slug
-        /builders/i:buildername/builds/n:build_number/steps/i:step_name/logs/i:log_slug
-        /builders/i:buildername/builds/n:build_number/steps/n:step_number/logs/i:log_slug
-    """
+    kind = base.EndpointKind.SINGLE
+    pathPatterns = [
+        "/logs/n:logid",
+        "/steps/n:stepid/logs/i:log_slug",
+        "/builds/n:buildid/steps/i:step_name/logs/i:log_slug",
+        "/builds/n:buildid/steps/n:step_number/logs/i:log_slug",
+        "/builders/n:builderid/builds/n:build_number/steps/i:step_name/logs/i:log_slug",
+        "/builders/n:builderid/builds/n:build_number/steps/n:step_number/logs/i:log_slug",
+        "/builders/s:buildername/builds/n:build_number/steps/i:step_name/logs/i:log_slug",
+        "/builders/s:buildername/builds/n:build_number/steps/n:step_number/logs/i:log_slug",
+    ]
 
     @defer.inlineCallbacks
-    def get(self, resultSpec, kwargs):
+    def get(
+        self, resultSpec: ResultSpec, kwargs: dict[str, Any]
+    ) -> InlineCallbacksType[dict[str, Any] | None]:
         if 'logid' in kwargs:
             dbdict = yield self.master.db.logs.getLog(kwargs['logid'])
             return (yield self.db2data(dbdict)) if dbdict else None
 
-        stepid = yield self.getStepid(kwargs)
-        if stepid is None:
+        retriever = base.NestedBuildDataRetriever(self.master, kwargs)
+        step_dict = yield retriever.get_step_dict()
+        if step_dict is None:
             return None
 
-        dbdict = yield self.master.db.logs.getLogBySlug(stepid,
-                                                        kwargs.get('log_slug'))
+        dbdict = yield self.master.db.logs.getLogBySlug(step_dict.id, kwargs['log_slug'])
         return (yield self.db2data(dbdict)) if dbdict else None
 
 
 class LogsEndpoint(EndpointMixin, base.BuildNestingMixin, base.Endpoint):
-
-    isCollection = True
-    pathPatterns = """
-        /steps/n:stepid/logs
-        /builds/n:buildid/steps/i:step_name/logs
-        /builds/n:buildid/steps/n:step_number/logs
-        /builders/n:builderid/builds/n:build_number/steps/i:step_name/logs
-        /builders/n:builderid/builds/n:build_number/steps/n:step_number/logs
-        /builders/i:buildername/builds/n:build_number/steps/i:step_name/logs
-        /builders/i:buildername/builds/n:build_number/steps/n:step_number/logs
-    """
+    kind = base.EndpointKind.COLLECTION
+    pathPatterns = [
+        "/steps/n:stepid/logs",
+        "/builds/n:buildid/steps/i:step_name/logs",
+        "/builds/n:buildid/steps/n:step_number/logs",
+        "/builders/n:builderid/builds/n:build_number/steps/i:step_name/logs",
+        "/builders/n:builderid/builds/n:build_number/steps/n:step_number/logs",
+        "/builders/s:buildername/builds/n:build_number/steps/i:step_name/logs",
+        "/builders/s:buildername/builds/n:build_number/steps/n:step_number/logs",
+    ]
 
     @defer.inlineCallbacks
-    def get(self, resultSpec, kwargs):
-        stepid = yield self.getStepid(kwargs)
-        if not stepid:
+    def get(
+        self, resultSpec: ResultSpec, kwargs: dict[str, Any]
+    ) -> InlineCallbacksType[list[dict[str, Any]]]:
+        retriever = base.NestedBuildDataRetriever(self.master, kwargs)
+        step_dict = yield retriever.get_step_dict()
+        if step_dict is None:
             return []
-        logs = yield self.master.db.logs.getLogs(stepid=stepid)
+        logs = yield self.master.db.logs.getLogs(stepid=step_dict.id)
         results = []
         for dbdict in logs:
             results.append((yield self.db2data(dbdict)))
@@ -91,15 +103,13 @@ class LogsEndpoint(EndpointMixin, base.BuildNestingMixin, base.Endpoint):
 
 
 class Log(base.ResourceType):
-
     name = "log"
     plural = "logs"
     endpoints = [LogEndpoint, LogsEndpoint]
-    keyFields = ['stepid', 'logid']
-    eventPathPatterns = """
-        /logs/:logid
-        /steps/:stepid/logs/:slug
-    """
+    eventPathPatterns = [
+        "/logs/:logid",
+        "/steps/:stepid/logs/:slug",
+    ]
 
     class EntityType(types.Entity):
         logid = types.Integer()
@@ -109,23 +119,28 @@ class Log(base.ResourceType):
         complete = types.Boolean()
         num_lines = types.Integer()
         type = types.Identifier(1)
+
     entityType = EntityType(name)
 
     @defer.inlineCallbacks
-    def generateEvent(self, _id, event):
+    def generateEvent(self, _id: int, event: str) -> InlineCallbacksType[None]:
         # get the build and munge the result for the notification
         build = yield self.master.data.get(('logs', str(_id)))
         self.produceEvent(build, event)
 
     @base.updateMethod
     @defer.inlineCallbacks
-    def addLog(self, stepid, name, type):
+    def addLog(self, stepid: int, name: str, type: str) -> InlineCallbacksType[int]:
         slug = identifiers.forceIdentifier(50, name)
         while True:
             try:
                 logid = yield self.master.db.logs.addLog(
-                    stepid=stepid, name=name, slug=slug, type=type)
-            except KeyError:
+                    stepid=stepid,
+                    name=name,
+                    slug=slug,
+                    type=type,  # type: ignore[arg-type]
+                )
+            except LogSlugExistsError:
                 slug = identifiers.incrementIdentifier(50, slug)
                 continue
             self.generateEvent(logid, "new")
@@ -133,18 +148,18 @@ class Log(base.ResourceType):
 
     @base.updateMethod
     @defer.inlineCallbacks
-    def appendLog(self, logid, content):
+    def appendLog(self, logid: int, content: str) -> InlineCallbacksType[None]:
         res = yield self.master.db.logs.appendLog(logid=logid, content=content)
         self.generateEvent(logid, "append")
         return res
 
     @base.updateMethod
     @defer.inlineCallbacks
-    def finishLog(self, logid):
+    def finishLog(self, logid: int) -> InlineCallbacksType[None]:
         res = yield self.master.db.logs.finishLog(logid=logid)
         self.generateEvent(logid, "finished")
         return res
 
     @base.updateMethod
-    def compressLog(self, logid):
+    def compressLog(self, logid: int) -> defer.Deferred[int]:
         return self.master.db.logs.compressLog(logid=logid)

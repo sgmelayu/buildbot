@@ -13,7 +13,11 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
 import json
+from typing import TYPE_CHECKING
+from typing import Any
 
 from twisted.internet import defer
 from twisted.trial import unittest
@@ -25,8 +29,11 @@ from buildbot.process.properties import Secret
 from buildbot.secrets.manager import SecretManager
 from buildbot.test.fake import httpclientservice as fakehttpclientservice
 from buildbot.test.fake.secrets import FakeSecretStorage
+from buildbot.test.reactor import TestReactorMixin
 from buildbot.test.util import changesource
-from buildbot.test.util.misc import TestReactorMixin
+
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
 
 gitJsonPayloadSinglePullrequest = """
 {
@@ -171,16 +178,16 @@ _GH_PARSED_PROPS = {
     'github.mergeable': True,
     'github.head.ref': 'defunkt/change',
     'github.title': 'Update the README with new information',
-    'github.merged_by': None
+    'github.merged_by': None,
 }
 
 
-class TestGitHubPullrequestPoller(changesource.ChangeSourceMixin,
-                                  TestReactorMixin,
-                                  unittest.TestCase):
+class TestGitHubPullrequestPoller(
+    changesource.ChangeSourceMixin, TestReactorMixin, unittest.TestCase
+):
     @defer.inlineCallbacks
-    def setUp(self):
-        self.setUpTestReactor()
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        self.setup_test_reactor()
         yield self.setUpChangeSource()
 
         fake_storage_service = FakeSecretStorage()
@@ -190,20 +197,14 @@ class TestGitHubPullrequestPoller(changesource.ChangeSourceMixin,
         yield secret_service.setServiceParent(self.master)
 
         yield self.master.startService()
+        self.addCleanup(self.master.stopService)
 
         fake_storage_service.reconfigService(secretdict={"token": "1234"})
 
     @defer.inlineCallbacks
-    def tearDown(self):
-        yield self.master.stopService()
-        yield self.tearDownChangeSource()
-
-    @defer.inlineCallbacks
-    def newChangeSource(self,
-                        owner,
-                        repo,
-                        endpoint='https://api.github.com',
-                        **kwargs):
+    def newChangeSource(
+        self, owner: str, repo: str, endpoint: str = 'https://api.github.com', **kwargs: Any
+    ) -> InlineCallbacksType[None]:
         http_headers = {'User-Agent': 'Buildbot'}
         token = kwargs.get('token', None)
         if token:
@@ -212,15 +213,18 @@ class TestGitHubPullrequestPoller(changesource.ChangeSourceMixin,
             token = yield p.render(token)
             http_headers.update({'Authorization': 'token ' + token})
         self._http = yield fakehttpclientservice.HTTPClientService.getService(
-            self.master, self, endpoint, headers=http_headers)
+            self.master, self, endpoint, headers=http_headers
+        )
         self.changesource = GitHubPullrequestPoller(owner, repo, **kwargs)
 
     @defer.inlineCallbacks
-    def startChangeSource(self):
+    def startChangeSource(self) -> InlineCallbacksType[None]:
         yield self.changesource.setServiceParent(self.master)
         yield self.attachChangeSource(self.changesource)
 
-    def assertDictSubset(self, expected_dict, response_dict):
+    def assertDictSubset(
+        self, expected_dict: dict[str, Any], response_dict: dict[str, Any]
+    ) -> None:
         expected = {}
         for key in expected_dict.keys():
             self.assertIn(key, set(response_dict.keys()))
@@ -228,308 +232,356 @@ class TestGitHubPullrequestPoller(changesource.ChangeSourceMixin,
         self.assertDictEqual(expected_dict, expected)
 
     @defer.inlineCallbacks
-    def test_describe(self):
+    def test_describe(self) -> InlineCallbacksType[None]:
         yield self.newChangeSource('defunkt', 'defunkt')
         yield self.startChangeSource()
         self.assertEqual(
-            "GitHubPullrequestPoller watching the GitHub repository {}/{}".
-            format('defunkt', 'defunkt'), self.changesource.describe())
+            f"GitHubPullrequestPoller watching the GitHub repository {'defunkt'}/{'defunkt'}",
+            self.changesource.describe(),
+        )
 
     @defer.inlineCallbacks
-    def test_default_name(self):
+    def test_default_name(self) -> InlineCallbacksType[None]:
         yield self.newChangeSource('defunkt', 'defunkt')
         yield self.startChangeSource()
-        self.assertEqual("GitHubPullrequestPoller:{}/{}".format(
-            'defunkt', 'defunkt'), self.changesource.name)
+        self.assertEqual(f"GitHubPullrequestPoller:{'defunkt'}/{'defunkt'}", self.changesource.name)
 
     @defer.inlineCallbacks
-    def test_custom_name(self):
+    def test_custom_name(self) -> InlineCallbacksType[None]:
         yield self.newChangeSource('defunkt', 'defunkt', name="MyName")
         yield self.startChangeSource()
         self.assertEqual("MyName", self.changesource.name)
 
     @defer.inlineCallbacks
-    def test_SimplePR(self):
+    def test_SimplePR(self) -> InlineCallbacksType[None]:
         yield self.newChangeSource(
-            'defunkt', 'defunkt', token='1234', github_property_whitelist=["github.*"])
+            'defunkt', 'defunkt', token='1234', github_property_whitelist=["github.*"]
+        )
         yield self.simple_pr()
 
     @defer.inlineCallbacks
-    def test_secret_token(self):
+    def test_project(self) -> InlineCallbacksType[None]:
         yield self.newChangeSource(
-            'defunkt', 'defunkt', token=Secret('token'), github_property_whitelist=["github.*"])
+            'defunkt',
+            'defunkt',
+            token='1234',
+            project='tst_project',
+            github_property_whitelist=["github.*"],
+        )
+        yield self.simple_pr(project='tst_project')
+
+    @defer.inlineCallbacks
+    def test_secret_token(self) -> InlineCallbacksType[None]:
+        yield self.newChangeSource(
+            'defunkt', 'defunkt', token=Secret('token'), github_property_whitelist=["github.*"]
+        )
         yield self.simple_pr()
 
     @defer.inlineCallbacks
-    def simple_pr(self):
+    def simple_pr(self, project: str | None = None) -> InlineCallbacksType[None]:
         self._http.expect(
             method='get',
             ep='/repos/defunkt/defunkt/pulls',
-            content_json=json.loads(gitJsonPayloadPullRequests))
+            content_json=json.loads(gitJsonPayloadPullRequests),
+        )
         self._http.expect(
             method='get',
             ep='/repos/defunkt/defunkt/pulls/4242',
-            content_json=json.loads(gitJsonPayloadSinglePullrequest))
+            content_json=json.loads(gitJsonPayloadSinglePullrequest),
+        )
         self._http.expect(
             method='get',
             ep='/repos/defunkt/defunkt/pulls/4242/commits',
-            content_json=json.loads(gitJsonPayloadAuthors))
+            content_json=json.loads(gitJsonPayloadAuthors),
+        )
         self._http.expect(
             method='get',
             ep='/repos/defunkt/defunkt/pulls/4242/commits',
-            content_json=json.loads(gitJsonPayloadCommitters))
+            content_json=json.loads(gitJsonPayloadCommitters),
+        )
         self._http.expect(
             method='get',
             ep='/repos/defunkt/defunkt/pulls/4242/files',
-            content_json=json.loads(gitJsonPayloadFiles))
+            content_json=json.loads(gitJsonPayloadFiles),
+        )
         yield self.startChangeSource()
         yield self.changesource.poll()
 
         self.assertEqual(len(self.master.data.updates.changesAdded), 1)
         change = self.master.data.updates.changesAdded[0]
         self.assertEqual(change['author'], 'defunkt <defunkt@defunkt.null>')
-        self.assertEqual(change['revision'],
-                         '4c9a7f03e04e551a5e012064b581577f949dd3a4')
-        self.assertEqual(change['revlink'],
-                         'https://github.com/buildbot/buildbot/pull/4242')
+        self.assertEqual(change['revision'], '4c9a7f03e04e551a5e012064b581577f949dd3a4')
+        self.assertEqual(change['revlink'], 'https://github.com/buildbot/buildbot/pull/4242')
         self.assertEqual(change['branch'], 'defunkt/change')
-        self.assertEqual(change['repository'],
-                         'https://github.com/defunkt/buildbot.git')
+        self.assertEqual(change['repository'], 'https://github.com/defunkt/buildbot.git')
         self.assertEqual(change['files'], ['README.md'])
         self.assertEqual(change['committer'], 'defunktc <defunktc@defunkt.null>')
+        self.assertEqual(change['project'], project if project is not None else 'buildbot/buildbot')
 
         self.assertDictSubset(_GH_PARSED_PROPS, change['properties'])
-        self.assertEqual(change["comments"],
-                         "GitHub Pull Request #4242 (42 commits)\n"
-                         "Update the README with new information\n"
-                         "This is a pretty simple change that we need to pull into master.")
+        self.assertEqual(
+            change["comments"],
+            "GitHub Pull Request #4242 (42 commits)\n"
+            "Update the README with new information\n"
+            "This is a pretty simple change that we need to pull into master.",
+        )
 
     @defer.inlineCallbacks
-    def test_wrongBranch(self):
-        yield self.newChangeSource(
-            'defunkt', 'defunkt', token='1234', branches=['wrongBranch'])
+    def test_wrongBranch(self) -> InlineCallbacksType[None]:
+        yield self.newChangeSource('defunkt', 'defunkt', token='1234', branches=['wrongBranch'])
         self._http.expect(
             method='get',
             ep='/repos/defunkt/defunkt/pulls',
-            content_json=json.loads(gitJsonPayloadPullRequests))
+            content_json=json.loads(gitJsonPayloadPullRequests),
+        )
 
         yield self.startChangeSource()
         yield self.changesource.poll()
         self.assertEqual(len(self.master.data.updates.changesAdded), 0)
 
     @defer.inlineCallbacks
-    def test_http_error(self):
+    def test_http_error(self) -> InlineCallbacksType[None]:
         yield self.newChangeSource('defunkt', 'defunkt', token='1234')
-        self._http.expect(method='get', ep='/repos/defunkt/defunkt/pulls',
-                          content_json=json.loads(git_json_not_found), code=404)
+        self._http.expect(
+            method='get',
+            ep='/repos/defunkt/defunkt/pulls',
+            content_json=json.loads(git_json_not_found),
+            code=404,
+        )
         yield self.startChangeSource()
         yield self.changesource.poll()
         self.assertEqual(len(self.master.data.updates.changesAdded), 0)
 
     @defer.inlineCallbacks
-    def test_baseURL(self):
+    def test_baseURL(self) -> InlineCallbacksType[None]:
         yield self.newChangeSource(
             'defunkt',
             'defunkt',
             endpoint='https://my.other.endpoint',
             token='1234',
             baseURL='https://my.other.endpoint/',
-            github_property_whitelist=["github.*"])
+            github_property_whitelist=["github.*"],
+        )
         self._http.expect(
             method='get',
             ep='/repos/defunkt/defunkt/pulls',
-            content_json=json.loads(gitJsonPayloadPullRequests))
+            content_json=json.loads(gitJsonPayloadPullRequests),
+        )
         self._http.expect(
             method='get',
             ep='/repos/defunkt/defunkt/pulls/4242',
-            content_json=json.loads(gitJsonPayloadSinglePullrequest))
+            content_json=json.loads(gitJsonPayloadSinglePullrequest),
+        )
         self._http.expect(
             method='get',
             ep='/repos/defunkt/defunkt/pulls/4242/commits',
-            content_json=json.loads(gitJsonPayloadAuthors))
+            content_json=json.loads(gitJsonPayloadAuthors),
+        )
         self._http.expect(
             method='get',
             ep='/repos/defunkt/defunkt/pulls/4242/commits',
-            content_json=json.loads(gitJsonPayloadCommitters))
+            content_json=json.loads(gitJsonPayloadCommitters),
+        )
         self._http.expect(
             method='get',
             ep='/repos/defunkt/defunkt/pulls/4242/files',
-            content_json=json.loads(gitJsonPayloadFiles))
+            content_json=json.loads(gitJsonPayloadFiles),
+        )
         yield self.startChangeSource()
         yield self.changesource.poll()
 
         self.assertEqual(len(self.master.data.updates.changesAdded), 1)
         change = self.master.data.updates.changesAdded[0]
         self.assertEqual(change['author'], 'defunkt <defunkt@defunkt.null>')
-        self.assertEqual(change['revision'],
-                         '4c9a7f03e04e551a5e012064b581577f949dd3a4')
-        self.assertEqual(change['revlink'],
-                         'https://github.com/buildbot/buildbot/pull/4242')
+        self.assertEqual(change['revision'], '4c9a7f03e04e551a5e012064b581577f949dd3a4')
+        self.assertEqual(change['revlink'], 'https://github.com/buildbot/buildbot/pull/4242')
         self.assertEqual(change['branch'], 'defunkt/change')
-        self.assertEqual(change['repository'],
-                         'https://github.com/defunkt/buildbot.git')
+        self.assertEqual(change['repository'], 'https://github.com/defunkt/buildbot.git')
         self.assertEqual(change['files'], ['README.md'])
         self.assertEqual(change['committer'], 'defunktc <defunktc@defunkt.null>')
         self.assertDictSubset(_GH_PARSED_PROPS, change['properties'])
-        self.assertEqual(change["comments"],
-                         "GitHub Pull Request #4242 (42 commits)\n"
-                         "Update the README with new information\n"
-                         "This is a pretty simple change that we need to pull into master.")
+        self.assertEqual(
+            change["comments"],
+            "GitHub Pull Request #4242 (42 commits)\n"
+            "Update the README with new information\n"
+            "This is a pretty simple change that we need to pull into master.",
+        )
 
     @defer.inlineCallbacks
-    def test_PRfilter(self):
+    def test_PRfilter(self) -> InlineCallbacksType[None]:
         yield self.newChangeSource(
-            'defunkt',
-            'defunkt',
-            token='1234',
-            pullrequest_filter=lambda pr: pr['number'] == 1337
+            'defunkt', 'defunkt', token='1234', pullrequest_filter=lambda pr: pr['number'] == 1337
         )
         self._http.expect(
             method='get',
             ep='/repos/defunkt/defunkt/pulls',
-            content_json=json.loads(gitJsonPayloadPullRequests))
+            content_json=json.loads(gitJsonPayloadPullRequests),
+        )
         yield self.startChangeSource()
         yield self.changesource.poll()
         self.assertEqual(len(self.master.data.updates.changesAdded), 0)
 
     @defer.inlineCallbacks
-    def test_failCommitters(self):
+    def test_failCommitters(self) -> InlineCallbacksType[None]:
         yield self.newChangeSource('defunkt', 'defunkt', token='1234')
         self._http.expect(
             method='get',
             ep='/repos/defunkt/defunkt/pulls',
-            content_json=json.loads(gitJsonPayloadPullRequests))
+            content_json=json.loads(gitJsonPayloadPullRequests),
+        )
         self._http.expect(
             method='get',
             ep='/repos/defunkt/defunkt/pulls/4242',
-            content_json=json.loads(gitJsonPayloadSinglePullrequest))
+            content_json=json.loads(gitJsonPayloadSinglePullrequest),
+        )
         self._http.expect(
             method='get',
             ep='/repos/defunkt/defunkt/pulls/4242/commits',
-            content_json=json.loads("[{}]"))
+            content_json=json.loads("[{}]"),
+        )
         self._http.expect(
             method='get',
             ep='/repos/defunkt/defunkt/pulls/4242/files',
-            content_json=json.loads("[{}]"))
+            content_json=json.loads("[{}]"),
+        )
         yield self.startChangeSource()
-        yield self.assertFailure(self.changesource.poll(), KeyError)
+        with self.assertRaises(KeyError):
+            yield self.changesource.poll()
 
     @defer.inlineCallbacks
-    def test_failFiles(self):
+    def test_failFiles(self) -> InlineCallbacksType[None]:
         yield self.newChangeSource('defunkt', 'defunkt', token='1234')
         self._http.expect(
             method='get',
             ep='/repos/defunkt/defunkt/pulls',
-            content_json=json.loads(gitJsonPayloadPullRequests))
+            content_json=json.loads(gitJsonPayloadPullRequests),
+        )
         self._http.expect(
             method='get',
             ep='/repos/defunkt/defunkt/pulls/4242',
-            content_json=json.loads(gitJsonPayloadSinglePullrequest))
+            content_json=json.loads(gitJsonPayloadSinglePullrequest),
+        )
         self._http.expect(
             method='get',
             ep='/repos/defunkt/defunkt/pulls/4242/commits',
-            content_json=json.loads("[{}]"))
+            content_json=json.loads("[{}]"),
+        )
         self._http.expect(
             method='get',
             ep='/repos/defunkt/defunkt/pulls/4242/files',
-            content_json=json.loads("[{}]"))
+            content_json=json.loads("[{}]"),
+        )
         yield self.startChangeSource()
-        yield self.assertFailure(self.changesource.poll(), KeyError)
+        with self.assertRaises(KeyError):
+            yield self.changesource.poll()
 
     @defer.inlineCallbacks
-    def test_wrongRepoLink(self):
-        yield self.assertFailure(
-            self.newChangeSource(
-                'defunkt', 'defunkt', token='1234', repository_type='defunkt'),
-            ConfigErrors)
+    def test_wrongRepoLink(self) -> InlineCallbacksType[None]:
+        with self.assertRaises(ConfigErrors):
+            yield self.newChangeSource(
+                'defunkt', 'defunkt', token='1234', repository_type='defunkt'
+            )
 
     @defer.inlineCallbacks
-    def test_magicLink(self):
+    def test_magicLink(self) -> InlineCallbacksType[None]:
         yield self.newChangeSource(
-            'defunkt', 'defunkt', magic_link=True,
-            token='1234', github_property_whitelist=["github.*"])
+            'defunkt',
+            'defunkt',
+            magic_link=True,
+            token='1234',
+            github_property_whitelist=["github.*"],
+        )
         self._http.expect(
             method='get',
             ep='/repos/defunkt/defunkt/pulls',
-            content_json=json.loads(gitJsonPayloadPullRequests))
+            content_json=json.loads(gitJsonPayloadPullRequests),
+        )
         self._http.expect(
             method='get',
             ep='/repos/defunkt/defunkt/pulls/4242',
-            content_json=json.loads(gitJsonPayloadSinglePullrequest))
+            content_json=json.loads(gitJsonPayloadSinglePullrequest),
+        )
         self._http.expect(
             method='get',
             ep='/repos/defunkt/defunkt/pulls/4242/commits',
-            content_json=json.loads(gitJsonPayloadAuthors))
+            content_json=json.loads(gitJsonPayloadAuthors),
+        )
         self._http.expect(
             method='get',
             ep='/repos/defunkt/defunkt/pulls/4242/commits',
-            content_json=json.loads(gitJsonPayloadCommitters))
+            content_json=json.loads(gitJsonPayloadCommitters),
+        )
         self._http.expect(
             method='get',
             ep='/repos/defunkt/defunkt/pulls/4242/files',
-            content_json=json.loads(gitJsonPayloadFiles))
+            content_json=json.loads(gitJsonPayloadFiles),
+        )
         yield self.startChangeSource()
         yield self.changesource.poll()
 
         self.assertEqual(len(self.master.data.updates.changesAdded), 1)
         change = self.master.data.updates.changesAdded[0]
         self.assertEqual(change['author'], 'defunkt <defunkt@defunkt.null>')
-        self.assertEqual(change['revision'],
-                         '4c9a7f03e04e551a5e012064b581577f949dd3a4')
-        self.assertEqual(change['revlink'],
-                         'https://github.com/buildbot/buildbot/pull/4242')
+        self.assertEqual(change['revision'], '4c9a7f03e04e551a5e012064b581577f949dd3a4')
+        self.assertEqual(change['revlink'], 'https://github.com/buildbot/buildbot/pull/4242')
         self.assertEqual(change['branch'], 'refs/pull/4242/merge')
-        self.assertEqual(change['repository'],
-                         'https://github.com/buildbot/buildbot.git')
+        self.assertEqual(change['repository'], 'https://github.com/buildbot/buildbot.git')
         self.assertEqual(change['files'], ['README.md'])
         self.assertEqual(change['committer'], 'defunktc <defunktc@defunkt.null>')
         self.assertDictSubset(_GH_PARSED_PROPS, change['properties'])
-        self.assertEqual(change["comments"],
-                         "GitHub Pull Request #4242 (42 commits)\n"
-                         "Update the README with new information\n"
-                         "This is a pretty simple change that we need to pull into master.")
+        self.assertEqual(
+            change["comments"],
+            "GitHub Pull Request #4242 (42 commits)\n"
+            "Update the README with new information\n"
+            "This is a pretty simple change that we need to pull into master.",
+        )
 
     @defer.inlineCallbacks
-    def test_AuthormissingEmail(self):
+    def test_AuthormissingEmail(self) -> InlineCallbacksType[None]:
         yield self.newChangeSource(
-            'defunkt', 'defunkt', token='1234', github_property_whitelist=["github.*"])
+            'defunkt', 'defunkt', token='1234', github_property_whitelist=["github.*"]
+        )
         self._http.expect(
             method='get',
             ep='/repos/defunkt/defunkt/pulls',
-            content_json=json.loads(gitJsonPayloadPullRequests))
+            content_json=json.loads(gitJsonPayloadPullRequests),
+        )
         self._http.expect(
             method='get',
             ep='/repos/defunkt/defunkt/pulls/4242',
-            content_json=json.loads(gitJsonPayloadSinglePullrequest))
+            content_json=json.loads(gitJsonPayloadSinglePullrequest),
+        )
         self._http.expect(
             method='get',
             ep='/repos/defunkt/defunkt/pulls/4242/commits',
-            content_json=json.loads(gitJsonPayloadAuthors))
+            content_json=json.loads(gitJsonPayloadAuthors),
+        )
         self._http.expect(
             method='get',
             ep='/repos/defunkt/defunkt/pulls/4242/commits',
-            content_json=json.loads(gitJsonPayloadCommitters))
+            content_json=json.loads(gitJsonPayloadCommitters),
+        )
         self._http.expect(
             method='get',
             ep='/repos/defunkt/defunkt/pulls/4242/files',
-            content_json=json.loads(gitJsonPayloadFiles))
+            content_json=json.loads(gitJsonPayloadFiles),
+        )
         yield self.startChangeSource()
         yield self.changesource.poll()
 
         self.assertEqual(len(self.master.data.updates.changesAdded), 1)
         change = self.master.data.updates.changesAdded[0]
         self.assertEqual(change['author'], 'defunkt <defunkt@defunkt.null>')
-        self.assertEqual(change['revision'],
-                         '4c9a7f03e04e551a5e012064b581577f949dd3a4')
-        self.assertEqual(change['revlink'],
-                         'https://github.com/buildbot/buildbot/pull/4242')
+        self.assertEqual(change['revision'], '4c9a7f03e04e551a5e012064b581577f949dd3a4')
+        self.assertEqual(change['revlink'], 'https://github.com/buildbot/buildbot/pull/4242')
         self.assertEqual(change['branch'], 'defunkt/change')
-        self.assertEqual(change['repository'],
-                         'https://github.com/defunkt/buildbot.git')
+        self.assertEqual(change['repository'], 'https://github.com/defunkt/buildbot.git')
         self.assertEqual(change['files'], ['README.md'])
         self.assertEqual(change['committer'], 'defunktc <defunktc@defunkt.null>')
         self.assertDictSubset(_GH_PARSED_PROPS, change['properties'])
-        self.assertEqual(change["comments"],
-                         "GitHub Pull Request #4242 (42 commits)\n"
-                         "Update the README with new information\n"
-                         "This is a pretty simple change that we need to pull into master.")
+        self.assertEqual(
+            change["comments"],
+            "GitHub Pull Request #4242 (42 commits)\n"
+            "Update the README with new information\n"
+            "This is a pretty simple change that we need to pull into master.",
+        )

@@ -13,31 +13,36 @@
 #
 # Copyright Buildbot Team Members
 
-from parameterized import parameterized
+from __future__ import annotations
 
+from typing import TYPE_CHECKING
+from typing import Any
+
+from parameterized import parameterized
 from twisted.internet import defer
 from twisted.trial import unittest
 
 from buildbot.reporters.generators.worker import WorkerMissingGenerator
 from buildbot.test.fake import fakemaster
+from buildbot.test.reactor import TestReactorMixin
 from buildbot.test.util.config import ConfigErrorsMixin
-from buildbot.test.util.misc import TestReactorMixin
+
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
 
 
-class TestWorkerMissingGenerator(ConfigErrorsMixin, TestReactorMixin,
-                                 unittest.TestCase):
+class TestWorkerMissingGenerator(ConfigErrorsMixin, TestReactorMixin, unittest.TestCase):
+    @defer.inlineCallbacks
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        self.setup_test_reactor()
+        self.master = yield fakemaster.make_master(self, wantData=True, wantDb=True, wantMq=True)
 
-    def setUp(self):
-        self.setUpTestReactor()
-        self.master = fakemaster.make_master(self, wantData=True, wantDb=True,
-                                             wantMq=True)
-
-    def _get_worker_dict(self, worker_name):
+    def _get_worker_dict(self, worker_name: str) -> dict[str, Any]:
         return {
             'name': worker_name,
             'notify': ["workeradmin@example.org"],
             'workerinfo': {"admin": "myadmin"},
-            'last_connection': "yesterday"
+            'last_connection': "yesterday",
         }
 
     @parameterized.expand([
@@ -45,25 +50,29 @@ class TestWorkerMissingGenerator(ConfigErrorsMixin, TestReactorMixin,
         ('all',),
     ])
     @defer.inlineCallbacks
-    def test_report_matched_worker(self, worker_filter):
+    def test_report_matched_worker(
+        self, worker_filter: str | list[str]
+    ) -> InlineCallbacksType[None]:
         g = WorkerMissingGenerator(workers=worker_filter)
 
-        report = yield g.generate(self.master, None, 'worker.98.complete',
-                                  self._get_worker_dict('myworker'))
+        report = yield g.generate(
+            self.master, None, 'worker.98.complete', self._get_worker_dict('myworker')
+        )
 
         self.assertEqual(report['users'], ['workeradmin@example.org'])
-        self.assertIn(b"has noticed that the worker named myworker went away", report['body'])
+        self.assertIn(b"worker named myworker went away", report['body'])
 
     @defer.inlineCallbacks
-    def test_report_not_matched_worker(self):
+    def test_report_not_matched_worker(self) -> InlineCallbacksType[None]:
         g = WorkerMissingGenerator(workers=['other'])
 
-        report = yield g.generate(self.master, None, 'worker.98.complete',
-                                  self._get_worker_dict('myworker'))
+        report = yield g.generate(
+            self.master, None, 'worker.98.complete', self._get_worker_dict('myworker')
+        )
 
         self.assertIsNone(report)
 
-    def test_unsupported_workers(self):
+    def test_unsupported_workers(self) -> None:
         g = WorkerMissingGenerator(workers='string worker')
         with self.assertRaisesConfigError("workers must be 'all', or list of worker names"):
             g.check()

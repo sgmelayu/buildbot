@@ -12,11 +12,14 @@
 # Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
 # Copyright Buildbot Team Members
-
+from __future__ import annotations
 
 import re
 import time
 from email.utils import formatdate
+from typing import TYPE_CHECKING
+from typing import Any
+from typing import cast
 
 from twisted.internet import defer
 from twisted.internet import reactor
@@ -29,17 +32,30 @@ from buildbot.process import results
 from buildbot.process.remotetransfer import StringFileWriter
 from buildbot.steps.source.base import Source
 
+if TYPE_CHECKING:
+    from twisted.internet.interfaces import IReactorTime
+
+    from buildbot.process.buildrequest import TempChange
+    from buildbot.util.twisted import InlineCallbacksType
+
 
 class CVS(Source):
-
     name = "cvs"
 
     renderables = ["cvsroot"]
 
-    def __init__(self, cvsroot=None, cvsmodule='', mode='incremental',
-                 method=None, branch=None, global_options=None, extra_options=None,
-                 login=None, **kwargs):
-
+    def __init__(
+        self,
+        cvsroot: str | None = None,
+        cvsmodule: str = '',
+        mode: str = 'incremental',
+        method: str | None = None,
+        branch: str | None = None,
+        global_options: list[str] | None = None,
+        extra_options: list[str] | None = None,
+        login: str | None = None,
+        **kwargs: Any,
+    ) -> None:
         self.cvsroot = cvsroot
         self.cvsmodule = cvsmodule
         self.branch = branch
@@ -55,12 +71,13 @@ class CVS(Source):
         self.srcdir = 'source'
 
         if not self._hasAttrGroupMember('mode', self.mode):
-            raise ValueError("mode {} is not one of {}".format(self.mode,
-                                                               self._listAttrGroupMembers('mode')))
+            raise ValueError(f"mode {self.mode} is not one of {self._listAttrGroupMembers('mode')}")
         super().__init__(**kwargs)
 
     @defer.inlineCallbacks
-    def run_vc(self, branch, revision, patch):
+    def run_vc(
+        self, branch: str | None, revision: str | None, patch: Any
+    ) -> InlineCallbacksType[int]:
         self.branch = branch
         self.revision = revision
         self.stdio_log = yield self.addLogForRemoteCommands("stdio")
@@ -81,11 +98,11 @@ class CVS(Source):
 
         if patch:
             yield self.patch(patch)
-        yield self.parseGotRevision()
+        self.parseGotRevision()
         return results.SUCCESS
 
     @defer.inlineCallbacks
-    def mode_incremental(self):
+    def mode_incremental(self) -> InlineCallbacksType[Any]:
         updatable = yield self._sourcedirIsUpdatable()
         if updatable:
             rv = yield self.doUpdate()
@@ -94,7 +111,7 @@ class CVS(Source):
         return rv
 
     @defer.inlineCallbacks
-    def mode_full(self):
+    def mode_full(self) -> InlineCallbacksType[Any]:
         if self.method == 'clobber':
             rv = yield self.clobber()
             return rv
@@ -116,10 +133,10 @@ class CVS(Source):
         return rv
 
     @defer.inlineCallbacks
-    def _clobber(self):
-        cmd = remotecommand.RemoteCommand('rmdir', {'dir': self.workdir,
-                                                    'logEnviron': self.logEnviron,
-                                                    'timeout': self.timeout})
+    def _clobber(self) -> InlineCallbacksType[None]:
+        cmd = remotecommand.RemoteCommand(
+            'rmdir', {'dir': self.workdir, 'logEnviron': self.logEnviron, 'timeout': self.timeout}
+        )
         cmd.useLog(self.stdio_log, False)
         yield self.runCommand(cmd)
 
@@ -127,39 +144,47 @@ class CVS(Source):
             raise RuntimeError("Failed to delete directory")
 
     @defer.inlineCallbacks
-    def clobber(self):
+    def clobber(self) -> InlineCallbacksType[Any]:
         yield self._clobber()
         res = yield self.doCheckout(self.workdir)
         return res
 
     @defer.inlineCallbacks
-    def fresh(self, ):
+    def fresh(
+        self,
+    ) -> InlineCallbacksType[Any]:
         yield self.purge(True)
         res = yield self.doUpdate()
         return res
 
     @defer.inlineCallbacks
-    def clean(self, ):
+    def clean(
+        self,
+    ) -> InlineCallbacksType[Any]:
         yield self.purge(False)
         res = yield self.doUpdate()
         return res
 
     @defer.inlineCallbacks
-    def copy(self):
-        cmd = remotecommand.RemoteCommand('rmdir', {'dir': self.workdir,
-                                                    'logEnviron': self.logEnviron,
-                                                    'timeout': self.timeout})
+    def copy(self) -> InlineCallbacksType[int]:
+        cmd = remotecommand.RemoteCommand(
+            'rmdir', {'dir': self.workdir, 'logEnviron': self.logEnviron, 'timeout': self.timeout}
+        )
         cmd.useLog(self.stdio_log, False)
         yield self.runCommand(cmd)
         old_workdir = self.workdir
         self.workdir = self.srcdir
         yield self.mode_incremental()
 
-        cmd = remotecommand.RemoteCommand('cpdir', {
-            'fromdir': self.srcdir,
-            'todir': old_workdir,
-            'logEnviron': self.logEnviron,
-            'timeout': self.timeout})
+        cmd = remotecommand.RemoteCommand(
+            'cpdir',
+            {
+                'fromdir': self.srcdir,
+                'todir': old_workdir,
+                'logEnviron': self.logEnviron,
+                'timeout': self.timeout,
+            },
+        )
         cmd.useLog(self.stdio_log, False)
         yield self.runCommand(cmd)
 
@@ -168,14 +193,13 @@ class CVS(Source):
         return results.SUCCESS
 
     @defer.inlineCallbacks
-    def purge(self, ignore_ignores):
+    def purge(self, ignore_ignores: bool) -> InlineCallbacksType[None]:
         command = ['cvsdiscard']
         if ignore_ignores:
             command += ['--ignore']
-        cmd = remotecommand.RemoteShellCommand(self.workdir, command,
-                                               env=self.env,
-                                               logEnviron=self.logEnviron,
-                                               timeout=self.timeout)
+        cmd = remotecommand.RemoteShellCommand(
+            self.workdir, command, env=self.env, logEnviron=self.logEnviron, timeout=self.timeout
+        )
         cmd.useLog(self.stdio_log, False)
         yield self.runCommand(cmd)
 
@@ -183,8 +207,8 @@ class CVS(Source):
             raise buildstep.BuildStepFailed()
 
     @defer.inlineCallbacks
-    def doCheckout(self, dir):
-        command = ['-d', self.cvsroot, '-z3', 'checkout', '-d', dir]
+    def doCheckout(self, dir: str) -> InlineCallbacksType[Any]:
+        command: list[str] = ['-d', cast(str, self.cvsroot), '-z3', 'checkout', '-d', dir]
         command = self.global_options + command + self.extra_options
         if self.branch:
             command += ['-r', self.branch]
@@ -192,7 +216,7 @@ class CVS(Source):
             command += ['-D', self.revision]
         command += [self.cvsmodule]
         if self.retry:
-            abandonOnFailure = (self.retry[1] <= 0)
+            abandonOnFailure = self.retry[1] <= 0
         else:
             abandonOnFailure = True
         res = yield self._dovccmd(command, '', abandonOnFailure=abandonOnFailure)
@@ -202,58 +226,65 @@ class CVS(Source):
                 return res
             delay, repeats = self.retry
             if repeats > 0:
-                log.msg("Checkout failed, trying %d more times after %d seconds"
-                        % (repeats, delay))
+                log.msg(f"Checkout failed, trying {repeats} more times after {delay} seconds")
                 self.retry = (delay, repeats - 1)
-                df = defer.Deferred()
+                df: defer.Deferred[Any] = defer.Deferred()
                 df.addCallback(lambda _: self._clobber())
                 df.addCallback(lambda _: self.doCheckout(self.workdir))
-                reactor.callLater(delay, df.callback, None)
+                cast("IReactorTime", reactor).callLater(delay, df.callback, None)
                 res = yield df
         return res
 
     @defer.inlineCallbacks
-    def doUpdate(self):
+    def doUpdate(self) -> InlineCallbacksType[Any]:
         command = ['-z3', 'update', '-dP']
         branch = self.branch
         # special case. 'cvs update -r HEAD -D today' gives no files; see #2351
         if branch == 'HEAD' and self.revision:
             branch = None
         if branch:
-            command += ['-r', self.branch]
+            command += ['-r', cast(str, self.branch)]
         if self.revision:
             command += ['-D', self.revision]
         res = yield self._dovccmd(command)
         return res
 
     @defer.inlineCallbacks
-    def checkLogin(self):
+    def checkLogin(self) -> InlineCallbacksType[None]:
         if self.login:
-            yield self._dovccmd(['-d', self.cvsroot, 'login'],
-                                initialStdin=self.login + "\n")
+            yield self._dovccmd(
+                ['-d', cast(str, self.cvsroot), 'login'], initialStdin=self.login + "\n"
+            )
 
     @defer.inlineCallbacks
-    def _dovccmd(self, command, workdir=None, abandonOnFailure=True,
-                 initialStdin=None):
+    def _dovccmd(
+        self,
+        command: list[str],
+        workdir: str | None = None,
+        abandonOnFailure: bool = True,
+        initialStdin: str | None = None,
+    ) -> InlineCallbacksType[Any]:
         if workdir is None:
             workdir = self.workdir
         if not command:
             raise ValueError("No command specified")
-        cmd = remotecommand.RemoteShellCommand(workdir,
-                                               ['cvs'] + command,
-                                               env=self.env,
-                                               timeout=self.timeout,
-                                               logEnviron=self.logEnviron,
-                                               initialStdin=initialStdin)
+        cmd = remotecommand.RemoteShellCommand(
+            workdir,
+            ["cvs", *command],
+            env=self.env,
+            timeout=self.timeout,
+            logEnviron=self.logEnviron,
+            initialStdin=initialStdin,
+        )
         cmd.useLog(self.stdio_log, False)
         yield self.runCommand(cmd)
 
         if cmd.rc != 0 and abandonOnFailure:
-            log.msg("Source step failed while running command {}".format(cmd))
+            log.msg(f"Source step failed while running command {cmd}")
             raise buildstep.BuildStepFailed()
         return cmd.rc
 
-    def _cvsEntriesContainStickyDates(self, entries):
+    def _cvsEntriesContainStickyDates(self, entries: str) -> bool:
         for line in entries.splitlines():
             if line == 'D':  # the last line contains just a single 'D'
                 pass
@@ -264,7 +295,8 @@ class CVS(Source):
         return False  # no sticky dates
 
     @defer.inlineCallbacks
-    def _sourcedirIsUpdatable(self):
+    def _sourcedirIsUpdatable(self) -> InlineCallbacksType[bool]:
+        assert self.build is not None
         myFileWriter = StringFileWriter()
         args = {
             'workdir': self.build.path_module.join(self.workdir, 'CVS'),
@@ -273,7 +305,7 @@ class CVS(Source):
             'blocksize': 32 * 1024,
         }
 
-        def uploadFileArgs(source):
+        def uploadFileArgs(source: str) -> dict[str, Any]:
             full_args = dict(args)
             if self.workerVersionIsOlderThan('uploadFile', '3.0'):
                 full_args['slavesrc'] = source
@@ -281,25 +313,21 @@ class CVS(Source):
                 full_args['workersrc'] = source
             return full_args
 
-        cmd = remotecommand.RemoteCommand('uploadFile',
-                                          uploadFileArgs('Root'),
-                                          ignore_updates=True)
+        cmd = remotecommand.RemoteCommand('uploadFile', uploadFileArgs('Root'), ignore_updates=True)
         yield self.runCommand(cmd)
         if cmd.rc is not None and cmd.rc != 0:
             return False
 
         # on Windows, the cvsroot may not contain the password, so compare to
         # both
-        cvsroot_without_pw = re.sub("(:pserver:[^:]*):[^@]*(@.*)",
-                                    r"\1\2", self.cvsroot)
-        if myFileWriter.buffer.strip() not in (self.cvsroot,
-                                               cvsroot_without_pw):
+        cvsroot_without_pw = re.sub("(:pserver:[^:]*):[^@]*(@.*)", r"\1\2", cast(str, self.cvsroot))
+        if myFileWriter.buffer.strip() not in (self.cvsroot, cvsroot_without_pw):
             return False
 
         myFileWriter.buffer = ""
-        cmd = remotecommand.RemoteCommand('uploadFile',
-                                          uploadFileArgs('Repository'),
-                                          ignore_updates=True)
+        cmd = remotecommand.RemoteCommand(
+            'uploadFile', uploadFileArgs('Repository'), ignore_updates=True
+        )
         yield self.runCommand(cmd)
         if cmd.rc is not None and cmd.rc != 0:
             return False
@@ -309,9 +337,9 @@ class CVS(Source):
         # if there are sticky dates (from an earlier build with revision),
         # we can't update (unless we remove those tags with cvs update -A)
         myFileWriter.buffer = ""
-        cmd = remotecommand.RemoteCommand('uploadFile',
-                                          uploadFileArgs('Entries'),
-                                          ignore_updates=True)
+        cmd = remotecommand.RemoteCommand(
+            'uploadFile', uploadFileArgs('Entries'), ignore_updates=True
+        )
         yield self.runCommand(cmd)
         if cmd.rc is not None and cmd.rc != 0:
             return False
@@ -320,16 +348,16 @@ class CVS(Source):
 
         return True
 
-    def parseGotRevision(self):
+    def parseGotRevision(self) -> None:
         revision = time.strftime("%Y-%m-%d %H:%M:%S +0000", time.gmtime())
         self.updateSourceProperty('got_revision', revision)
 
     @defer.inlineCallbacks
-    def checkCvs(self):
+    def checkCvs(self) -> InlineCallbacksType[bool]:
         res = yield self._dovccmd(['--version'])
         return res == 0
 
-    def _getMethod(self):
+    def _getMethod(self) -> str | None:
         if self.method is not None and self.mode != 'incremental':
             return self.method
         elif self.mode == 'incremental':
@@ -338,10 +366,11 @@ class CVS(Source):
             return 'fresh'
         return None
 
-    def computeSourceRevision(self, changes):
+    def computeSourceRevision(self, changes: list[TempChange] | None) -> str | None:
         if not changes:
             return None
-        lastChange = max([c.when for c in changes])
-        lastSubmit = max([br.submittedAt for br in self.build.requests])
+        assert self.build is not None
+        lastChange = max(c.when for c in changes)
+        lastSubmit = max(cast(int, br.submitted_at) for br in self.build.requests)
         when = (lastChange + lastSubmit) / 2
         return formatdate(when)

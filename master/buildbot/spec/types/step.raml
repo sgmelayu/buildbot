@@ -20,14 +20,26 @@ description: |
             :returns: (stepid, number, name) via Deferred
 
             Create a new step and return its ID, number, and name.
-            Note that the name may be different from the requested name, if that name was already in use.
+            Note that the name may be different from the requested name if that name was already in use.
             The state strings for the new step will be set to 'pending'.
 
-        .. py:method:: startStep(stepid)
+        .. py:method:: startStep(stepid, started_at=None, locks_acquired=False)
 
             :param integer stepid: the step to modify
+            :param integer started_at: optionally specify the startup time value. If not
+                specified, then `int(self.master.reactor.seconds())` will be used.
+            :param boolean locks_acquired: `True` if all locks are already acquired at the step
+                startup. This effectively calls `set_step_locks_acquired_at(stepid, locks_acquired_at=started_at)`
 
             Start the step.
+
+        .. py:method:: set_step_locks_acquired_at(stepid, locks_acquired_at=None)
+
+            :param integer stepid: the step to modify
+            :param integer locks_acquired_at: optionally specify the timestamp value. If not
+                    specified, then `int(self.master.reactor.seconds())` will be used.
+
+            Update step locks_acquired_at timestamp.
 
         .. py:method:: setStepStateString(stepid, state_string)
 
@@ -59,7 +71,7 @@ properties:
         description: the unique ID of this step
         type: integer
     buildid:
-        description: id of the build containing this step
+        description: ID of the build containing this step
         type: integer
     complete:
         description: true if this step is complete
@@ -82,13 +94,16 @@ properties:
     started_at?:
         description: time at which this step started, or None if it hasn't started yet
         type: date
+    locks_acquired_at?:
+        description: time at which this step acquired locks (if any), or None if the locks haven't been acquired
+        type: date
     state_string:
         description: |
             a string giving detail on the state of the build.
-            The first is usually one word or phrase; the remainder are sized for one-line display.
+            The first is usually one word or phrase; the remainder are sized for one-line display
         type: string
     urls[]:
-        description: a list of URLs associated with this step.
+        description: a list of URLs associated with this step
         properties:
             name: string
             url: string

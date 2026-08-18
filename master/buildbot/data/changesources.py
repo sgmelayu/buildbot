@@ -13,6 +13,10 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from typing import Any
 
 from twisted.internet import defer
 
@@ -21,100 +25,99 @@ from buildbot.data import masters
 from buildbot.data import types
 from buildbot.db.changesources import ChangeSourceAlreadyClaimedError
 
+if TYPE_CHECKING:
+    from buildbot.data.resultspec import ResultSpec
+    from buildbot.db.changesources import ChangeSourceModel
+    from buildbot.master import BuildMaster
+    from buildbot.util.twisted import InlineCallbacksType
 
-class Db2DataMixin:
+
+@defer.inlineCallbacks
+def _db2data(master: BuildMaster, dbdict: ChangeSourceModel) -> InlineCallbacksType[dict[str, Any]]:
+    dbmaster = None
+    if dbdict.masterid is not None:
+        dbmaster = yield master.data.get(('masters', dbdict.masterid))
+    data = {
+        'changesourceid': dbdict.id,
+        'name': dbdict.name,
+        'master': dbmaster,
+    }
+    return data
+
+
+class ChangeSourceEndpoint(base.Endpoint):
+    pathPatterns = [
+        "/changesources/n:changesourceid",
+        "/masters/n:masterid/changesources/n:changesourceid",
+    ]
 
     @defer.inlineCallbacks
-    def db2data(self, dbdict):
-        master = None
-        if dbdict['masterid'] is not None:
-            master = yield self.master.data.get(
-                ('masters', dbdict['masterid']))
-        data = {
-            'changesourceid': dbdict['id'],
-            'name': dbdict['name'],
-            'master': master,
-        }
-        return data
-
-
-class ChangeSourceEndpoint(Db2DataMixin, base.Endpoint):
-
-    pathPatterns = """
-        /changesources/n:changesourceid
-        /masters/n:masterid/changesources/n:changesourceid
-    """
-
-    @defer.inlineCallbacks
-    def get(self, resultSpec, kwargs):
-        dbdict = yield self.master.db.changesources.getChangeSource(
-            kwargs['changesourceid'])
+    def get(
+        self, resultSpec: ResultSpec, kwargs: dict[str, Any]
+    ) -> InlineCallbacksType[dict[str, Any] | None]:
+        dbdict = yield self.master.db.changesources.getChangeSource(kwargs['changesourceid'])
         if 'masterid' in kwargs:
-            if dbdict['masterid'] != kwargs['masterid']:
+            if dbdict.masterid != kwargs['masterid']:
                 return None
-        return (yield self.db2data(dbdict)) if dbdict else None
+        return (yield _db2data(self.master, dbdict)) if dbdict else None
+        return (yield _db2data(self.master, dbdict)) if dbdict else None
 
 
-class ChangeSourcesEndpoint(Db2DataMixin, base.Endpoint):
-
-    isCollection = True
-    pathPatterns = """
-        /changesources
-        /masters/n:masterid/changesources
-    """
+class ChangeSourcesEndpoint(base.Endpoint):
+    kind = base.EndpointKind.COLLECTION
+    pathPatterns = [
+        "/changesources",
+        "/masters/n:masterid/changesources",
+    ]
     rootLinkName = 'changesources'
 
     @defer.inlineCallbacks
-    def get(self, resultSpec, kwargs):
+    def get(
+        self, resultSpec: ResultSpec, kwargs: dict[str, Any]
+    ) -> InlineCallbacksType[list[dict[str, Any]]]:
         changesources = yield self.master.db.changesources.getChangeSources(
-            masterid=kwargs.get('masterid'))
+            masterid=kwargs.get('masterid')
+        )
         csdicts = yield defer.DeferredList(
-            [self.db2data(cs) for cs in changesources],
-            consumeErrors=True, fireOnOneErrback=True)
+            [_db2data(self.master, cs) for cs in changesources],
+            consumeErrors=True,
+            fireOnOneErrback=True,
+        )
         return [r for (s, r) in csdicts]
 
 
 class ChangeSource(base.ResourceType):
-
     name = "changesource"
     plural = "changesources"
     endpoints = [ChangeSourceEndpoint, ChangeSourcesEndpoint]
-    keyFields = ['changesourceid']
 
     class EntityType(types.Entity):
         changesourceid = types.Integer()
         name = types.String()
         master = types.NoneOk(masters.Master.entityType)
+
     entityType = EntityType(name)
 
     @base.updateMethod
-    def findChangeSourceId(self, name):
+    def findChangeSourceId(self, name: str) -> defer.Deferred[int]:
         return self.master.db.changesources.findChangeSourceId(name)
 
     @base.updateMethod
-    def trySetChangeSourceMaster(self, changesourceid, masterid):
+    @defer.inlineCallbacks
+    def trySetChangeSourceMaster(
+        self, changesourceid: int, masterid: int
+    ) -> InlineCallbacksType[bool]:
         # the db layer throws an exception if the claim fails; we translate
         # that to a straight true-false value. We could trap the exception
         # type, but that seems a bit too restrictive
-        d = self.master.db.changesources.setChangeSourceMaster(
-            changesourceid, masterid)
-        # set is successful: deferred result is True
-        d.addCallback(lambda _: True)
-
-        @d.addErrback
-        def trapAlreadyClaimedError(why):
-            # the db layer throws an exception if the claim fails; we squash
-            # that error but let other exceptions continue upward
-            why.trap(ChangeSourceAlreadyClaimedError)
-
-            # set failed: deferred result is False
+        try:
+            yield self.master.db.changesources.setChangeSourceMaster(changesourceid, masterid)
+        except ChangeSourceAlreadyClaimedError:
             return False
-
-        return d
+        return True
 
     @defer.inlineCallbacks
-    def _masterDeactivated(self, masterid):
-        changesources = yield self.master.db.changesources.getChangeSources(
-            masterid=masterid)
+    def _masterDeactivated(self, masterid: int) -> InlineCallbacksType[None]:
+        changesources = yield self.master.db.changesources.getChangeSources(masterid=masterid)
         for cs in changesources:
-            yield self.master.db.changesources.setChangeSourceMaster(cs['id'], None)
+            yield self.master.db.changesources.setChangeSourceMaster(cs.id, None)

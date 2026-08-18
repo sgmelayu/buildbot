@@ -14,11 +14,12 @@
 # Copyright Buildbot Team Members
 
 
+from __future__ import annotations
+
 import os
 import stat
 import tempfile
-
-from mock import Mock
+from unittest.mock import Mock
 
 from twisted.trial import unittest
 
@@ -27,10 +28,9 @@ from buildbot.process import remotetransfer
 
 # Test buildbot.steps.remotetransfer.FileWriter class.
 class TestFileWriter(unittest.TestCase):
-
     # test FileWriter.__init__() method.
 
-    def testInit(self):
+    def testInit(self) -> None:
         #
         # patch functions called in constructor
         #
@@ -63,13 +63,12 @@ class TestFileWriter(unittest.TestCase):
         absdir = os.path.dirname(os.path.abspath(os.path.join("dir", "file")))
         mockedExists.assert_called_once_with(absdir)
         mockedMakedirs.assert_called_once_with(absdir)
-        mockedMkstemp.assert_called_once_with(dir=absdir)
+        mockedMkstemp.assert_called_once_with(dir=absdir, prefix='buildbot-transfer-')
         mockedFdopen.assert_called_once_with(7, 'wb')
 
 
 class TestStringFileWriter(unittest.TestCase):
-
-    def testBasic(self):
+    def testBasic(self) -> None:
         sfw = remotetransfer.StringFileWriter()
         # StringFileWriter takes bytes or native string and outputs native strings
         sfw.remote_write(b'bytes')

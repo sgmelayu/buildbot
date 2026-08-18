@@ -20,12 +20,17 @@ Modules using this should call ensureHasSSL in order to make sure that the user 
 buildbot[tls]
 """
 
+from __future__ import annotations
+
 import unittest
+from typing import Any
+from typing import Callable
 
 from buildbot.config import error
 
 try:
-    from twisted.internet.ssl import *  # noqa pylint: disable=unused-wildcard-import, wildcard-import
+    from twisted.internet.ssl import *  # noqa: F403
+
     ssl_import_error = None
     has_ssl = True
 except ImportError as e:
@@ -33,11 +38,13 @@ except ImportError as e:
     has_ssl = False
 
 
-def ensureHasSSL(module):
+def ensureHasSSL(module: str) -> None:
     if not has_ssl:
-        error(("TLS dependencies required for {} are not installed : "
-               "{}\n pip install 'buildbot[tls]'").format(module, ssl_import_error))
+        error(
+            f"TLS dependencies required for {module} are not installed : "
+            f"{ssl_import_error}\n pip install 'buildbot[tls]'"
+        )
 
 
-def skipUnless(f):
+def skipUnless(f: Callable[..., Any]) -> Callable[..., Any]:
     return unittest.skipUnless(has_ssl, "TLS dependencies required")(f)

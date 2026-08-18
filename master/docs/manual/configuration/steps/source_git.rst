@@ -11,7 +11,7 @@ The :bb:step:`Git` build step clones or updates a `Git <http://git.or.cz/>`_ rep
 
 .. note::
 
-   Buildbot supports Git version 1.2.0 or later. Earlier versions (such as the one shipped in Ubuntu 'Dapper') do not support the :command:`git init` command that Buildbot uses.
+   Buildbot supports Git version 1.2.0 or later.
 
 .. code-block:: python
 
@@ -25,7 +25,10 @@ The Git step takes the following arguments:
 ``repourl`` (required)
    The URL of the upstream Git repository.
 
-``branch`` (optional)
+``port`` (optional, default: ``22``)
+   The SSH port of the Git server.
+
+``branch`` (optional, default: ``HEAD``)
    This specifies the name of the branch or the tag to use when a Build does not provide one of its own.
    If this parameter is not specified, and the Build does not provide a branch, the default branch of the remote repository will be used.
    If ``alwaysUseLatest`` is ``True`` then the branch and revision information that comes with the Build is ignored and the branch specified in this parameter is used.
@@ -34,10 +37,13 @@ The Git step takes the following arguments:
    When initializing/updating a Git repository, this tells Buildbot whether to handle Git submodules.
    If ``remoteSubmodules`` is ``True``, then this tells Buildbot to use remote submodules: `Git Remote Submodules <https://git-scm.com/docs/git-submodule#Documentation/git-submodule.txt---remote>`_
 
+``tags`` (optional, default: ``False``)
+    Download tags in addition to the requested revision when updating repository.
+
 ``shallow`` (optional)
    Instructs Git to attempt shallow clones (``--depth 1``).
    The depth defaults to 1 and can be changed by passing an integer instead of ``True``.
-   This option can be used only in full builds with clobber method.
+   This option can be used only in incremental builds, or full builds with clobber method.
 
 ``reference`` (optional)
    Use the specified string as a path to a reference repository on the local machine.
@@ -46,6 +52,12 @@ The Git step takes the following arguments:
 ``origin`` (optional)
    By default, any clone will use the name "origin" as the remote repository (eg, "origin/master").
    This renderable option allows that to be configured to an alternate name.
+
+``filters`` (optional, type: ``list``)
+   For each string in the passed in list, adds a ``--filter <filter>`` argument to :command:`git clone` and :command:`git fetch`.
+   For existing repositories, Buildbot also configures the remote as a partial clone promisor remote before fetching.
+   This allows for adding filters like ``--filter "tree:0"`` to speed up clone and fetch operations.
+   This requires git version 2.27 or higher.
 
 ``progress`` (optional)
    Passes the (``--progress``) flag to (:command:`git fetch`).
@@ -101,7 +113,7 @@ The Git step takes the following arguments:
    The argument should either be a ``bool`` or ``dict``, and will change how `git describe` is called:
 
    * ``getDescription=False``: disables this feature explicitly
-   * ``getDescription=True`` or empty ``dict()``: runs `git describe` with no args
+   * ``getDescription=True`` or empty ``{}``: runs `git describe` with no args
    * ``getDescription={...}``: a dict with keys named the same as the Git option.
      Each key's value can be ``False`` or ``None`` to explicitly skip that argument.
 
@@ -113,6 +125,7 @@ The Git step takes the following arguments:
       * ``debug``: `--debug`
       * ``long``: `--long``
       * ``exact-match``: `--exact-match`
+      * ``first-parent``: `--first-parent`
       * ``tags``: `--tags`
       * ``dirty``: `--dirty`
 
@@ -120,6 +133,7 @@ The Git step takes the following arguments:
      Examples show the key-value pair:
 
       * ``match=foo``: `--match foo`
+      * ``exclude=foo``: `--exclude foo`
       * ``abbrev=7``: `--abbrev=7`
       * ``candidates=7``: `--candidates=7`
       * ``dirty=foo``: `--dirty=foo`
@@ -144,3 +158,13 @@ The Git step takes the following arguments:
    This may be either a :ref:`Secret` or just a string.
    `sshPrivateKey` must be specified in order to use this option.
    `sshHostKey` must not be specified in order to use this option.
+
+``auth_credentials``
+
+   (optional) An username/password tuple to use when running git for fetch operations.
+   The worker's git version needs to be at least 1.7.9.
+
+``git_credentials``
+
+   (optional) See :ref:`GitCredentialOptions`.
+   The worker's git version needs to be at least 1.7.9.

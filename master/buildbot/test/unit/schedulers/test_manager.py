@@ -13,26 +13,38 @@
 #
 # Copyright Buildbot Team Members
 
-import mock
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from typing import Any
+from typing import ClassVar
+from unittest import mock
 
 from twisted.internet import defer
 from twisted.trial import unittest
 
+from buildbot.db.schedulers import SchedulerModel
 from buildbot.schedulers import base
 from buildbot.schedulers import manager
+from buildbot.test.util.warnings import assertProducesWarnings
+from buildbot.warnings import DeprecatedApiWarning
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from buildbot.util.twisted import InlineCallbacksType
 
 
 class SchedulerManager(unittest.TestCase):
-
     @defer.inlineCallbacks
-    def setUp(self):
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
         self.next_objectid = 13
-        self.objectids = {}
+        self.objectids: dict[tuple[str, str], int] = {}
 
         self.master = mock.Mock()
         self.master.master = self.master
 
-        def getObjectId(sched_name, class_name):
+        def getObjectId(sched_name: str, class_name: str) -> defer.Deferred[int]:
             k = (sched_name, class_name)
             try:
                 rv = self.objectids[k]
@@ -40,10 +52,18 @@ class SchedulerManager(unittest.TestCase):
                 rv = self.objectids[k] = self.next_objectid
                 self.next_objectid += 1
             return defer.succeed(rv)
+
         self.master.db.state.getObjectId = getObjectId
 
-        def getScheduler(sched_id):
-            return defer.succeed(dict(enabled=True))
+        def getScheduler(sched_id: int) -> defer.Deferred[SchedulerModel]:
+            return defer.succeed(
+                SchedulerModel(
+                    id=sched_id,
+                    name=f"test-{sched_id}",
+                    enabled=True,
+                    masterid=None,
+                )
+            )
 
         self.master.db.schedulers.getScheduler = getScheduler
 
@@ -53,19 +73,18 @@ class SchedulerManager(unittest.TestCase):
         yield self.sm.setServiceParent(self.master)
         yield self.sm.startService()
 
-    def tearDown(self):
+    def tearDown(self) -> defer.Deferred[None] | None:  # type: ignore[override]
         if self.sm.running:
             return self.sm.stopService()
         return None
 
     class Sched(base.BaseScheduler):
-
         # changing sch.attr should make a scheduler look "updated"
-        compare_attrs = ('attr', )
+        compare_attrs: ClassVar[Sequence[str]] = ('attr',)
         already_started = False
         reconfig_count = 0
 
-        def startService(self):
+        def startService(self) -> defer.Deferred[None]:  # type: ignore[override]
             assert not self.already_started
             assert self.master is not None
             assert self.objectid is not None
@@ -73,36 +92,38 @@ class SchedulerManager(unittest.TestCase):
             return super().startService()
 
         @defer.inlineCallbacks
-        def stopService(self):
+        def stopService(self) -> InlineCallbacksType[None]:
             yield super().stopService()
 
             assert self.master is not None
             assert self.objectid is not None
 
-        def __repr__(self):
-            return "{}(attr={})".format(self.__class__.__name__, self.attr)
+        def __repr__(self) -> str:
+            return f"{self.__class__.__name__}(attr={self.attr})"  # type: ignore[attr-defined]
 
     class ReconfigSched(Sched):
-
-        def reconfigServiceWithSibling(self, new_config):
+        def reconfigServiceWithSibling(self, sibling: Any) -> defer.Deferred[None]:
             self.reconfig_count += 1
-            self.attr = new_config.attr
-            return super().reconfigServiceWithSibling(new_config)
+            self.attr = sibling.attr
+            return super().reconfigServiceWithSibling(sibling)
 
     class ReconfigSched2(ReconfigSched):
         pass
 
-    def makeSched(self, cls, name, attr='alpha'):
-        sch = cls(name=name, builderNames=['x'], properties={})
-        sch.attr = attr
+    def makeSched(self, cls: type[Sched], name: str, attr: str = 'alpha') -> Sched:
+        with assertProducesWarnings(
+            DeprecatedApiWarning, message_pattern='.*BaseScheduler has been deprecated.*'
+        ):
+            sch = cls(name=name, builderNames=['x'], properties={})
+        sch.attr = attr  # type: ignore[attr-defined]
         return sch
 
     # tests
 
     @defer.inlineCallbacks
-    def test_reconfigService_add_and_change_and_remove(self):
+    def test_reconfigService_add_and_change_and_remove(self) -> InlineCallbacksType[None]:
         sch1 = self.makeSched(self.ReconfigSched, 'sch1', attr='alpha')
-        self.new_config.schedulers = dict(sch1=sch1)
+        self.new_config.schedulers = {"sch1": sch1}
 
         yield self.sm.reconfigServiceWithBuildbotConfig(self.new_config)
 
@@ -112,7 +133,7 @@ class SchedulerManager(unittest.TestCase):
 
         sch1_new = self.makeSched(self.ReconfigSched, 'sch1', attr='beta')
         sch2 = self.makeSched(self.ReconfigSched, 'sch2', attr='alpha')
-        self.new_config.schedulers = dict(sch1=sch1_new, sch2=sch2)
+        self.new_config.schedulers = {"sch1": sch1_new, "sch2": sch2}
 
         yield self.sm.reconfigServiceWithBuildbotConfig(self.new_config)
 
@@ -120,7 +141,7 @@ class SchedulerManager(unittest.TestCase):
         # and has the correct attribute
         self.assertIdentical(sch1.parent, self.sm)
         self.assertIdentical(sch1.master, self.master)
-        self.assertEqual(sch1.attr, 'beta')
+        self.assertEqual(sch1.attr, 'beta')  # type: ignore[attr-defined]
         self.assertEqual(sch1.reconfig_count, 2)
         self.assertIdentical(sch1_new.parent, None)
         self.assertIdentical(sch1_new.master, None)
@@ -135,9 +156,9 @@ class SchedulerManager(unittest.TestCase):
         self.assertEqual(sch1.running, False)
 
     @defer.inlineCallbacks
-    def test_reconfigService_class_name_change(self):
+    def test_reconfigService_class_name_change(self) -> InlineCallbacksType[None]:
         sch1 = self.makeSched(self.ReconfigSched, 'sch1')
-        self.new_config.schedulers = dict(sch1=sch1)
+        self.new_config.schedulers = {"sch1": sch1}
 
         yield self.sm.reconfigServiceWithBuildbotConfig(self.new_config)
 
@@ -146,7 +167,7 @@ class SchedulerManager(unittest.TestCase):
         self.assertEqual(sch1.reconfig_count, 1)
 
         sch1_new = self.makeSched(self.ReconfigSched2, 'sch1')
-        self.new_config.schedulers = dict(sch1=sch1_new)
+        self.new_config.schedulers = {"sch1": sch1_new}
 
         yield self.sm.reconfigServiceWithBuildbotConfig(self.new_config)
 
@@ -156,9 +177,9 @@ class SchedulerManager(unittest.TestCase):
         self.assertIdentical(sch1_new.master, self.master)
 
     @defer.inlineCallbacks
-    def test_reconfigService_not_reconfigurable(self):
+    def test_reconfigService_not_reconfigurable(self) -> InlineCallbacksType[None]:
         sch1 = self.makeSched(self.Sched, 'sch1', attr='beta')
-        self.new_config.schedulers = dict(sch1=sch1)
+        self.new_config.schedulers = {"sch1": sch1}
 
         yield self.sm.reconfigServiceWithBuildbotConfig(self.new_config)
 
@@ -166,9 +187,12 @@ class SchedulerManager(unittest.TestCase):
         self.assertIdentical(sch1.master, self.master)
 
         sch1_new = self.makeSched(self.Sched, 'sch1', attr='alpha')
-        self.new_config.schedulers = dict(sch1=sch1_new)
+        self.new_config.schedulers = {"sch1": sch1_new}
 
-        yield self.sm.reconfigServiceWithBuildbotConfig(self.new_config)
+        with assertProducesWarnings(
+            DeprecatedApiWarning, message_pattern='.*raising NotImplementedError.*'
+        ):
+            yield self.sm.reconfigServiceWithBuildbotConfig(self.new_config)
 
         # sch1 had parameter change but is not reconfigurable, so sch1_new is now the active
         # instance
@@ -178,9 +202,9 @@ class SchedulerManager(unittest.TestCase):
         self.assertIdentical(sch1_new.master, self.master)
 
     @defer.inlineCallbacks
-    def test_reconfigService_not_reconfigurable_no_change(self):
+    def test_reconfigService_not_reconfigurable_no_change(self) -> InlineCallbacksType[None]:
         sch1 = self.makeSched(self.Sched, 'sch1', attr='beta')
-        self.new_config.schedulers = dict(sch1=sch1)
+        self.new_config.schedulers = {"sch1": sch1}
 
         yield self.sm.reconfigServiceWithBuildbotConfig(self.new_config)
 
@@ -188,7 +212,7 @@ class SchedulerManager(unittest.TestCase):
         self.assertIdentical(sch1.master, self.master)
 
         sch1_new = self.makeSched(self.Sched, 'sch1', attr='beta')
-        self.new_config.schedulers = dict(sch1=sch1_new)
+        self.new_config.schedulers = {"sch1": sch1_new}
 
         yield self.sm.reconfigServiceWithBuildbotConfig(self.new_config)
 

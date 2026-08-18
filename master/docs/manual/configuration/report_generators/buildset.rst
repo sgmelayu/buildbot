@@ -8,12 +8,33 @@ BuildSetStatusGenerator
 .. py:class:: buildbot.reporters.BuildSetStatusGenerator
 
 This report generator sends a message about builds in a buildset.
-It is very similar to :bb:reportgen:`BuildStatusGenerator` but sends single message about all builds in a buildset, not individual builds.
+
+Message formatters are invoked for each matching build in the buildset. The collected messages are
+then joined and sent as a single message. :bb:reportgen:`BuildStatusGenerator` report generator
+uses the same message generation logic, but a single, not multiple builds.
+
+In case of multiple builds, the following algorithm is used to build the final message:
+
+ - message body is merged from bodies provided by message formatters for the builds. If message
+   bodies are lists or strings, then the result is simple concatenation. If the type is different
+   or there is type mismatch, then mismatching messages are ignored.
+
+ - message subject is taken from the first build for which message formatter a subject.
+
+ - extra information is merged from the information dictionaries provided by message formatters.
+   Note that extra information is specified as dictionary of dictionaries. Two root dictionaries
+   are merged by merging child dictionaries. Values in merged child dictionaries that conflict
+   (i.e. correspond to the same keys) are resolved by taking the value of the first build for
+   which it is provided.
 
 The following parameters are supported:
 
 ``subject``
     (string, optional).
+
+    Deprecated since Buildbot 3.5.
+    Please use the ``subject`` argument of the ``message_formatter`` passed to the generator.
+
     A string to be used as the subject line of the message.
     ``%(builder)s`` will be replaced with the name of the builder which provoked the message.
     ``%(result)s`` will be replaced with the name of the result of the build.
@@ -83,6 +104,7 @@ The following parameters are supported:
 
 ``add_logs``
     (boolean or a list of strings, optional).
+    (deprecated, set the ``want_logs_content`` of the passed ``message_formatter``).
     If ``True``, include all build logs as attachments to the messages.
     These can be quite large.
     This can also be set to a list of log names to send a subset of the logs.
@@ -96,5 +118,6 @@ The following parameters are supported:
 
 ``message_formatter``
     (optional, instance of ``reporters.MessageFormatter``)
-    This is an optional instance of the ``reporters.MessageFormatter`` class that can be used to generate a custom message.
+    This is an optional instance of the ``reporters.MessageFormatter`` class that can be used to
+    generate a custom message.
 

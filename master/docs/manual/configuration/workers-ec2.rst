@@ -53,7 +53,7 @@ Here are a few additional hints.
 * When an instance of the image starts, it needs to automatically start a buildbot worker that connects to your master (to create a buildbot worker, :ref:`Creating-a-worker`; to make a daemon, :ref:`Launching-the-daemons`).
 * You may want to make an instance of the buildbot worker, configure it as a standard worker in the master (i.e., not as a latent worker), and test and debug it that way before you turn it into an AMI and convert to a latent worker in the master.
 * In order to avoid extra costs in case of master failure, you should configure the worker of the AMI with ``maxretries`` option (see :ref:`Worker-Options`)
-  Also see `example systemd unit file example <https://github.com/buildbot/buildbot-contrib/blob/master/worker/contrib/systemd/buildbot-worker%40.service>`_
+  Also see the systemd unit file at :file:`worker/contrib/systemd/buildbot-worker@.service`
 
 Configure the Master with an :class:`~buildbot.worker.ec2.EC2LatentWorker`
 --------------------------------------------------------------------------
@@ -274,7 +274,7 @@ If you want to attach existing volumes to an ec2 latent worker, use the volumes 
 This mechanism can be valuable if you want to maintain state on a conceptual worker across multiple start/terminate sequences.
 ``volumes`` expects a list of (volume_id, mount_point) tuples to attempt attaching when your instance has been created.
 
-If you want to attach new ephemeral volumes, use the the block_device_map attribute.
+If you want to attach new ephemeral volumes, use the block_device_map attribute.
 This follows the AWS API syntax, essentially acting as a passthrough.
 The only distinction is that the volumes default to deleting on termination to avoid leaking volume resources when workers are terminated.
 See boto documentation for further details.

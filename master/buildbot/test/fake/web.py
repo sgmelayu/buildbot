@@ -13,27 +13,35 @@
 #
 # Copyright Buildbot Team Members
 
-from io import BytesIO
+from __future__ import annotations
 
-from mock import Mock
+from io import BytesIO
+from typing import TYPE_CHECKING
+from typing import Any
+from unittest.mock import Mock
 
 from twisted.internet import defer
 from twisted.web import server
 
 from buildbot.test.fake import fakemaster
 
+if TYPE_CHECKING:
+    from twisted.python.failure import Failure
+    from twisted.web.resource import IResource
+from buildbot.util.twisted import async_to_deferred
 
-def fakeMasterForHooks(testcase):
-    # testcase must derive from TestReactorMixin and setUpTestReactor()
+
+@async_to_deferred
+async def fakeMasterForHooks(testcase: Any) -> fakemaster.FakeMaster:
+    # testcase must derive from TestReactorMixin and setup_test_reactor()
     # must be called before calling this function.
 
-    master = fakemaster.make_master(testcase, wantData=True)
+    master = await fakemaster.make_master(testcase, wantData=True)
     master.www = Mock()
     return master
 
 
 class FakeRequest(Mock):
-
     """
     A fake Twisted Web Request object, including some pointers to the
     buildmaster and an addChange method on that master which will append its
@@ -42,10 +50,10 @@ class FakeRequest(Mock):
 
     written = b''
     finished = False
-    redirected_to = None
-    failure = None
+    redirected_to: bytes | None = None
+    failure: Failure | None = None
 
-    def __init__(self, args=None, content=b''):
+    def __init__(self, args: dict[bytes, list[bytes]] | None = None, content: bytes = b'') -> None:
         super().__init__()
 
         if args is None:
@@ -56,46 +64,43 @@ class FakeRequest(Mock):
         self.site = Mock()
         self.site.buildbot_service = Mock()
         self.uri = b'/'
-        self.prepath = []
+        self.prepath: list[bytes] = []
         self.method = b'GET'
-        self.received_headers = {}
+        self.received_headers: dict[str, str] = {}
 
-        self.deferred = defer.Deferred()
+        self.deferred: defer.Deferred[None] = defer.Deferred()
 
-    def getHeader(self, key):
+    def getHeader(self, key: str) -> str | None:
         return self.received_headers.get(key)
 
-    def write(self, data):
+    def write(self, data: bytes) -> None:
         self.written = self.written + data
 
-    def redirect(self, url):
+    def redirect(self, url: bytes) -> None:
         self.redirected_to = url
 
-    def finish(self):
+    def finish(self) -> None:
         self.finished = True
         self.deferred.callback(None)
 
-    def processingFailed(self, f):
+    def processingFailed(self, f: Failure) -> None:
         self.deferred.errback(f)
 
     # work around http://code.google.com/p/mock/issues/detail?id=105
-    def _get_child_mock(self, **kw):
+    def _get_child_mock(self, **kw: Any) -> Mock:
         return Mock(**kw)
 
     # cribed from twisted.web.test._util._render
-    def test_render(self, resource):
+    def test_render(self, resource: IResource) -> defer.Deferred[None]:
         for arg in self.args:
             if not isinstance(arg, bytes):
-                raise ValueError("self.args: {!r},  contains "
-                    "values which are not bytes".format(self.args))
+                raise ValueError(f"self.args: {self.args!r},  contains values which are not bytes")
 
         if self.uri and not isinstance(self.uri, bytes):
-            raise ValueError("self.uri: {!r} is {}, not bytes".format(
-                self.uri, type(self.uri)))
+            raise ValueError(f"self.uri: {self.uri!r} is {type(self.uri)}, not bytes")
 
         if self.method and not isinstance(self.method, bytes):
-            raise ValueError("self.method: {!r} is {}, not bytes".format(
-                self.method, type(self.method)))
+            raise ValueError(f"self.method: {self.method!r} is {type(self.method)}, not bytes")
 
         result = resource.render(self)
         if isinstance(result, bytes):
@@ -103,9 +108,10 @@ class FakeRequest(Mock):
             self.finish()
             return self.deferred
         elif isinstance(result, str):
-            raise ValueError("{!r} should return bytes, not {}: {!r}".format(
-                resource.render, type(result), result))
+            raise ValueError(
+                f"{resource.render!r} should return bytes, not {type(result)}: {result!r}"
+            )
         elif result is server.NOT_DONE_YET:
             return self.deferred
         else:
-            raise ValueError("Unexpected return value: {!r}".format(result))
+            raise ValueError(f"Unexpected return value: {result!r}")

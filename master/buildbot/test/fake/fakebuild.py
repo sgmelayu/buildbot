@@ -13,9 +13,12 @@
 #
 # Copyright Buildbot Team Members
 
-import posixpath
+from __future__ import annotations
 
-import mock
+import posixpath
+from pathlib import PurePosixPath
+from typing import Any
+from unittest import mock
 
 from buildbot import config
 from buildbot.process import factory
@@ -26,74 +29,79 @@ from buildbot.worker import base
 
 
 class FakeWorkerStatus(properties.PropertiesMixin):
-
-    def __init__(self, name):
+    def __init__(self, name: str) -> None:
         self.name = name
         self.info = properties.Properties()
         self.info.setProperty("test", "test", "Worker")
 
 
-class FakeBuild(properties.PropertiesMixin):
+class FakeBuildRequest:
+    def __init__(self) -> None:
+        self.priority = 0
 
-    def __init__(self, props=None, master=None):
+
+class FakeBuild(properties.PropertiesMixin):
+    def __init__(self, props: properties.Properties | None = None, master: Any = None) -> None:
         self.builder = fakemaster.FakeBuilder(master)
-        self.workerforbuilder = mock.Mock(
-            spec=workerforbuilder.WorkerForBuilder)
+        self.workerforbuilder = mock.Mock(spec=workerforbuilder.WorkerForBuilder)
         self.workerforbuilder.worker = mock.Mock(spec=base.Worker)
         self.workerforbuilder.worker.info = properties.Properties()
-        self.builder.config = config.BuilderConfig(
-            name='bldr',
-            workernames=['a'],
-            factory=factory.BuildFactory())
+        self.workerforbuilder.worker.workername = 'workername'
+        self.builder.config = config.BuilderConfig(  # type: ignore[attr-defined]
+            name='bldr', workernames=['a'], factory=factory.BuildFactory()
+        )
         self.path_module = posixpath
+        self.path_cls = PurePosixPath
         self.buildid = 92
         self.number = 13
         self.workdir = 'build'
-        self.locks = []
+        self.locks: list[Any] = []
+        self._locks_to_acquire: list[Any] = []
 
-        self.sources = {}
+        self.sources: dict[str, Any] = {}
         if props is None:
             props = properties.Properties()
         props.build = self
         self.properties = props
-        self.master = None
+        self.master: fakemaster.FakeMaster | None = None
         self.config_version = 0
+        self.requests = [FakeBuildRequest()]
+        self.env: dict[str, str] = {}
 
-    def getProperties(self):
+    def getProperties(self) -> properties.Properties:
         return self.properties
 
-    def getSourceStamp(self, codebase):
+    def getSourceStamp(self, codebase: str) -> Any:
         if codebase in self.sources:
             return self.sources[codebase]
         return None
 
-    def getAllSourceStamps(self):
+    def getAllSourceStamps(self) -> list[Any]:
         return list(self.sources.values())
 
-    def allChanges(self):
+    def allChanges(self) -> Any:
         for s in self.sources.values():
-            for c in s.changes:
-                yield c
+            yield from s.changes
 
-    def allFiles(self):
+    def allFiles(self) -> list[str]:
         files = []
         for c in self.allChanges():
             for f in c.files:
                 files.append(f)
         return files
 
-    def getBuilder(self):
+    def getBuilder(self) -> fakemaster.FakeBuilder:
         return self.builder
 
-    def getWorkerInfo(self):
+    def getWorkerInfo(self) -> properties.Properties:
         return self.workerforbuilder.worker.info
 
-    def setUniqueStepName(self, step):
-        pass
+    def setUniqueStepName(self, name: str) -> str:
+        return name
 
 
 class FakeBuildForRendering:
-    def render(self, r):
+    def render(self, r: Any) -> Any:
         if isinstance(r, str):
             return "rendered:" + r
         if isinstance(r, list):

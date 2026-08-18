@@ -12,37 +12,50 @@
 # Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
 # Copyright Buildbot Team Members
-
-from __future__ import absolute_import
-from __future__ import print_function
+from __future__ import annotations
 
 import os
 import tarfile
 import tempfile
+from typing import TYPE_CHECKING
+from typing import Any
 
 from twisted.internet import defer
 from twisted.python import log
 
 from buildbot_worker.commands.base import Command
 
+if TYPE_CHECKING:
+    from io import BufferedIOBase
+    from io import BufferedWriter
+    from typing import TypeVar
+
+    from twisted.internet.defer import Deferred
+    from twisted.python.failure import Failure
+
+    from buildbot_worker.util.twisted import InlineCallbacksType
+
+    _T = TypeVar("_T")
+
 
 class TransferCommand(Command):
+    stderr: str | None = None
 
-    def finished(self, res):
+    def finished(self, res: bool | Failure | None) -> bool | Failure | None:
         if self.debug:
-            log.msg('finished: stderr={0!r}, rc={1!r}'.format(self.stderr, self.rc))
+            self.log_msg(f'finished: stderr={self.stderr!r}, rc={self.rc!r}')
 
         # don't use self.sendStatus here, since we may no longer be running
         # if we have been interrupted
-        upd = {'rc': self.rc}
+        updates: list[tuple[str, Any]] = [('rc', self.rc)]
         if self.stderr:
-            upd['stderr'] = self.stderr
-        self.builder.sendUpdate(upd)
+            updates.append(('stderr', self.stderr))
+        self.protocol_command.send_update(updates)
         return res
 
-    def interrupt(self):
+    def interrupt(self) -> None:
         if self.debug:
-            log.msg('interrupted')
+            self.log_msg('interrupted')
         if self.interrupted:
             return
         self.rc = 1
@@ -52,82 +65,82 @@ class TransferCommand(Command):
 
 
 class WorkerFileUploadCommand(TransferCommand):
-
     """
     Upload a file from worker to build master
     Arguments:
 
-        - ['workdir']:   base directory to use
-        - ['workersrc']:  name of the worker-side file to read from
+        - ['path']:      path to read from
         - ['writer']:    RemoteReference to a buildbot_worker.protocols.base.FileWriterProxy object
         - ['maxsize']:   max size (in bytes) of file to write
         - ['blocksize']: max size for each data block
         - ['keepstamp']: whether to preserve file modified and accessed times
     """
-    debug = False
-    requiredArgs = ['workdir', 'workersrc', 'writer', 'blocksize']
 
-    def setup(self, args):
-        self.workdir = args['workdir']
-        self.filename = args['workersrc']
+    debug = False
+
+    requiredArgs = ['path', 'writer', 'blocksize']
+
+    # TODO: args: TypedDict
+    def setup(self, args: dict[str, Any]) -> None:
+        self.path: str = args['path']
         self.writer = args['writer']
         self.remaining = args['maxsize']
         self.blocksize = args['blocksize']
         self.keepstamp = args.get('keepstamp', False)
         self.stderr = None
         self.rc = 0
-        self.fp = None
+        self.fp: BufferedIOBase | None = None
 
-    def start(self):
+    def start(self) -> Deferred[None]:
         if self.debug:
-            log.msg('WorkerFileUploadCommand started')
+            self.log_msg('WorkerFileUploadCommand started')
 
-        # Open file
-        self.path = os.path.join(self.builder.basedir,
-                                 self.workdir,
-                                 os.path.expanduser(self.filename))
-        accessed_modified = None
+        access_time = None
+        modified_time = None
         try:
             if self.keepstamp:
-                accessed_modified = (os.path.getatime(self.path),
-                                     os.path.getmtime(self.path))
+                access_time = os.path.getatime(self.path)
+                modified_time = os.path.getmtime(self.path)
 
             self.fp = open(self.path, 'rb')
             if self.debug:
-                log.msg("Opened '{0}' for upload".format(self.path))
+                self.log_msg(f"Opened '{self.path}' for upload")
         except Exception:
             self.fp = None
-            self.stderr = "Cannot open file '{0}' for upload".format(self.path)
+            self.stderr = f"Cannot open file '{self.path}' for upload"
             self.rc = 1
             if self.debug:
-                log.msg("Cannot open file '{0}' for upload".format(self.path))
+                self.log_msg(f"Cannot open file '{self.path}' for upload")
 
-        self.sendStatus({'header': "sending {0}\n".format(self.path)})
+        self.sendStatus([('header', f"sending {self.path}\n")])
 
-        d = defer.Deferred()
+        d: Deferred[None] = defer.Deferred()
         self._reactor.callLater(0, self._loop, d)
 
         @defer.inlineCallbacks
-        def _close_ok(res):
+        def _close_ok(res: Any) -> InlineCallbacksType[None]:
             if self.fp:
                 self.fp.close()
             self.fp = None
-            yield self.writer.callRemote("close")
+            yield self.protocol_command.protocol_update_upload_file_close(self.writer)  # type: ignore[attr-defined]
 
             if self.keepstamp:
-                yield self.writer.callRemote("utime", accessed_modified)
+                yield self.protocol_command.protocol_update_upload_file_utime(  # type: ignore[attr-defined]
+                    self.writer, access_time, modified_time
+                )
 
-        def _close_err(f):
+        def _close_err(f: _T) -> Deferred[_T]:
             self.rc = 1
             if self.fp:
                 self.fp.close()
             self.fp = None
             # call remote's close(), but keep the existing failure
-            d1 = self.writer.callRemote("close")
+            d1: Deferred[_T] = self.protocol_command.protocol_update_upload_file_close(self.writer)  # type: ignore[attr-defined]
 
-            def eb(f2):
-                log.msg("ignoring error from remote close():")
+            def eb(f2: Failure) -> None:
+                self.log_msg("ignoring error from remote close():")
                 log.err(f2)
+
             d1.addErrback(eb)
             d1.addBoth(lambda _: f)  # always return _loop failure
             return d1
@@ -136,26 +149,28 @@ class WorkerFileUploadCommand(TransferCommand):
         d.addBoth(self.finished)
         return d
 
-    def _loop(self, fire_when_done):
-        d = defer.maybeDeferred(self._writeBlock)
+    def _loop(self, fire_when_done: Deferred[None]) -> None:
+        d = self._writeBlock()
 
-        def _done(finished):
+        def _done(finished: bool) -> None:
             if finished:
                 fire_when_done.callback(None)
             else:
                 self._loop(fire_when_done)
 
-        def _err(why):
+        def _err(why: Failure) -> None:
             fire_when_done.errback(why)
+
         d.addCallbacks(_done, _err)
         return None
 
-    def _writeBlock(self):
+    @defer.inlineCallbacks
+    def _writeBlock(self) -> InlineCallbacksType[bool]:
         """Write a block of data to the remote writer"""
 
         if self.interrupted or self.fp is None:
             if self.debug:
-                log.msg('WorkerFileUploadCommand._writeBlock(): end')
+                self.log_msg('WorkerFileUploadCommand._writeBlock(): end')
             return True
 
         length = self.blocksize
@@ -164,132 +179,137 @@ class WorkerFileUploadCommand(TransferCommand):
 
         if length <= 0:
             if self.stderr is None:
-                self.stderr = 'Maximum filesize reached, truncating file \'{0}\''.format(
-                    self.path)
+                self.stderr = f'Maximum filesize reached, truncating file \'{self.path}\''
                 self.rc = 1
-            data = ''
+            data = b''
         else:
             data = self.fp.read(length)
 
         if self.debug:
-            log.msg('WorkerFileUploadCommand._writeBlock(): ' +
-                    'allowed={0} readlen={1}'.format(length, len(data)))
+            self.log_msg(
+                'WorkerFileUploadCommand._writeBlock(): ' + f'allowed={length} readlen={len(data)}'
+            )
         if not data:
-            log.msg("EOF: callRemote(close)")
+            self.log_msg("EOF: callRemote(close)")
             return True
 
         if self.remaining is not None:
             self.remaining = self.remaining - len(data)
             assert self.remaining >= 0
-        d = self.writer.callRemote('write', data)
-        d.addCallback(lambda res: False)
-        return d
+
+        yield self.do_protocol_write(data)
+
+        return False
+
+    def do_protocol_write(self, data: bytes) -> Deferred:
+        return self.protocol_command.protocol_update_upload_file_write(self.writer, data)  # type: ignore[attr-defined]
 
 
 class WorkerDirectoryUploadCommand(WorkerFileUploadCommand):
     debug = False
-    requiredArgs = ['workdir', 'workersrc', 'writer', 'blocksize']
+    requiredArgs = ['path', 'writer', 'blocksize']
 
-    def setup(self, args):
-        self.workdir = args['workdir']
-        self.dirname = args['workersrc']
+    # TODO: args: TypedDict
+    def setup(self, args: dict[str, Any]) -> None:
+        self.path = args['path']
         self.writer = args['writer']
         self.remaining = args['maxsize']
         self.blocksize = args['blocksize']
         self.compress = args['compress']
-        self.stderr = None
+        self.stderr: str | None = None
         self.rc = 0
 
-    def start(self):
+    def start(self) -> Deferred:
         if self.debug:
-            log.msg('WorkerDirectoryUploadCommand started')
+            self.log_msg('WorkerDirectoryUploadCommand started')
 
-        self.path = os.path.join(self.builder.basedir,
-                                 self.workdir,
-                                 os.path.expanduser(self.dirname))
         if self.debug:
-            log.msg("path: {0!r}".format(self.path))
+            self.log_msg(f"path: {self.path!r}")
 
         # Create temporary archive
-        fd, self.tarname = tempfile.mkstemp()
+        fd, self.tarname = tempfile.mkstemp(prefix='buildbot-transfer-')
         self.fp = os.fdopen(fd, "rb+")
-
         if self.compress == 'bz2':
             mode = 'w|bz2'
         elif self.compress == 'gz':
             mode = 'w|gz'
         else:
             mode = 'w'
-        # TODO: Use 'with' when depending on Python 2.7
-        # Not possible with older versions:
-        # exceptions.AttributeError: 'TarFile' object has no attribute '__exit__'
-        archive = tarfile.open(mode=mode, fileobj=self.fp)
-        archive.add(self.path, '')
-        archive.close()
+
+        with tarfile.TarFile.open(mode=mode, fileobj=self.fp) as archive:  # type: ignore[call-overload]
+            try:
+                archive.add(self.path, '')
+            except OSError as e:
+                # if directory does not exist, bail out with an error
+                self.stderr = f"Cannot read directory '{self.path}' for upload: {e}"
+                self.rc = 1
+                archive.close()  # need to close it before self.finished() runs below
+                d = defer.succeed(False)
+                d.addCallback(self.finished)
+                return d
 
         # Transfer it
         self.fp.seek(0)
 
-        self.sendStatus({'header': "sending {0}\n".format(self.path)})
+        self.sendStatus([('header', f"sending {self.path}\n")])
 
         d = defer.Deferred()
         self._reactor.callLater(0, self._loop, d)
 
-        def unpack(res):
-            d1 = self.writer.callRemote("unpack")
+        def unpack(res: _T) -> Deferred[_T]:
+            d1 = self.protocol_command.protocol_update_upload_directory(self.writer)  # type: ignore[attr-defined]
 
-            def unpack_err(f):
+            def unpack_err(f: _T) -> _T:
                 self.rc = 1
                 return f
+
             d1.addErrback(unpack_err)
             d1.addCallback(lambda ignored: res)
             return d1
+
         d.addCallback(unpack)
         d.addBoth(self.finished)
         return d
 
-    def finished(self, res):
+    def finished(self, res: bool | Failure | None) -> bool | Failure | None:
+        assert self.fp is not None
         self.fp.close()
         self.fp = None
         os.remove(self.tarname)
         return TransferCommand.finished(self, res)
 
+    def do_protocol_write(self, data: bytes) -> Deferred:
+        return self.protocol_command.protocol_update_upload_directory_write(self.writer, data)  # type: ignore[attr-defined]
+
 
 class WorkerFileDownloadCommand(TransferCommand):
-
     """
     Download a file from master to worker
     Arguments:
 
-        - ['workdir']:   base directory to use
-        - ['workerdest']: name of the worker-side file to be created
+        - ['path']: path of the worker-side file to be created
         - ['reader']:    RemoteReference to a buildbot_worker.protocols.base.FileReaderProxy object
         - ['maxsize']:   max size (in bytes) of file to write
         - ['blocksize']: max size for each data block
         - ['mode']:      access mode for the new file
     """
-    debug = False
-    requiredArgs = ['workdir', 'workerdest', 'reader', 'blocksize']
 
-    def setup(self, args):
-        self.workdir = args['workdir']
-        self.filename = args['workerdest']
+    debug = False
+    requiredArgs = ['path', 'reader', 'blocksize']
+
+    def setup(self, args: dict[str, Any]) -> None:
+        self.path: str = args['path']
         self.reader = args['reader']
         self.bytes_remaining = args['maxsize']
         self.blocksize = args['blocksize']
         self.mode = args['mode']
         self.stderr = None
         self.rc = 0
-        self.fp = None
+        self.fp: BufferedWriter | None = None
 
-    def start(self):
+    def start(self) -> Deferred[None]:
         if self.debug:
-            log.msg('WorkerFileDownloadCommand starting')
-
-        # Open file
-        self.path = os.path.join(self.builder.basedir,
-                                 self.workdir,
-                                 os.path.expanduser(self.filename))
+            self.log_msg('WorkerFileDownloadCommand starting')
 
         dirname = os.path.dirname(self.path)
         if not os.path.exists(dirname):
@@ -298,7 +318,7 @@ class WorkerFileDownloadCommand(TransferCommand):
         try:
             self.fp = open(self.path, 'wb')
             if self.debug:
-                log.msg("Opened '{0}' for download".format(self.path))
+                self.log_msg(f"Opened '{self.path}' for download")
             if self.mode is not None:
                 # note: there is a brief window during which the new file
                 # will have the worker's default (umask) mode before we
@@ -308,49 +328,52 @@ class WorkerFileDownloadCommand(TransferCommand):
                 # call, but cleaning up from exceptions properly is more of a
                 # nuisance that way).
                 os.chmod(self.path, self.mode)
-        except IOError:
+        except OSError:
             # TODO: this still needs cleanup
             if self.fp:
                 self.fp.close()
             self.fp = None
-            self.stderr = "Cannot open file '{0}' for download".format(self.path)
+            self.stderr = f"Cannot open file '{self.path}' for download"
             self.rc = 1
             if self.debug:
-                log.msg("Cannot open file '{0}' for download".format(self.path))
+                self.log_msg(f"Cannot open file '{self.path}' for download")
 
-        d = defer.Deferred()
+        d: defer.Deferred[None] = defer.Deferred()
         self._reactor.callLater(0, self._loop, d)
 
-        def _close(res):
+        def _close(res: _T) -> Deferred[_T]:
             # close the file, but pass through any errors from _loop
-            d1 = self.reader.callRemote('close')
+            d1 = self.protocol_command.protocol_update_read_file_close(self.reader)  # type: ignore[attr-defined]
             d1.addErrback(log.err, 'while trying to close reader')
             d1.addCallback(lambda ignored: res)
             return d1
+
         d.addBoth(_close)
         d.addBoth(self.finished)
         return d
 
-    def _loop(self, fire_when_done):
+    def _loop(self, fire_when_done: Deferred[None]) -> None:
         d = defer.maybeDeferred(self._readBlock)
 
-        def _done(finished):
+        def _done(finished: bool) -> None:
             if finished:
                 fire_when_done.callback(None)
             else:
                 self._loop(fire_when_done)
 
-        def _err(why):
+        def _err(why: Failure) -> None:
             fire_when_done.errback(why)
+
         d.addCallbacks(_done, _err)
         return None
 
-    def _readBlock(self):
+    @defer.inlineCallbacks
+    def _readBlock(self) -> InlineCallbacksType[bool]:
         """Read a block of data from the remote reader."""
 
         if self.interrupted or self.fp is None:
             if self.debug:
-                log.msg('WorkerFileDownloadCommand._readBlock(): end')
+                self.log_msg('WorkerFileDownloadCommand._readBlock(): end')
             return True
 
         length = self.blocksize
@@ -359,29 +382,28 @@ class WorkerFileDownloadCommand(TransferCommand):
 
         if length <= 0:
             if self.stderr is None:
-                self.stderr = "Maximum filesize reached, truncating file '{0}'".format(
-                    self.path)
+                self.stderr = f"Maximum filesize reached, truncating file '{self.path}'"
                 self.rc = 1
             return True
         else:
-            d = self.reader.callRemote('read', length)
-            d.addCallback(self._writeData)
-            return d
+            data = yield self.protocol_command.protocol_update_read_file(self.reader, length)  # type: ignore[attr-defined]
+            return self._writeData(data)
 
-    def _writeData(self, data):
+    def _writeData(self, data: bytes) -> bool:
         if self.debug:
-            log.msg('WorkerFileDownloadCommand._readBlock(): readlen=%d' %
-                    len(data))
+            self.log_msg(f'WorkerFileDownloadCommand._readBlock(): readlen={len(data)}')
         if not data:
             return True
 
         if self.bytes_remaining is not None:
             self.bytes_remaining = self.bytes_remaining - len(data)
             assert self.bytes_remaining >= 0
+
+        assert self.fp is not None
         self.fp.write(data)
         return False
 
-    def finished(self, res):
+    def finished(self, res: bool | Failure | None) -> bool | Failure | None:
         if self.fp:
             self.fp.close()
         self.fp = None

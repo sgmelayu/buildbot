@@ -14,6 +14,10 @@
 # Copyright Buildbot Team Members
 
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from twisted.internet import defer
 
 from buildbot.process.results import CANCELLED
@@ -21,14 +25,45 @@ from buildbot.test.util.decorators import flaky
 from buildbot.test.util.integration import RunMasterBase
 from buildbot.util import asyncSleep
 
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
+
 
 class InterruptCommand(RunMasterBase):
     """Make sure we can interrupt a command"""
 
+    @defer.inlineCallbacks
+    def setup_config(self) -> InlineCallbacksType[None]:
+        c = {}
+        from buildbot.plugins import schedulers  # noqa: PLC0415
+        from buildbot.plugins import steps  # noqa: PLC0415
+        from buildbot.plugins import util  # noqa: PLC0415
+
+        class SleepAndInterrupt(steps.ShellSequence):  # type: ignore[name-defined]
+            @defer.inlineCallbacks
+            def run(self) -> InlineCallbacksType[None]:
+                if self.worker.worker_system == "nt":
+                    sleep = "waitfor SomethingThatIsNeverHappening /t 100 >nul 2>&1"
+                else:
+                    sleep = ["sleep", "100"]  # type: ignore[assignment]
+                d = self.runShellSequence([util.ShellArg(sleep)])
+                yield asyncSleep(1)
+                self.interrupt("just testing")
+                res = yield d
+                return res
+
+        c['schedulers'] = [schedulers.ForceScheduler(name="force", builderNames=["testy"])]
+
+        f = util.BuildFactory()
+        f.addStep(SleepAndInterrupt())
+        c['builders'] = [util.BuilderConfig(name="testy", workernames=["local1"], factory=f)]
+
+        yield self.setup_master(c)
+
     @flaky(bugNumber=4404, onPlatform='win32')
     @defer.inlineCallbacks
-    def test_interrupt(self):
-        yield self.setupConfig(masterConfig())
+    def test_interrupt(self) -> InlineCallbacksType[None]:
+        yield self.setup_config()
         build = yield self.doForceBuild(wantSteps=True)
         self.assertEqual(build['steps'][-1]['results'], CANCELLED)
 
@@ -37,36 +72,5 @@ class InterruptCommandPb(InterruptCommand):
     proto = "pb"
 
 
-# master configuration
-
-
-def masterConfig():
-    c = {}
-    from buildbot.plugins import schedulers, steps, util
-
-    class SleepAndInterrupt(steps.ShellSequence):
-        @defer.inlineCallbacks
-        def run(self):
-            if self.worker.worker_system == "nt":
-                sleep = "waitfor SomethingThatIsNeverHappening /t 100 >nul 2>&1"
-            else:
-                sleep = ["sleep", "100"]
-            d = self.runShellSequence([util.ShellArg(sleep)])
-            yield asyncSleep(1)
-            self.interrupt("just testing")
-            res = yield d
-            return res
-
-    c['schedulers'] = [
-        schedulers.ForceScheduler(
-            name="force",
-            builderNames=["testy"])]
-
-    f = util.BuildFactory()
-    f.addStep(SleepAndInterrupt())
-    c['builders'] = [
-        util.BuilderConfig(name="testy",
-                           workernames=["local1"],
-                           factory=f)]
-
-    return c
+class InterruptCommandMsgPack(InterruptCommand):
+    proto = "msgpack"

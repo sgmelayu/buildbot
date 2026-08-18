@@ -13,9 +13,12 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
 import pprint
 import re
 import textwrap
+from typing import TYPE_CHECKING
 
 from twisted.internet import defer
 from twisted.trial import unittest
@@ -23,82 +26,97 @@ from twisted.trial import unittest
 from buildbot.changes import changes
 from buildbot.test import fakedb
 from buildbot.test.fake import fakemaster
-from buildbot.test.util.misc import TestReactorMixin
+from buildbot.test.reactor import TestReactorMixin
+
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
 
 
-class Change(unittest.TestCase, TestReactorMixin):
-
+class Change(TestReactorMixin, unittest.TestCase):
     change23_rows = [
-        fakedb.Change(changeid=23, author="dustin", committer="dustin", comments="fix whitespace",
-                      branch="warnerdb", revision="deadbeef",
-                      when_timestamp=266738404, revlink='http://warner/0e92a098b',
-                      category='devel', repository='git://warner', codebase='mainapp',
-                      project='Buildbot'),
-
+        fakedb.SourceStamp(id=92),
+        fakedb.Change(
+            changeid=23,
+            author="dustin",
+            committer="dustin",
+            comments="fix whitespace",
+            branch="warnerdb",
+            revision="deadbeef",
+            when_timestamp=266738404,
+            revlink='http://warner/0e92a098b',
+            category='devel',
+            repository='git://warner',
+            codebase='mainapp',
+            project='Buildbot',
+        ),
         fakedb.ChangeFile(changeid=23, filename='master/README.txt'),
         fakedb.ChangeFile(changeid=23, filename='worker/README.txt'),
-
-        fakedb.ChangeProperty(changeid=23, property_name='notest',
-                              property_value='["no","Change"]'),
-
+        fakedb.ChangeProperty(
+            changeid=23, property_name='notest', property_value='["no","Change"]'
+        ),
+        fakedb.User(uid=27),
         fakedb.ChangeUser(changeid=23, uid=27),
     ]
 
-    def setUp(self):
-        self.setUpTestReactor()
-        self.master = fakemaster.make_master(self, wantDb=True)
-        self.change23 = changes.Change(**dict(  # using **dict(..) forces kwargs
-            category='devel',
-            repository='git://warner',
-            codebase='mainapp',
-            who='dustin',
-            committer='dustin',
-            when=266738404,
-            comments='fix whitespace',
-            project='Buildbot',
-            branch='warnerdb',
-            revlink='http://warner/0e92a098b',
-            properties={'notest': "no"},
-            files=['master/README.txt', 'worker/README.txt'],
-            revision='deadbeef'))
+    @defer.inlineCallbacks
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        self.setup_test_reactor()
+        self.master = yield fakemaster.make_master(self, wantDb=True)
+        self.change23 = changes.Change(**{  # type: ignore[arg-type]
+            "category": 'devel',
+            "repository": 'git://warner',
+            "codebase": 'mainapp',
+            "who": 'dustin',
+            "committer": 'dustin',
+            "when": 266738404,
+            "comments": 'fix whitespace',
+            "project": 'Buildbot',
+            "branch": 'warnerdb',
+            "revlink": 'http://warner/0e92a098b',
+            "properties": {'notest': "no"},
+            "files": ['master/README.txt', 'worker/README.txt'],
+            "revision": 'deadbeef',
+        })
         self.change23.number = 23
 
-        self.change24 = changes.Change(**dict(
-            category='devel',
-            repository='git://warner',
-            codebase='mainapp',
-            who='dustin',
-            committer='dustin',
-            when=266738405,
-            comments='fix whitespace again',
-            project='Buildbot',
-            branch='warnerdb',
-            revlink='http://warner/0e92a098c',
-            properties={'notest': "no"},
-            files=['master/README.txt', 'worker/README.txt'],
-            revision='deadbeef'))
+        self.change24 = changes.Change(**{  # type: ignore[arg-type]
+            "category": 'devel',
+            "repository": 'git://warner',
+            "codebase": 'mainapp',
+            "who": 'dustin',
+            "committer": 'dustin',
+            "when": 266738405,
+            "comments": 'fix whitespace again',
+            "project": 'Buildbot',
+            "branch": 'warnerdb',
+            "revlink": 'http://warner/0e92a098c',
+            "properties": {'notest': "no"},
+            "files": ['master/README.txt', 'worker/README.txt'],
+            "revision": 'deadbeef',
+        })
         self.change24.number = 24
 
-        self.change25 = changes.Change(**dict(
-            category='devel',
-            repository='git://warner',
-            codebase='mainapp',
-            who='dustin',
-            committer='dustin',
-            when=266738406,
-            comments='fix whitespace again',
-            project='Buildbot',
-            branch='warnerdb',
-            revlink='http://warner/0e92a098d',
-            properties={'notest': "no"},
-            files=['master/README.txt', 'worker/README.txt'],
-            revision='deadbeef'))
+        self.change25 = changes.Change(**{  # type: ignore[arg-type]
+            "category": 'devel',
+            "repository": 'git://warner',
+            "codebase": 'mainapp',
+            "who": 'dustin',
+            "committer": 'dustin',
+            "when": 266738406,
+            "comments": 'fix whitespace again',
+            "project": 'Buildbot',
+            "branch": 'warnerdb',
+            "revlink": 'http://warner/0e92a098d',
+            "properties": {'notest': "no"},
+            "files": ['master/README.txt', 'worker/README.txt'],
+            "revision": 'deadbeef',
+        })
         self.change25.number = 25
 
     @defer.inlineCallbacks
-    def test_fromChdict(self):
+    def test_fromChdict(self) -> InlineCallbacksType[None]:
         # get a real honest-to-goodness chdict from the fake db
-        yield self.master.db.insertTestData(self.change23_rows)
+        yield self.master.db.insert_test_data(self.change23_rows)
         chdict = yield self.master.db.changes.getChange(23)
 
         exp = self.change23
@@ -121,18 +139,21 @@ class Change(unittest.TestCase, TestReactorMixin):
         ok = ok and got.codebase == exp.codebase
         ok = ok and got.project == exp.project
         if not ok:
-            def printable(c):
-                return pprint.pformat(c.__dict__)
-            self.fail("changes do not match; expected\n{}\ngot\n{}".format(printable(exp),
-                                                                           printable(got)))
 
-    def test_str(self):
+            def printable(c: changes.Change) -> str:
+                return pprint.pformat(c.__dict__)
+
+            self.fail(f"changes do not match; expected\n{printable(exp)}\ngot\n{printable(got)}")
+
+    def test_str(self) -> None:
         string = str(self.change23)
         self.assertTrue(re.match(r"Change\(.*\)", string), string)
 
-    def test_asText(self):
+    def test_asText(self) -> None:
         text = self.change23.asText()
-        self.assertTrue(re.match(textwrap.dedent('''\
+        self.assertTrue(
+            re.match(
+                textwrap.dedent("""\
             Files:
              master/README.txt
              worker/README.txt
@@ -144,48 +165,55 @@ class Change(unittest.TestCase, TestReactorMixin):
             Comments: fix whitespaceProperties:.
               notest: no
 
-            '''), text), text)
+            """),
+                text,
+            ),
+            text,
+        )
 
-    def test_asDict(self):
+    def test_asDict(self) -> None:
         dict = self.change23.asDict()
         self.assertIn('1978', dict['at'])  # timezone-sensitive
         del dict['at']
-        self.assertEqual(dict, {
-            'branch': 'warnerdb',
-            'category': 'devel',
-            'codebase': 'mainapp',
-            'comments': 'fix whitespace',
-            'files': [{'name': 'master/README.txt'},
-                      {'name': 'worker/README.txt'}],
-            'number': 23,
-            'project': 'Buildbot',
-            'properties': [('notest', 'no', 'Change')],
-            'repository': 'git://warner',
-            'rev': 'deadbeef',
-            'revision': 'deadbeef',
-            'revlink': 'http://warner/0e92a098b',
-            'when': 266738404,
-            'who': 'dustin',
-            'committer': 'dustin'})
+        self.assertEqual(
+            dict,
+            {
+                'branch': 'warnerdb',
+                'category': 'devel',
+                'codebase': 'mainapp',
+                'comments': 'fix whitespace',
+                'files': [{'name': 'master/README.txt'}, {'name': 'worker/README.txt'}],
+                'number': 23,
+                'project': 'Buildbot',
+                'properties': [('notest', 'no', 'Change')],
+                'repository': 'git://warner',
+                'rev': 'deadbeef',
+                'revision': 'deadbeef',
+                'revlink': 'http://warner/0e92a098b',
+                'when': 266738404,
+                'who': 'dustin',
+                'committer': 'dustin',
+            },
+        )
 
-    def test_getShortAuthor(self):
+    def test_getShortAuthor(self) -> None:
         self.assertEqual(self.change23.getShortAuthor(), 'dustin')
 
-    def test_getTime(self):
+    def test_getTime(self) -> None:
         # careful, or timezones will hurt here
         self.assertIn('Jun 1978', self.change23.getTime())
 
-    def test_getTimes(self):
+    def test_getTimes(self) -> None:
         self.assertEqual(self.change23.getTimes(), (266738404, None))
 
-    def test_getText(self):
+    def test_getText(self) -> None:
         self.change23.who = 'nasty < nasty'  # test the html escaping (ugh!)
         self.assertEqual(self.change23.getText(), ['nasty &lt; nasty'])
 
-    def test_getLogs(self):
+    def test_getLogs(self) -> None:
         self.assertEqual(self.change23.getLogs(), {})
 
-    def test_compare(self):
+    def test_compare(self) -> None:
         self.assertEqual(self.change23, self.change23)
         self.assertNotEqual(self.change24, self.change23)
         self.assertGreater(self.change24, self.change23)

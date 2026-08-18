@@ -13,136 +13,167 @@
 #
 # Copyright Buildbot Team Members
 
+from __future__ import annotations
+
+import copy
+from typing import TYPE_CHECKING
+
 from twisted.internet import defer
 from twisted.trial import unittest
 
+from buildbot.db.users import UserModel
 from buildbot.process.users import users
 from buildbot.test import fakedb
 from buildbot.test.fake import fakemaster
-from buildbot.test.util.misc import TestReactorMixin
+from buildbot.test.reactor import TestReactorMixin
+
+if TYPE_CHECKING:
+    from buildbot.util.twisted import InlineCallbacksType
 
 
 class UsersTests(TestReactorMixin, unittest.TestCase):
-
-    def setUp(self):
-        self.setUpTestReactor()
-        self.master = fakemaster.make_master(self, wantDb=True)
-        self.db = self.master.db
+    @defer.inlineCallbacks
+    def setUp(self) -> InlineCallbacksType[None]:  # type: ignore[override]
+        self.setup_test_reactor()
+        self.master = yield fakemaster.make_master(self, wantDb=True)
         self.test_sha = users.encrypt("cancer")
 
     @defer.inlineCallbacks
-    def test_createUserObject_no_src(self):
+    def verify_users(self, users: list[UserModel]) -> InlineCallbacksType[None]:
+        users_no_attrs = copy.deepcopy(users)
+        for user in users_no_attrs:
+            user.attributes = None
+
+        got_users = yield self.master.db.users.getUsers()
+        self.assertEqual(got_users, users_no_attrs)
+
+        for user in users:
+            got_user = yield self.master.db.users.getUser(user.uid)
+            self.assertEqual(got_user, user)
+
+    @defer.inlineCallbacks
+    def test_createUserObject_no_src(self) -> InlineCallbacksType[None]:
         yield users.createUserObject(self.master, "Tyler Durden", None)
-
-        self.assertEqual(self.db.users.users, {})
-        self.assertEqual(self.db.users.users_info, {})
+        got_users = yield self.master.db.users.getUsers()
+        self.assertEqual(got_users, [])
 
     @defer.inlineCallbacks
-    def test_createUserObject_unrecognized_src(self):
+    def test_createUserObject_unrecognized_src(self) -> InlineCallbacksType[None]:
         yield users.createUserObject(self.master, "Tyler Durden", 'blah')
-
-        self.assertEqual(self.db.users.users, {})
-        self.assertEqual(self.db.users.users_info, {})
-
-    @defer.inlineCallbacks
-    def test_createUserObject_git(self):
-        yield users.createUserObject(self.master,
-                                   "Tyler Durden <tyler@mayhem.net>", 'git')
-
-        self.assertEqual(self.db.users.users,
-                         {1: dict(identifier='Tyler Durden <tyler@mayhem.net>',
-                                  bb_username=None, bb_password=None)})
-        self.assertEqual(self.db.users.users_info,
-                         {1: [dict(attr_type="git",
-                                   attr_data="Tyler Durden <tyler@mayhem.net>")]})
+        got_users = yield self.master.db.users.getUsers()
+        self.assertEqual(got_users, [])
 
     @defer.inlineCallbacks
-    def test_createUserObject_svn(self):
+    def test_createUserObject_git(self) -> InlineCallbacksType[None]:
+        yield users.createUserObject(self.master, "Tyler Durden <tyler@mayhem.net>", 'git')
+        yield self.verify_users([
+            UserModel(
+                uid=1,
+                identifier='Tyler Durden <tyler@mayhem.net>',
+                bb_username=None,
+                bb_password=None,
+                attributes={'git': 'Tyler Durden <tyler@mayhem.net>'},
+            )
+        ])
+
+    @defer.inlineCallbacks
+    def test_createUserObject_svn(self) -> InlineCallbacksType[None]:
         yield users.createUserObject(self.master, "tdurden", 'svn')
 
-        self.assertEqual(self.db.users.users,
-                         {1: dict(identifier='tdurden',
-                                  bb_username=None, bb_password=None)})
-        self.assertEqual(self.db.users.users_info,
-                         {1: [dict(attr_type="svn",
-                                   attr_data="tdurden")]})
+        yield self.verify_users([
+            UserModel(
+                uid=1,
+                identifier='tdurden',
+                bb_username=None,
+                bb_password=None,
+                attributes={'svn': 'tdurden'},
+            )
+        ])
 
     @defer.inlineCallbacks
-    def test_createUserObject_hg(self):
-        yield users.createUserObject(self.master,
-                                   "Tyler Durden <tyler@mayhem.net>", 'hg')
+    def test_createUserObject_hg(self) -> InlineCallbacksType[None]:
+        yield users.createUserObject(self.master, "Tyler Durden <tyler@mayhem.net>", 'hg')
 
-        self.assertEqual(self.db.users.users,
-                         {1: dict(identifier='Tyler Durden <tyler@mayhem.net>',
-                                  bb_username=None, bb_password=None)})
-        self.assertEqual(self.db.users.users_info,
-                         {1: [dict(attr_type="hg",
-                                   attr_data="Tyler Durden <tyler@mayhem.net>")]})
+        yield self.verify_users([
+            UserModel(
+                uid=1,
+                identifier='Tyler Durden <tyler@mayhem.net>',
+                bb_username=None,
+                bb_password=None,
+                attributes={'hg': 'Tyler Durden <tyler@mayhem.net>'},
+            )
+        ])
 
     @defer.inlineCallbacks
-    def test_createUserObject_cvs(self):
+    def test_createUserObject_cvs(self) -> InlineCallbacksType[None]:
         yield users.createUserObject(self.master, "tdurden", 'cvs')
 
-        self.assertEqual(self.db.users.users,
-                         {1: dict(identifier='tdurden',
-                                  bb_username=None, bb_password=None)})
-        self.assertEqual(self.db.users.users_info,
-                         {1: [dict(attr_type="cvs",
-                                   attr_data="tdurden")]})
+        yield self.verify_users([
+            UserModel(
+                uid=1,
+                identifier='tdurden',
+                bb_username=None,
+                bb_password=None,
+                attributes={'cvs': 'tdurden'},
+            )
+        ])
 
     @defer.inlineCallbacks
-    def test_createUserObject_darcs(self):
+    def test_createUserObject_darcs(self) -> InlineCallbacksType[None]:
         yield users.createUserObject(self.master, "tyler@mayhem.net", 'darcs')
 
-        self.assertEqual(self.db.users.users,
-                         {1: dict(identifier='tyler@mayhem.net',
-                                  bb_username=None, bb_password=None)})
-        self.assertEqual(self.db.users.users_info,
-                         {1: [dict(attr_type="darcs",
-                                   attr_data="tyler@mayhem.net")]})
+        yield self.verify_users([
+            UserModel(
+                uid=1,
+                identifier='tyler@mayhem.net',
+                bb_username=None,
+                bb_password=None,
+                attributes={'darcs': 'tyler@mayhem.net'},
+            )
+        ])
 
     @defer.inlineCallbacks
-    def test_createUserObject_bzr(self):
+    def test_createUserObject_bzr(self) -> InlineCallbacksType[None]:
         yield users.createUserObject(self.master, "Tyler Durden", 'bzr')
 
-        self.assertEqual(self.db.users.users,
-                         {1: dict(identifier='Tyler Durden',
-                                  bb_username=None, bb_password=None)})
-        self.assertEqual(self.db.users.users_info,
-                         {1: [dict(attr_type="bzr",
-                                   attr_data="Tyler Durden")]})
+        yield self.verify_users([
+            UserModel(
+                uid=1,
+                identifier='Tyler Durden',
+                bb_username=None,
+                bb_password=None,
+                attributes={'bzr': 'Tyler Durden'},
+            )
+        ])
 
     @defer.inlineCallbacks
-    def test_getUserContact_found(self):
-        self.db.insertTestData([fakedb.User(uid=1, identifier='tdurden'),
-                                fakedb.UserInfo(uid=1, attr_type='svn',
-                                                attr_data='tdurden'),
-                                fakedb.UserInfo(uid=1, attr_type='email',
-                                                attr_data='tyler@mayhem.net')])
-        contact = yield users.getUserContact(self.master,
-                                             contact_types=['email'], uid=1)
+    def test_getUserContact_found(self) -> InlineCallbacksType[None]:
+        yield self.master.db.insert_test_data([
+            fakedb.User(uid=1, identifier='tdurden'),
+            fakedb.UserInfo(uid=1, attr_type='svn', attr_data='tdurden'),
+            fakedb.UserInfo(uid=1, attr_type='email', attr_data='tyler@mayhem.net'),
+        ])
+        contact = yield users.getUserContact(self.master, contact_types=['email'], uid=1)
 
         self.assertEqual(contact, 'tyler@mayhem.net')
 
     @defer.inlineCallbacks
-    def test_getUserContact_key_not_found(self):
-        self.db.insertTestData([fakedb.User(uid=1, identifier='tdurden'),
-                                fakedb.UserInfo(uid=1, attr_type='svn',
-                                                attr_data='tdurden'),
-                                fakedb.UserInfo(uid=1, attr_type='email',
-                                                attr_data='tyler@mayhem.net')])
-        contact = yield users.getUserContact(self.master,
-                                             contact_types=['blargh'], uid=1)
+    def test_getUserContact_key_not_found(self) -> InlineCallbacksType[None]:
+        yield self.master.db.insert_test_data([
+            fakedb.User(uid=1, identifier='tdurden'),
+            fakedb.UserInfo(uid=1, attr_type='svn', attr_data='tdurden'),
+            fakedb.UserInfo(uid=1, attr_type='email', attr_data='tyler@mayhem.net'),
+        ])
+        contact = yield users.getUserContact(self.master, contact_types=['blargh'], uid=1)
 
         self.assertEqual(contact, None)
 
     @defer.inlineCallbacks
-    def test_getUserContact_uid_not_found(self):
-        contact = yield users.getUserContact(self.master,
-                                             contact_types=['email'], uid=1)
+    def test_getUserContact_uid_not_found(self) -> InlineCallbacksType[None]:
+        contact = yield users.getUserContact(self.master, contact_types=['email'], uid=1)
 
         self.assertEqual(contact, None)
 
-    def test_check_passwd(self):
+    def test_check_passwd(self) -> None:
         res = users.check_passwd("cancer", self.test_sha)
         self.assertEqual(res, True)

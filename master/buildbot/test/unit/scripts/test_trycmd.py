@@ -13,7 +13,9 @@
 #
 # Copyright Buildbot Team Members
 
-import mock
+from __future__ import annotations
+
+from unittest import mock
 
 from twisted.trial import unittest
 
@@ -22,14 +24,13 @@ from buildbot.scripts import trycmd
 
 
 class TestStatusLog(unittest.TestCase):
-
-    def test_trycmd(self):
+    def test_trycmd(self) -> None:
         Try = mock.Mock()
         self.patch(tryclient, 'Try', Try)
         inst = Try.return_value = mock.Mock(name='Try-instance')
 
-        rc = trycmd.trycmd(dict(cfg=1))
+        rc = trycmd.trycmd({"cfg": 1})
 
-        Try.assert_called_with(dict(cfg=1))
+        Try.assert_called_with({"cfg": 1})
         inst.run.assert_called_with()
         self.assertEqual(rc, 0)
